@@ -1,0 +1,9 @@
+# Скопируйте этот файл как update-remote.local.ps1 и впишите пароль.
+# update-remote.local.ps1 в .gitignore — в GitHub не попадёт.
+
+$ServerHost = "2.26.104.154"
+$ServerUser = "root"
+$ServerPassword = "ВАШ_ПАРОЛЬ_СЮДА"
+$RemoteCommand = "bash /opt/giveaway-bot/deploy/update.sh"
+
+# Если $ServerPassword оставить пустым (""), bat попросит пароль через ssh вручную.
