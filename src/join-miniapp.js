@@ -7,7 +7,7 @@ const {
   getMiniAppFontLinks,
   getPreviewDevStyles,
   getJoinFlowStyles,
-  getJoinPreviewThemeStyles,
+  getGatePageStyles,
   renderThemeToggleButton,
   renderJoinProgressMarkup,
   JOIN_FLOW_STEPS,
@@ -44,64 +44,70 @@ function renderDesignBannerStyles() {
   `;
 }
 
-function renderOrganizerGatePage(botUsername) {
+function renderOrganizerGatePage(_botUsername, options = {}) {
+  const isPreview = options.isPreview === true;
+  const siteUrl = "https://rollerbot.pro";
+
+  const GATE_LOCK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
+  const GATE_EXTERNAL_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>`;
+  const GATE_TIP_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
+
   return `<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
   ${getMiniAppViewportMeta()}
-  <title>Панель организатора</title>
+  ${getMiniAppFontLinks()}
+  <title>Доступ закрыт</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>${getMiniAppHeadScript()}</script>
   <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      margin: 0;
-      min-height: 100vh;
-      background: #eef3ff;
-      color: #151a2d;
-      padding: max(20px, env(safe-area-inset-top)) 16px 24px;
-      box-sizing: border-box;
-      max-width: 480px;
-      margin-inline: auto;
-    }
-    .card {
-      background: #fff;
-      border-radius: 18px;
-      padding: 22px 18px;
-      box-shadow: 0 12px 32px rgba(27, 45, 94, 0.1);
-    }
-    h1 { font-size: 22px; margin: 0 0 10px; }
-    p { color: #65708a; line-height: 1.55; margin: 0 0 12px; }
-    ol { margin: 0; padding-left: 20px; color: #334; line-height: 1.6; }
-    .note {
-      margin-top: 16px;
-      padding: 12px;
-      background: #fff8e6;
-      border: 1px solid #ffe2a8;
-      border-radius: 12px;
-      font-size: 14px;
-      color: #6a4f00;
-    }
     ${renderDesignBannerStyles()}
+    ${isPreview ? getPreviewDevStyles() : ""}
+    ${getGatePageStyles()}
     ${getMiniAppStyles()}
   </style>
 </head>
-<body>
+<body class="gate-page mini-app-shell${isPreview ? " gate-preview" : ""}">
   ${renderDesignBanner()}
-  <div class="card">
-    <h1>🎯 Панель организатора</h1>
-    <p>Эта панель только для владельцев каналов, которые проводят розыgрыши.</p>
-    <ol>
-      <li>Добавьте @${escapeHtml(botUsername)} админом в канал</li>
-      <li>Перешлите пост из канала боту (<code>/link_channel</code>)</li>
-      <li>Откройте «Панель» снова</li>
-    </ol>
-    <div class="note">
-      Если вы <strong>участник</strong> розыgрыша — нажимайте кнопку «Участвовать» в посте канала, не эту панель.
-    </div>
+  <div class="gate-shell">
+    ${isPreview ? `<div class="preview-toolbar">${renderThemeToggleButton()}</div>` : ""}
+    <article class="gate-card">
+      <div class="gate-hero">
+        <div class="gate-lock-ring">
+          <div class="gate-lock-icon">${GATE_LOCK_ICON}</div>
+        </div>
+        <span class="gate-badge">Доступ закрыт</span>
+        <h1 class="gate-title">Вам сюда нельзя <span class="gate-title-smile">:)</span></h1>
+        <p class="gate-lead">
+          Оплатите подписку на сайте
+          <span class="gate-lead-site">rollerbot.pro</span>
+        </p>
+      </div>
+      <div class="gate-actions">
+        <a href="${siteUrl}" class="gate-cta-btn" id="gateSubscribeBtn" target="_blank" rel="noopener noreferrer">
+          ${GATE_EXTERNAL_ICON}
+          Перейти на rollerbot.pro
+        </a>
+      </div>
+      <div class="gate-tip">
+        <span class="gate-tip-icon">${GATE_TIP_ICON}</span>
+        <p class="gate-tip-text">Если вы участник розыгрыша — нажимайте «Участвовать» в посте канала, а не «Панель».</p>
+      </div>
+    </article>
   </div>
   <script>
-    ${getMiniAppInitScript({ authSession: false, previewShell: process.env.WEB_ONLY === "true" })}
+    ${getMiniAppInitScript({ authSession: false, previewShell: isPreview || process.env.WEB_ONLY === "true" })}
+    (function () {
+      const btn = document.getElementById("gateSubscribeBtn");
+      if (!btn) return;
+      btn.addEventListener("click", function (event) {
+        const tg = window.Telegram?.WebApp;
+        if (!tg?.openLink) return;
+        event.preventDefault();
+        tg.openLink("${siteUrl}");
+      });
+    })();
   </script>
 </body>
 </html>`;
@@ -1184,7 +1190,7 @@ function registerJoinMiniApp(app, deps) {
     });
 
     app.get("/dev/preview/gate", (_req, res) => {
-      res.type("html").send(renderOrganizerGatePage(deps.BOT_USERNAME || "bot"));
+      res.type("html").send(renderOrganizerGatePage(deps.BOT_USERNAME || "bot", { isPreview: true }));
     });
   }
 }

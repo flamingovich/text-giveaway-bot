@@ -2010,6 +2010,289 @@ function getJoinPreviewThemeStyles() {
   `;
 }
 
+function getGatePageStyles() {
+  return `
+    body.gate-page.mini-app-shell {
+      margin: 0;
+      max-width: 100%;
+      width: 100%;
+      --gate-pad-left: max(14px, var(--mini-pad-x), env(safe-area-inset-left, 0px));
+      --gate-pad-right: max(14px, var(--mini-pad-x), env(safe-area-inset-right, 0px));
+      padding: var(--mini-pad-top) 0 var(--mini-pad-bottom);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow-x: clip;
+      box-sizing: border-box;
+    }
+
+    body.gate-page .gate-shell {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      padding-left: var(--gate-pad-left);
+      padding-right: var(--gate-pad-right);
+      animation: gate-page-in 0.32s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+      opacity: 0;
+      transform: translateY(8px);
+    }
+
+    @keyframes gate-page-in {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    body.gate-page .preview-toolbar {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 12px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    body.gate-page .gate-card {
+      position: relative;
+      overflow: hidden;
+      text-align: center;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      border-radius: 20px;
+      padding: 24px 18px 18px;
+      box-shadow: 0 12px 32px rgba(27, 45, 94, 0.08);
+    }
+
+    body.gate-page .gate-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 120px;
+      background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 10%, transparent) 0%,
+        transparent 100%
+      );
+      pointer-events: none;
+    }
+
+    body.gate-page .gate-hero {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    body.gate-page .gate-lock-ring {
+      position: relative;
+      width: 84px;
+      height: 84px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    body.gate-page .gate-lock-ring::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: conic-gradient(
+        from 210deg,
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 70%, #fff),
+        color-mix(in srgb, #7c5cff 55%, var(--tg-theme-button-color, #325fff)),
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 70%, #fff)
+      );
+      animation: gate-ring-spin 8s linear infinite;
+      opacity: 0.35;
+    }
+
+    body.gate-page .gate-lock-ring::after {
+      content: "";
+      position: absolute;
+      inset: 3px;
+      border-radius: 999px;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+    }
+
+    @keyframes gate-ring-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    body.gate-page .gate-lock-icon {
+      position: relative;
+      z-index: 1;
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(
+        145deg,
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 18%, var(--tg-theme-secondary-bg-color, #fff)),
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 8%, var(--tg-theme-secondary-bg-color, #fff))
+      );
+      color: var(--tg-theme-button-color, #325fff);
+      box-shadow: 0 10px 24px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 24%, transparent);
+      animation: gate-lock-bob 2.8s ease-in-out infinite;
+    }
+
+    @keyframes gate-lock-bob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
+    }
+
+    body.gate-page .gate-lock-icon svg {
+      width: 28px;
+      height: 28px;
+      display: block;
+    }
+
+    body.gate-page .gate-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--tg-theme-button-color, #325fff);
+      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 22%, transparent);
+      margin-bottom: 10px;
+    }
+
+    body.gate-page .gate-title {
+      margin: 0 0 8px;
+      font-size: 24px;
+      font-weight: 900;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      color: var(--tg-theme-text-color, #151a2d);
+    }
+
+    body.gate-page .gate-title-smile {
+      display: inline-block;
+      animation: gate-smile-wink 3s ease-in-out infinite;
+    }
+
+    @keyframes gate-smile-wink {
+      0%, 88%, 100% { transform: scale(1) rotate(0deg); }
+      92% { transform: scale(1.08) rotate(-6deg); }
+      96% { transform: scale(1) rotate(0deg); }
+    }
+
+    body.gate-page .gate-lead {
+      margin: 0;
+      max-width: 280px;
+      font-size: 15px;
+      line-height: 1.5;
+      font-weight: 600;
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    body.gate-page .gate-lead-site {
+      display: inline-block;
+      margin-top: 4px;
+      font-weight: 800;
+      color: var(--tg-theme-link-color, #325fff);
+    }
+
+    body.gate-page .gate-actions {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    body.gate-page .gate-cta-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 14px 16px;
+      border: none;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 800;
+      text-decoration: none;
+      cursor: pointer;
+      color: var(--tg-theme-button-text-color, #fff);
+      background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 88%, #fff) 0%,
+        var(--tg-theme-button-color, #325fff) 100%
+      );
+      box-shadow: 0 10px 26px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 34%, transparent);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 55%, transparent);
+      transition: transform 0.18s ease, filter 0.18s ease;
+    }
+
+    body.gate-page .gate-cta-btn:active {
+      transform: scale(0.98);
+    }
+
+    body.gate-page .gate-cta-btn svg {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+
+    body.gate-page .gate-tip {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      text-align: left;
+      padding: 12px;
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 8%, var(--tg-theme-secondary-bg-color, #fff));
+      border: 1px dashed color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 24%, transparent);
+    }
+
+    body.gate-page .gate-tip-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 9px;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 12%, transparent);
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    body.gate-page .gate-tip-icon svg {
+      width: 16px;
+      height: 16px;
+      display: block;
+    }
+
+    body.gate-page .gate-tip-text {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 600;
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    body.gate-page.app-theme-dark .gate-card {
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+    }
+
+    body.gate-page.app-theme-dark .gate-lock-ring::after {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+    }
+  `;
+}
+
 module.exports = {
   getMiniAppStyles,
   getMiniAppInitScript,
@@ -2020,6 +2303,7 @@ module.exports = {
   getPreviewDevStyles,
   getJoinFlowStyles,
   getWinnersPageStyles,
+  getGatePageStyles,
   getJoinPreviewThemeStyles,
   renderJoinProgressMarkup,
   renderThemeToggleButton,
