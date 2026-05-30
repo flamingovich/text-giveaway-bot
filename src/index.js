@@ -69,7 +69,7 @@ const DELEGATED_ADMINS_FILE = path.join(DATA_DIR, "delegated-admins.json");
 const ASSETS_DIR = path.join(__dirname, "..", "assets");
 const BRAND_LOGO_FILE = path.join(__dirname, "..", "rollerbot_logo.jpg");
 const BRAND_BACKGROUND_FILE = path.join(__dirname, "..", "background.jpg");
-const BRAND_BACKGROUND_DARK_FILE = path.join(__dirname, "..", "background_dark.jpg");
+const BRAND_BACKGROUND_DARK_FILE = path.join(__dirname, "..", "background_dark.png");
 
 const DRAW_STATUS = {
   DRAFT: "draft",
@@ -2261,7 +2261,7 @@ function renderWebPage(draws, message, webUser) {
       --bg: #dbe8f8;
       --bg-dark: #152238;
       --app-bg-image: url("/brand/background.jpg");
-      --app-bg-image-dark: url("/brand/background-dark.jpg");
+      --app-bg-image-dark: url("/brand/background-dark.png");
       --card: #ffffff;
       --text: #151a2d;
       --sub: #65708a;
@@ -4790,7 +4790,7 @@ app.get("/brand/background.jpg", (req, res) => {
   }
   res.sendFile(BRAND_BACKGROUND_FILE);
 });
-app.get("/brand/background-dark.jpg", (req, res) => {
+app.get("/brand/background-dark.png", (req, res) => {
   if (!fs.existsSync(BRAND_BACKGROUND_DARK_FILE)) {
     res.status(404).end();
     return;

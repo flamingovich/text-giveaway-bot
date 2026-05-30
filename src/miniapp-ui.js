@@ -21,7 +21,7 @@ function getMiniAppStyles() {
       --tg-theme-button-text-color: #ffffff;
       --tg-theme-secondary-bg-color: #ffffff;
       --bg-dark: #152238;
-      --app-bg-image-dark: url("/brand/background-dark.jpg");
+      --app-bg-image-dark: url("/brand/background-dark.png");
     }
 
     html {
