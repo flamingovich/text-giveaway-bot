@@ -3487,6 +3487,51 @@ function renderWebPage(draws, message, webUser) {
       width: 100%;
       object-fit: cover;
     }
+    .draw-image-preview-wrap {
+      margin-top: 10px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 24%, transparent);
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 5%, var(--tg-theme-secondary-bg-color, #fff));
+      box-shadow: 0 8px 20px rgba(27, 45, 94, 0.08);
+    }
+    .draw-image-preview-wrap.hidden {
+      display: none !important;
+    }
+    .draw-image-preview {
+      display: block;
+      width: 100%;
+      max-height: 180px;
+      object-fit: cover;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+    }
+    .draw-image-preview-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+    }
+    .draw-image-preview-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--tg-theme-button-color, var(--primary));
+    }
+    .draw-image-clear-btn {
+      border: none;
+      background: none;
+      padding: 0;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--tg-theme-hint-color, var(--sub));
+      cursor: pointer;
+    }
+    .draw-file-btn.is-ready,
+    .draw-paste-btn.is-ready {
+      border-style: solid;
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 10%, var(--tg-theme-secondary-bg-color, #fff));
+    }
     .draw-submit {
       display: flex;
       align-items: center;
@@ -4661,14 +4706,20 @@ function renderWebPage(draws, message, webUser) {
             <div class="draw-field">
               ${drawLabel("photo", "Обложка")}
               <div class="draw-media-row">
-                <label class="draw-file-btn">
+                <label class="draw-file-btn" id="draw-gallery-label">
                   <input id="draw-image-input" name="image" type="file" accept="image/*" />
                   Галерея
                 </label>
-                <div id="draw-paste-target" class="draw-paste-btn" contenteditable="true">Вставить</div>
+                <div id="draw-paste-target" class="draw-paste-btn" contenteditable="true" tabindex="0">Вставить</div>
               </div>
               <input type="hidden" id="draw-clipboard-data" name="imageClipboardData" data-field-name="imageClipboardData" />
-              <img id="draw-paste-preview" class="paste-preview" alt="" />
+              <div id="draw-image-preview-wrap" class="draw-image-preview-wrap hidden">
+                <img id="draw-paste-preview" class="draw-image-preview" alt="Превью обложки" />
+                <div class="draw-image-preview-bar">
+                  <span id="draw-image-preview-label" class="draw-image-preview-label">Обложка выбрана</span>
+                  <button type="button" id="draw-image-clear-btn" class="draw-image-clear-btn">Убрать</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -4751,7 +4802,7 @@ function renderWebPage(draws, message, webUser) {
         </div>
 
         <div id="addProjectWrap" class="settings-collapse panel-hidden">
-        <form id="create-project-form" method="post" action="${PANEL_BASE}/projects" enctype="multipart/form-data" class="draw-form">
+        <form id="create-project-form" method="post" action="${PANEL_BASE}/projects" class="draw-form">
           <div class="draw-block">
             <div class="draw-field">
               ${drawLabel("project", "Название")}
@@ -4760,20 +4811,6 @@ function renderWebPage(draws, message, webUser) {
             <div class="draw-field">
               ${drawLabel("link", "Реферальная ссылка")}
               <input class="draw-input" name="refLink" type="url" placeholder="https://..." required />
-            </div>
-          </div>
-          <div class="draw-block">
-            <div class="draw-field">
-              ${drawLabel("photo", "Лого")}
-              <div class="draw-media-row">
-                <label class="draw-file-btn">
-                  <input id="project-logo-input" name="logo" type="file" accept="image/png,image/svg+xml,image/webp,image/jpeg" />
-                  Файл
-                </label>
-                <div id="project-paste-target" class="draw-paste-btn" contenteditable="true">Вставить</div>
-              </div>
-              <input type="hidden" id="project-clipboard-data" name="logoClipboardData" data-field-name="logoClipboardData" />
-              <img id="project-paste-preview" class="paste-preview" alt="" />
             </div>
           </div>
           <div class="project-form-footer">
@@ -4878,6 +4915,93 @@ function renderWebPage(draws, message, webUser) {
   </div>
   <script>
     ${getMiniAppInitScript({ authSession: true, previewShell: WEB_ONLY })}
+
+    function setupDrawImageField() {
+      const fileInput = document.getElementById("draw-image-input");
+      const hiddenInput = document.getElementById("draw-clipboard-data");
+      const preview = document.getElementById("draw-paste-preview");
+      const previewWrap = document.getElementById("draw-image-preview-wrap");
+      const previewLabel = document.getElementById("draw-image-preview-label");
+      const clearBtn = document.getElementById("draw-image-clear-btn");
+      const pasteTarget = document.getElementById("draw-paste-target");
+      const galleryLabel = document.getElementById("draw-gallery-label");
+      if (!fileInput || !hiddenInput || !preview || !previewWrap) return;
+
+      let objectUrl = "";
+
+      function revokeObjectUrl() {
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = "";
+        }
+      }
+
+      function showPreview(src, sourceLabel) {
+        revokeObjectUrl();
+        preview.src = src;
+        previewWrap.classList.remove("hidden");
+        if (previewLabel) previewLabel.textContent = sourceLabel || "Обложка выбрана";
+        if (pasteTarget) pasteTarget.classList.add("is-ready");
+        if (galleryLabel) galleryLabel.classList.add("is-ready");
+      }
+
+      function clearPreview() {
+        revokeObjectUrl();
+        fileInput.value = "";
+        hiddenInput.value = "";
+        hiddenInput.removeAttribute("name");
+        preview.removeAttribute("src");
+        previewWrap.classList.add("hidden");
+        if (pasteTarget) {
+          pasteTarget.textContent = "Вставить";
+          pasteTarget.classList.remove("is-ready");
+        }
+        if (galleryLabel) galleryLabel.classList.remove("is-ready");
+      }
+
+      fileInput.addEventListener("change", () => {
+        const file = fileInput.files?.[0];
+        if (!file) {
+          clearPreview();
+          return;
+        }
+        hiddenInput.value = "";
+        hiddenInput.removeAttribute("name");
+        objectUrl = URL.createObjectURL(file);
+        showPreview(objectUrl, "Обложка из галереи");
+        if (pasteTarget) pasteTarget.textContent = "Вставить";
+      });
+
+      if (pasteTarget) {
+        pasteTarget.addEventListener("paste", (event) => {
+          const items = event.clipboardData?.items || [];
+          const imageItem = Array.from(items).find((item) => item.type && item.type.startsWith("image/"));
+          if (!imageItem) {
+            return;
+          }
+          event.preventDefault();
+          const file = imageItem.getAsFile();
+          if (!file) return;
+          fileInput.value = "";
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = String(reader.result || "");
+            const fieldName = hiddenInput.dataset.fieldName;
+            if (fieldName) {
+              hiddenInput.setAttribute("name", fieldName);
+            }
+            hiddenInput.value = dataUrl;
+            showPreview(dataUrl, "Обложка из буфера");
+            pasteTarget.textContent = "✓";
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+
+      if (clearBtn) {
+        clearBtn.addEventListener("click", clearPreview);
+      }
+    }
 
     function setupPasteImage(targetId, hiddenInputId, previewId) {
       const target = document.getElementById(targetId);
@@ -5156,24 +5280,12 @@ function renderWebPage(draws, message, webUser) {
       const submitBtn = document.getElementById("project-submit-btn");
       const nameInput = form?.querySelector('[name="name"]');
       const refInput = form?.querySelector('[name="refLink"]');
-      const logoInput = document.getElementById("project-logo-input");
-      const clipboardInput = document.getElementById("project-clipboard-data");
-      const pastePreview = document.getElementById("project-paste-preview");
       if (!form || !cancelBtn || !submitLabel || !nameInput || !refInput) return;
 
       function resetProjectForm() {
         form.action = "${PANEL_BASE}/projects";
         nameInput.value = "";
         refInput.value = "";
-        if (logoInput) logoInput.value = "";
-        if (clipboardInput) {
-          clipboardInput.value = "";
-          clipboardInput.removeAttribute("name");
-        }
-        if (pastePreview) {
-          pastePreview.style.display = "none";
-          pastePreview.removeAttribute("src");
-        }
         cancelBtn.style.display = "none";
         submitLabel.textContent = "Добавить проект";
         if (submitBtn) {
@@ -5188,15 +5300,6 @@ function renderWebPage(draws, message, webUser) {
           form.action = "${PANEL_BASE}/projects/" + encodeURIComponent(projectId) + "/update";
           nameInput.value = btn.dataset.projectName || "";
           refInput.value = btn.dataset.projectRef || "";
-          if (logoInput) logoInput.value = "";
-          if (clipboardInput) {
-            clipboardInput.value = "";
-            clipboardInput.removeAttribute("name");
-          }
-          if (pastePreview) {
-            pastePreview.style.display = "none";
-            pastePreview.removeAttribute("src");
-          }
           cancelBtn.style.display = "";
           submitLabel.textContent = "Сохранить";
           if (submitBtn) {
@@ -5341,10 +5444,8 @@ function renderWebPage(draws, message, webUser) {
       });
     }
 
-    setupPasteImage("draw-paste-target", "draw-clipboard-data", "draw-paste-preview");
-    setupPasteImage("project-paste-target", "project-clipboard-data", "project-paste-preview");
+    setupDrawImageField();
     setupClipboardSubmit("create-draw-form", "draw-clipboard-data", "draw-image-input", "pasted-draw");
-    setupClipboardSubmit("create-project-form", "project-clipboard-data", "project-logo-input", "pasted-logo");
     setupProjectFormEdit();
     setupAccessDeleteButtons();
     setupPrizeTypeToggle();
@@ -5470,6 +5571,7 @@ registerWinnersMiniApp(app, {
   getWinnerDisplayName,
   getPerWinnerPrizeText,
   getTelegramUserProfileUrl,
+  shouldHideParticipant: (userId) => isPlatformAdmin(userId),
   bot: WEB_ONLY ? null : bot,
   designPreview: WEB_ONLY,
 });
@@ -5702,23 +5804,21 @@ function resolveProjectLogoUpload(req, logoClipboardData, previousLogoPath = "")
   return logoPath || previousLogoPath;
 }
 
-panelRouter.post("/projects", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
+panelRouter.post("/projects", webAuth.requireAuth, requireOrganizer, (req, res) => {
   const ownerId = req.webUser.id;
-  const { name, refLink, logoClipboardData } = parseProjectFormBody(req);
+  const { name, refLink } = parseProjectFormBody(req);
 
   if (!name || !refLink) {
     redirectWithMessage(res, "Укажите название проекта и реф-ссылку.");
     return;
   }
 
-  const logoPath = resolveProjectLogoUpload(req, logoClipboardData);
-
   const projectsData = readProjects();
   projectsData.projects.push({
     id: createProjectId(),
     name,
     refLink,
-    logoPath,
+    logoPath: "",
     ownerId,
     createdAt: new Date().toISOString(),
   });
@@ -5727,7 +5827,7 @@ panelRouter.post("/projects", webAuth.requireAuth, requireOrganizer, upload.sing
   redirectWithMessage(res, "Проект добавлен.");
 });
 
-panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
+panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrganizer, (req, res) => {
   const ownerId = req.webUser.id;
   const projectId = (req.params.projectId || "").trim();
   const project = getProjectById(projectId, ownerId);
@@ -5736,7 +5836,7 @@ panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrga
     return;
   }
 
-  const { name, refLink, logoClipboardData } = parseProjectFormBody(req);
+  const { name, refLink } = parseProjectFormBody(req);
   if (!name || !refLink) {
     redirectWithMessage(res, "Укажите название проекта и реф-ссылку.");
     return;
@@ -5749,12 +5849,10 @@ panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrga
     return;
   }
 
-  const logoPath = resolveProjectLogoUpload(req, logoClipboardData, project.logoPath || "");
   projectsData.projects[index] = {
     ...projectsData.projects[index],
     name,
     refLink,
-    logoPath,
   };
   writeProjects(projectsData);
   redirectWithMessage(res, "Проект обновлён.");

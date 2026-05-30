@@ -6,6 +6,7 @@ const {
   getMiniAppFontLinks,
   getPreviewDevStyles,
   getWinnersPageStyles,
+  renderDesktopTiledBackground,
   renderThemeToggleButton,
 } = require("./miniapp-ui");
 
@@ -17,6 +18,18 @@ const EMPTY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 const VIEWER_WON_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg>`;
 const VIEWER_LOST_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 15h8"/><circle cx="9" cy="9" r="0.5" fill="currentColor"/><circle cx="15" cy="9" r="0.5" fill="currentColor"/></svg>`;
 const VIEWER_NONE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>`;
+const PREVIEW_MOCK_USERS = {
+  "1001": { meta: { first_name: "Алексей", username: "alex_winner" } },
+  "1002": { meta: { first_name: "Мария", username: "maria_p" } },
+  "1003": { meta: { first_name: "Дмитрий", username: "dmitry_k" } },
+  "1004": { meta: { first_name: "Елена", username: "elena_v" } },
+  "1005": { meta: { first_name: "Иван", username: "ivan_stream" } },
+  "999001": { meta: { first_name: "Сервис", username: "roller_admin" } },
+};
+
+function buildPreviewUserProfiles() {
+  return { users: { ...PREVIEW_MOCK_USERS } };
+}
 
 function escapeHtml(value) {
   return String(value || "")
@@ -45,18 +58,53 @@ function formatParticipantsLabel(count) {
   return `${n} участников`;
 }
 
-function buildWinnerViewModel(winnerId, draw, deps) {
+const TG_AVATAR_GRADIENTS = [
+  { top: "#7BD3FF", bottom: "#2AABEE" },
+  { top: "#90CAF9", bottom: "#42A5F5" },
+  { top: "#FFAB91", bottom: "#E64A19" },
+  { top: "#FFB74D", bottom: "#F57C00" },
+  { top: "#A5D6A7", bottom: "#43A047" },
+  { top: "#80CBC4", bottom: "#00897B" },
+  { top: "#CE93D8", bottom: "#AB47BC" },
+  { top: "#B39DDB", bottom: "#7E57C2" },
+  { top: "#F48FB1", bottom: "#D81B60" },
+  { top: "#EF9A9A", bottom: "#E53935" },
+  { top: "#FFE082", bottom: "#FFB300" },
+  { top: "#80DEEA", bottom: "#00ACC1" },
+  { top: "#9FA8DA", bottom: "#5C6BC0" },
+  { top: "#FFCC80", bottom: "#FB8C00" },
+  { top: "#C5E1A5", bottom: "#7CB342" },
+  { top: "#F06292", bottom: "#C2185B" },
+];
+
+function getAvatarFallbackStyle(userId) {
+  const seed = String(userId || "0");
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  const palette = TG_AVATAR_GRADIENTS[hash % TG_AVATAR_GRADIENTS.length];
+  return `--avatar-grad-top:${palette.top};--avatar-grad-bottom:${palette.bottom};`;
+}
+
+function renderAvatar(user) {
+  if (user.avatarUrl) {
+    return `<img src="${escapeHtml(user.avatarUrl)}" alt="" class="winners-avatar" loading="lazy" />`;
+  }
+  return `<div class="winners-avatar winners-avatar-fallback" style="${getAvatarFallbackStyle(user.id)}">${escapeHtml(user.initial)}</div>`;
+}
+function buildUserViewModel(userId, draw, deps, options = {}) {
   const userProfiles = deps.readUserProjectProfiles();
-  const { meta } = deps.getUserProfileBundle(userProfiles, winnerId, draw.projectId);
-  const displayName = deps.getWinnerDisplayName(meta, winnerId);
+  const { meta } = deps.getUserProfileBundle(userProfiles, userId, draw.projectId);
+  const displayName = deps.getWinnerDisplayName(meta, userId);
   const username = meta.username ? `@${meta.username}` : "";
-  const initial = (displayName.replace(/^@/, "") || String(winnerId)).charAt(0).toUpperCase() || "?";
-  const avatarUrl = meta.avatarFileId ? `/winners/avatar/${encodeURIComponent(String(winnerId))}` : "";
-  const profileUrl = deps.getTelegramUserProfileUrl(winnerId, meta.username);
-  const prize = deps.getPerWinnerPrizeText(draw);
+  const initial = (displayName.replace(/^@/, "") || String(userId)).charAt(0).toUpperCase() || "?";
+  const avatarUrl = meta.avatarFileId ? `/winners/avatar/${encodeURIComponent(String(userId))}` : "";
+  const profileUrl = deps.getTelegramUserProfileUrl(userId, meta.username);
+  const prize = options.includePrize ? deps.getPerWinnerPrizeText(draw) : "";
 
   return {
-    id: String(winnerId),
+    id: String(userId),
     displayName,
     username,
     initial,
@@ -66,62 +114,96 @@ function buildWinnerViewModel(winnerId, draw, deps) {
   };
 }
 
-function renderWinnerCard(winner, index) {
-  const avatar = winner.avatarUrl
-    ? `<img src="${escapeHtml(winner.avatarUrl)}" alt="" class="winners-avatar" loading="lazy" />`
-    : `<div class="winners-avatar winners-avatar-fallback">${escapeHtml(winner.initial)}</div>`;
-  const handle = winner.username || "без username";
+function buildWinnerViewModel(winnerId, draw, deps) {
+  return buildUserViewModel(winnerId, draw, deps, { includePrize: true });
+}
 
-  return `<article class="winners-row" style="animation-delay:${Math.min(index * 0.04 + 0.03, 0.24)}s">
-    ${avatar}
+function buildParticipantsList(draw, deps) {
+  const hideParticipant = deps.shouldHideParticipant || (() => false);
+  return (draw.participantIds || [])
+    .filter((userId) => !hideParticipant(userId))
+    .map((userId) => buildUserViewModel(userId, draw, deps));
+}
+
+function renderUserRow(user, options = {}) {
+  const showPrize = options.showPrize === true;
+  const handle = user.username || "без username";
+  const delayStyle =
+    options.animationDelay != null ? ` style="animation-delay:${options.animationDelay}s"` : "";
+  const prizeBlock = showPrize
+    ? `<div class="winners-row-prize">
+        <span class="winners-row-prize-label">Приз:</span>
+        <span class="winners-row-prize-value">${escapeHtml(user.prize)}</span>
+      </div>`
+    : "";
+
+  return `<article class="winners-row${showPrize ? "" : " winners-row-compact"}"${delayStyle}>
+    ${renderAvatar(user)}
     <div class="winners-row-body">
       <div class="winners-row-identity">
-        <span class="winners-row-name">${escapeHtml(winner.displayName)}</span>
-        <a href="${escapeHtml(winner.profileUrl)}" class="winners-profile-btn" title="Профиль" aria-label="Перейти в профиль">${USER_ICON}</a>
+        <span class="winners-row-name">${escapeHtml(user.displayName)}</span>
+        <a href="${escapeHtml(user.profileUrl)}" class="winners-profile-btn" title="Профиль" aria-label="Перейти в профиль">${USER_ICON}</a>
       </div>
       <div class="winners-row-handle">${escapeHtml(handle)}</div>
     </div>
-    <div class="winners-row-prize">
-      <span class="winners-row-prize-label">Приз:</span>
-      <span class="winners-row-prize-value">${escapeHtml(winner.prize)}</span>
-    </div>
+    ${prizeBlock}
   </article>`;
 }
 
-function renderWinnersStats(winnersCount, participantCount) {
+function renderWinnerCard(winner, index) {
+  return renderUserRow(winner, {
+    showPrize: true,
+    animationDelay: Math.min(index * 0.04 + 0.03, 0.24),
+  });
+}
+
+function renderParticipantCard(participant, index) {
+  return renderUserRow(participant, {
+    showPrize: false,
+    animationDelay: Math.min(index * 0.03 + 0.02, 0.2),
+  });
+}
+
+function renderWinnersStats(winnersCount, participantCount, activeTab = "participants") {
   const parts = [];
-  parts.push(`<div class="winners-stat">
+  parts.push(`<button type="button" class="winners-stat winners-stat-btn${activeTab === "winners" ? " is-active" : ""}" data-winners-tab="winners" aria-pressed="${activeTab === "winners"}">
     <span class="winners-stat-icon">${TROPHY_ICON}</span>
-    <span class="winners-stat-text">
-      <span class="winners-stat-value">${escapeHtml(formatWinnersLabel(winnersCount))}</span>
-    </span>
-  </div>`);
+    <span class="winners-stat-value">${escapeHtml(formatWinnersLabel(winnersCount))}</span>
+  </button>`);
   if (participantCount != null) {
-    parts.push(`<div class="winners-stat">
+    parts.push(`<button type="button" class="winners-stat winners-stat-btn${activeTab === "participants" ? " is-active" : ""}" data-winners-tab="participants" aria-pressed="${activeTab === "participants"}">
       <span class="winners-stat-icon">${USERS_ICON}</span>
-      <span class="winners-stat-text">
-        <span class="winners-stat-value">${escapeHtml(formatParticipantsLabel(participantCount))}</span>
-      </span>
-    </div>`);
+      <span class="winners-stat-value">${escapeHtml(formatParticipantsLabel(participantCount))}</span>
+    </button>`);
   }
   return `<div class="winners-stats">${parts.join("")}</div>`;
 }
 
-function renderWinnersPage(draw, winners, options = {}) {
+function renderWinnersTabPanel(id, rowsHtml, emptyText, isVisible) {
+  return `<div id="${id}" class="winners-tab-panel${isVisible ? "" : " hidden"}" role="tabpanel">
+    ${
+      rowsHtml
+        ? `<div class="winners-list">${rowsHtml}</div>`
+        : `<div class="winners-empty winners-empty-compact">
+            <span class="winners-empty-icon">${EMPTY_ICON}</span>
+            <p class="winners-empty-title">${escapeHtml(emptyText)}</p>
+          </div>`
+    }
+  </div>`;
+}
+
+function renderWinnersPage(draw, winners, participants, options = {}) {
   const isPreview = options.isPreview === true;
   const prizeTitle = escapeHtml(draw?.prize || "приз");
   const winnersCount = winners.length;
-  const participantCount = draw?.participantIds?.length ?? options.participantCount ?? null;
+  const participantCount = participants.length;
   const winnerIds = (draw?.winnerIds || []).map(String);
   const participantIds = (draw?.participantIds || []).map(String);
 
-  const listHtml =
-    winnersCount > 0
-      ? `<div class="winners-list">${winners.map((w, i) => renderWinnerCard(w, i)).join("")}</div>`
-      : `<div class="winners-empty">
-          <span class="winners-empty-icon">${EMPTY_ICON}</span>
-          <p class="winners-empty-title">Победители не определены</p>
-        </div>`;
+  const defaultTab = "winners";
+  const winnersRowsHtml = winnersCount > 0 ? winners.map((w, i) => renderWinnerCard(w, i)).join("") : "";
+  const participantsRowsHtml =
+    participantCount > 0 ? participants.map((p, i) => renderParticipantCard(p, i)).join("") : "";
 
   return `<!doctype html>
 <html lang="ru">
@@ -141,6 +223,7 @@ function renderWinnersPage(draw, winners, options = {}) {
   </style>
 </head>
 <body class="winners-page mini-app-shell${isPreview ? " join-preview" : ""}">
+  ${renderDesktopTiledBackground()}
   <div class="winners-shell">
     ${isPreview ? `<div class="preview-toolbar">${renderThemeToggleButton()}</div>` : ""}
     <header class="winners-header">
@@ -155,9 +238,12 @@ function renderWinnersPage(draw, winners, options = {}) {
           <span class="winners-viewer-banner-sub"></span>
         </div>
       </div>
-      ${renderWinnersStats(winnersCount, participantCount)}
+      ${renderWinnersStats(winnersCount, participantCount, defaultTab)}
     </header>
-    ${listHtml}
+    <section class="winners-panel" aria-live="polite">
+      ${renderWinnersTabPanel("winnersTabWinners", winnersRowsHtml, "Победители не определены", defaultTab === "winners")}
+      ${renderWinnersTabPanel("winnersTabParticipants", participantsRowsHtml, "Участников нет", defaultTab === "participants")}
+    </section>
   </div>
   <script>
     ${getMiniAppInitScript({ authSession: false, previewShell: true })}
@@ -220,14 +306,40 @@ function renderWinnersPage(draw, winners, options = {}) {
 
       applyViewerStatus();
 
-      document.querySelectorAll(".winners-profile-btn").forEach((link) => {
-        link.addEventListener("click", (event) => {
-          const href = link.getAttribute("href") || "";
-          if (!href.startsWith("tg://") || !tg?.openTelegramLink) return;
-          event.preventDefault();
-          tg.openTelegramLink(href);
+      function bindProfileLinks(root) {
+        (root || document).querySelectorAll(".winners-profile-btn").forEach((link) => {
+          if (link.dataset.bound === "1") return;
+          link.dataset.bound = "1";
+          link.addEventListener("click", (event) => {
+            const href = link.getAttribute("href") || "";
+            if (!href.startsWith("tg://") || !tg?.openTelegramLink) return;
+            event.preventDefault();
+            tg.openTelegramLink(href);
+          });
+        });
+      }
+
+      function switchWinnersTab(tab) {
+        const winnersPanel = document.getElementById("winnersTabWinners");
+        const participantsPanel = document.getElementById("winnersTabParticipants");
+        if (winnersPanel) winnersPanel.classList.toggle("hidden", tab !== "winners");
+        if (participantsPanel) participantsPanel.classList.toggle("hidden", tab !== "participants");
+        document.querySelectorAll(".winners-stat-btn").forEach((btn) => {
+          const isActive = btn.getAttribute("data-winners-tab") === tab;
+          btn.classList.toggle("is-active", isActive);
+          btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+        bindProfileLinks(document.querySelector(".winners-panel"));
+      }
+
+      document.querySelectorAll(".winners-stat-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const tab = btn.getAttribute("data-winners-tab");
+          if (tab) switchWinnersTab(tab);
         });
       });
+
+      bindProfileLinks(document);
     })();
   </script>
 </body>
@@ -243,9 +355,21 @@ function registerWinnersMiniApp(app, deps) {
     getWinnerDisplayName,
     getPerWinnerPrizeText,
     getTelegramUserProfileUrl,
+    shouldHideParticipant,
     bot,
     designPreview,
   } = deps;
+
+  const viewDeps = {
+    readUserProjectProfiles,
+    getUserProfileBundle,
+    getWinnerDisplayName,
+    getPerWinnerPrizeText,
+    getTelegramUserProfileUrl,
+    shouldHideParticipant:
+      shouldHideParticipant ||
+      (designPreview ? (userId) => String(userId) === "999001" : () => false),
+  };
 
   function getFinishedDraw(drawId) {
     const data = readData();
@@ -257,15 +381,11 @@ function registerWinnersMiniApp(app, deps) {
   }
 
   function buildWinnersList(draw) {
-    return (draw.winnerIds || []).map((winnerId) =>
-      buildWinnerViewModel(winnerId, draw, {
-        readUserProjectProfiles,
-        getUserProfileBundle,
-        getWinnerDisplayName,
-        getPerWinnerPrizeText,
-        getTelegramUserProfileUrl,
-      }),
-    );
+    return (draw.winnerIds || []).map((winnerId) => buildWinnerViewModel(winnerId, draw, viewDeps));
+  }
+
+  function buildParticipantsForPage(draw) {
+    return buildParticipantsList(draw, viewDeps);
   }
 
   app.get("/winners/avatar/:userId", async (req, res) => {
@@ -290,7 +410,8 @@ function registerWinnersMiniApp(app, deps) {
       return;
     }
     const winners = buildWinnersList(draw);
-    res.type("html").send(renderWinnersPage(draw, winners));
+    const participants = buildParticipantsForPage(draw);
+    res.type("html").send(renderWinnersPage(draw, winners, participants));
   });
 
   app.get("/api/winners/:drawId", (req, res) => {
@@ -299,11 +420,14 @@ function registerWinnersMiniApp(app, deps) {
       res.status(404).json({ error: "Розыгрыш не найден или ещё не завершён." });
       return;
     }
+    const participants = buildParticipantsForPage(draw);
     res.json({
       drawId: draw.id,
       prize: draw.prize,
       winnersCount: (draw.winnerIds || []).length,
+      participantsCount: participants.length,
       winners: buildWinnersList(draw),
+      participants,
     });
   });
 
@@ -316,32 +440,21 @@ function registerWinnersMiniApp(app, deps) {
       winnersCount: 2,
       prizeType: "money_usd",
       prizeAmount: 20,
-      participantIds: ["1001", "1002", "1003", "1004", "1005"],
+      participantIds: ["1001", "1002", "1003", "1004", "1005", "999001"],
+      projectId: "demo",
     };
-    const mockWinners = [
-      {
-        id: "1001",
-        displayName: "Алексей",
-        username: "@alex_winner",
-        initial: "А",
-        avatarUrl: "",
-        profileUrl: "https://t.me/alex_winner",
-        prize: "10$",
-      },
-      {
-        id: "1002",
-        displayName: "Maria",
-        username: "@maria_p",
-        initial: "M",
-        avatarUrl: "",
-        profileUrl: "https://t.me/maria_p",
-        prize: "10$",
-      },
-    ];
+    const previewViewDeps = {
+      ...viewDeps,
+      readUserProjectProfiles: () => buildPreviewUserProfiles(),
+    };
+    const mockWinners = (mockDraw.winnerIds || []).map((winnerId) =>
+      buildWinnerViewModel(winnerId, mockDraw, previewViewDeps),
+    );
+    const mockParticipants = buildParticipantsList(mockDraw, previewViewDeps);
 
     app.get("/dev/preview/winners", (_req, res) => {
       res.type("html").send(
-        renderWinnersPage(mockDraw, mockWinners, {
+        renderWinnersPage(mockDraw, mockWinners, mockParticipants, {
           isPreview: true,
           previewViewerId: "1003",
         }),

@@ -1561,6 +1561,13 @@ function renderJoinProgressMarkup() {
   </div>`;
 }
 
+function renderDesktopTiledBackground() {
+  const tiles = Array.from({ length: 9 }, (_, index) =>
+    `<span class="app-desktop-bg-tile${index % 2 === 1 ? " app-desktop-bg-tile-mirror" : ""}" aria-hidden="true"></span>`,
+  ).join("");
+  return `<div class="app-desktop-bg" aria-hidden="true"><div class="app-desktop-bg-strip">${tiles}</div><div class="app-desktop-bg-overlay"></div></div>`;
+}
+
 function getWinnersPageStyles() {
   return `
     body.winners-page.mini-app-shell {
@@ -1749,19 +1756,68 @@ function getWinnersPageStyles() {
       display: flex;
       align-items: center;
       justify-content: flex-start;
-      gap: 8px;
-      padding: 10px;
+      gap: 6px;
+      padding: 8px 9px;
       border-radius: 12px;
       background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 6%, var(--tg-theme-secondary-bg-color, #fff));
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 12%, transparent);
       min-width: 0;
-      min-height: 44px;
+      min-height: 40px;
+    }
+
+    body.winners-page .winners-stat-btn {
+      width: 100%;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+    }
+
+    body.winners-page .winners-stat-btn:active {
+      transform: scale(0.98);
+    }
+
+    body.winners-page .winners-stat-btn:not(.is-active) {
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 5%, var(--tg-theme-secondary-bg-color, #fff));
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 10%, transparent);
+    }
+
+    body.winners-page .winners-stat-btn:not(.is-active) .winners-stat-value {
+      color: var(--tg-theme-hint-color, #65708a);
+      font-weight: 700;
+    }
+
+    body.winners-page .winners-stat-btn:not(.is-active) .winners-stat-icon {
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 10%, transparent);
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    body.winners-page .winners-stat-btn.is-active {
+      border-color: var(--tg-theme-button-color, #325fff);
+      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 18%, var(--tg-theme-secondary-bg-color, #fff));
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 28%, transparent),
+        0 4px 14px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 16%, transparent);
+    }
+
+    body.winners-page .winners-stat-btn.is-active .winners-stat-value {
+      color: var(--tg-theme-button-color, #325fff);
+    }
+
+    body.winners-page .winners-stat-btn.is-active .winners-stat-icon {
+      background: var(--tg-theme-button-color, #325fff);
+      color: var(--tg-theme-button-text-color, #fff);
+    }
+
+    body.winners-page .winners-stat-btn:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 45%, transparent);
+      outline-offset: 2px;
     }
 
     body.winners-page .winners-stat-icon {
-      width: 28px;
-      height: 28px;
-      border-radius: 8px;
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1771,25 +1827,30 @@ function getWinnersPageStyles() {
     }
 
     body.winners-page .winners-stat-icon svg {
-      width: 14px;
-      height: 14px;
-    }
-
-    body.winners-page .winners-stat-text {
-      display: flex;
-      align-items: center;
-      min-width: 0;
-      flex: 1 1 auto;
+      width: 13px;
+      height: 13px;
     }
 
     body.winners-page .winners-stat-value {
-      font-size: 12px;
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 11px;
       font-weight: 800;
       color: var(--tg-theme-text-color, #151a2d);
-      line-height: 1.25;
-      white-space: normal;
-      overflow: visible;
-      word-break: break-word;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    body.winners-page .winners-panel {
+      width: 100%;
+      min-width: 0;
+    }
+
+    body.winners-page .winners-tab-panel {
+      width: 100%;
+      min-width: 0;
     }
 
     body.winners-page .winners-list {
@@ -1836,10 +1897,12 @@ function getWinnersPageStyles() {
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 15px;
-      font-weight: 800;
-      color: var(--tg-theme-button-color, #325fff);
-      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 10%, var(--tg-theme-secondary-bg-color, #fff));
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      border: none;
+      background: linear-gradient(180deg, var(--avatar-grad-top, #7BD3FF) 0%, var(--avatar-grad-bottom, #2AABEE) 100%);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
     }
 
     body.winners-page .winners-row-body {
@@ -1909,9 +1972,9 @@ function getWinnersPageStyles() {
 
     body.winners-page .winners-profile-btn {
       flex-shrink: 0;
-      width: 26px;
-      height: 26px;
-      border-radius: 7px;
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1923,8 +1986,17 @@ function getWinnersPageStyles() {
     }
 
     body.winners-page .winners-profile-btn svg {
-      width: 13px;
-      height: 13px;
+      width: 11px;
+      height: 11px;
+    }
+
+    body.winners-page .winners-row-compact {
+      padding: 9px 10px;
+    }
+
+    body.winners-page .winners-empty-compact {
+      padding: 18px 12px;
+      margin: 0;
     }
 
     body.winners-page .winners-empty {
@@ -1979,6 +2051,67 @@ function getWinnersPageStyles() {
 
     body.winners-page.app-theme-dark .winners-viewer-banner.is-won .winners-viewer-banner-title {
       color: #9dffb8;
+    }
+
+    body.winners-page .app-desktop-bg {
+      display: none;
+    }
+
+    @media (min-width: 761px) {
+      body.winners-page.mini-app-shell::before {
+        display: none;
+      }
+
+      body.winners-page .app-desktop-bg {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: -2;
+        overflow: hidden;
+        pointer-events: none;
+        background-color: #152238;
+      }
+
+      body.winners-page .app-desktop-bg-strip {
+        position: absolute;
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        height: 100%;
+        min-width: 100vw;
+      }
+
+      body.winners-page .app-desktop-bg-tile {
+        --app-desktop-tile-width: min(760px, 100vw);
+        width: var(--app-desktop-tile-width);
+        flex: 0 0 var(--app-desktop-tile-width);
+        height: 100%;
+        background-image: url("/brand/background-dark.png");
+        background-repeat: repeat-y;
+        background-size: 100% auto;
+        background-position: center top;
+        opacity: 0.58;
+      }
+
+      body.winners-page .app-desktop-bg-tile-mirror {
+        transform: scaleX(-1);
+      }
+
+      body.winners-page .app-desktop-bg-overlay {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse 80% 60% at 50% -10%, rgba(91, 140, 255, 0.22) 0%, transparent 60%),
+          radial-gradient(ellipse 60% 50% at 50% 110%, rgba(50, 95, 255, 0.14) 0%, transparent 55%),
+          linear-gradient(180deg, rgba(21, 34, 56, 0.28) 0%, rgba(21, 34, 56, 0.84) 100%);
+      }
+
+      body.winners-page .winners-shell {
+        max-width: 520px;
+        margin-left: auto;
+        margin-right: auto;
+      }
     }
   `;
 }
@@ -2303,6 +2436,7 @@ module.exports = {
   getPreviewDevStyles,
   getJoinFlowStyles,
   getWinnersPageStyles,
+  renderDesktopTiledBackground,
   getGatePageStyles,
   getJoinPreviewThemeStyles,
   renderJoinProgressMarkup,
