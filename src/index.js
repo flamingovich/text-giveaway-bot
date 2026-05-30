@@ -2067,7 +2067,6 @@ function renderLandingPage() {
       <p class="lead">Мы готовим полноценный лендинг. Пока что здесь ведутся технические работы — скоро появится новая версия.</p>
       <div class="actions">
         <a class="btn btn-primary" href="${botLink}">Открыть ${botLabel}</a>
-        <a class="btn btn-ghost" href="${PANEL_BASE}">Панель организатора</a>
       </div>
       <p class="footer-note">Розыгрыши в Telegram уже работают через бота и панель управления.</p>
     </div>
