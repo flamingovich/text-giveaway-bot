@@ -103,6 +103,19 @@ function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Roller Bot — вход</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    (function () {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      if (!tg || !tg.initData) return;
+      tg.ready();
+      tg.expand();
+      location.replace(
+        ${JSON.stringify(panelPath)} +
+          "?telegramInitData=" +
+          encodeURIComponent(tg.initData),
+      );
+    })();
+  </script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -157,6 +170,7 @@ function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
       document.body.classList.add("auth-pending");
       tg.ready();
       tg.expand();
+      const panelPath = ${JSON.stringify(panelPath)};
       fetch("/auth/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -166,13 +180,17 @@ function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
         .then((r) => r.json())
         .then((data) => {
           if (data.ok) {
-            location.replace("${panelPath}");
+            location.replace(
+              panelPath + "?telegramInitData=" + encodeURIComponent(tg.initData),
+            );
             return;
           }
           document.body.classList.remove("auth-pending");
         })
         .catch(function () {
-          document.body.classList.remove("auth-pending");
+          location.replace(
+            panelPath + "?telegramInitData=" + encodeURIComponent(tg.initData),
+          );
         });
     })();
   </script>
@@ -218,6 +236,15 @@ function createWebAuth({ botToken, disabled, cookieSecure, defaultUserId, botUse
       res.status(401).send("Unauthorized");
       return;
     }
+
+    const initData =
+      req.headers["x-telegram-init-data"] ||
+      req.query?.telegramInitData ||
+      req.body?.telegramInitData;
+    if (initData && validateInitData(initData, botToken)) {
+      setSessionCookie(res, user.id);
+    }
+
     req.webUser = user;
     next();
   }
@@ -229,10 +256,12 @@ function createWebAuth({ botToken, disabled, cookieSecure, defaultUserId, botUse
       "Path=/",
       "HttpOnly",
       `Max-Age=${AUTH_MAX_AGE_SEC}`,
-      "SameSite=Lax",
     ];
     if (cookieSecure) {
       parts.push("Secure");
+      parts.push("SameSite=None");
+    } else {
+      parts.push("SameSite=Lax");
     }
     res.setHeader("Set-Cookie", parts.join("; "));
   }

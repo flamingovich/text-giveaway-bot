@@ -10,7 +10,7 @@ const { Telegraf, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
 const { createWebAuth, validateInitData } = require("./web-auth");
 const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp");
-const { getMiniAppStyles, getMiniAppInitScript } = require("./miniapp-ui");
+const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript } = require("./miniapp-ui");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -1340,10 +1340,11 @@ function upsertUserMeta(user) {
   }
 
   data.users[userKey].meta = {
+    ...(data.users[userKey].meta || {}),
     id: user.id,
-    username: user.username || "",
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
+    username: user.username || data.users[userKey].meta?.username || "",
+    first_name: user.first_name || data.users[userKey].meta?.first_name || "",
+    last_name: user.last_name || data.users[userKey].meta?.last_name || "",
     updatedAt: new Date().toISOString(),
   };
   writeUserProjectProfiles(data);
@@ -2114,7 +2115,9 @@ function renderLandingPage() {
         .then((response) => response.json())
         .then((data) => {
           if (data.ok && data.organizer) {
-            location.replace("${PANEL_BASE}");
+            location.replace(
+              "${PANEL_BASE}?telegramInitData=" + encodeURIComponent(tg.initData),
+            );
           }
         })
         .catch(function () {});
@@ -2568,6 +2571,7 @@ function renderWebPage(draws, message, webUser) {
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Управление розыгрышами</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>${getMiniAppHeadScript()}</script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     :root {
@@ -2710,6 +2714,49 @@ function renderWebPage(draws, message, webUser) {
     }
     body.app-theme-dark .page-title-sub {
       color: var(--tg-theme-hint-color, #93a0b8);
+    }
+    body.app-theme-dark .card {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
+      box-shadow: none;
+      color: var(--tg-theme-text-color, #eef1f7);
+    }
+    body.app-theme-dark .quick-action:not(.quick-action-primary) {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      color: var(--tg-theme-link-color, var(--tg-theme-button-color, #5b8cff));
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
+    }
+    body.app-theme-dark .quick-action:not(.quick-action-primary):hover,
+    body.app-theme-dark .quick-action:not(.quick-action-primary):focus-visible {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      color: var(--tg-theme-link-color, var(--tg-theme-button-color, #5b8cff));
+    }
+    body.app-theme-dark .history-time-row,
+    body.app-theme-dark .history-chip,
+    body.app-theme-dark .stat-card,
+    body.app-theme-dark .draw-block,
+    body.app-theme-dark .history-details {
+      background: color-mix(in srgb, var(--tg-theme-bg-color, #1c2536) 92%, #000);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 24%, transparent);
+    }
+    body.app-theme-dark .history-card,
+    body.app-theme-dark .project-card,
+    body.app-theme-dark .access-card,
+    body.app-theme-dark .winner-card {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 24%, transparent);
+    }
+    body.app-theme-dark .draw-input,
+    body.app-theme-dark .draw-file-btn,
+    body.app-theme-dark .draw-paste-btn {
+      background: color-mix(in srgb, var(--tg-theme-bg-color, #1c2536) 88%, #000);
+      color: var(--tg-theme-text-color, #eef1f7);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 28%, transparent);
+    }
+    body.app-theme-dark .msg {
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #232f42) 90%, #000);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
+      color: var(--tg-theme-text-color, #eef1f7);
     }
     .container {
       max-width: 100%;
@@ -3476,6 +3523,12 @@ function renderWebPage(draws, message, webUser) {
       padding: 11px 13px;
       border-radius: 12px;
       font-weight: 600;
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .msg.msg-hide {
+      opacity: 0;
+      transform: translateY(-8px);
+      pointer-events: none;
     }
     .hint { color: var(--sub); font-size: 12px; margin-top: 4px; margin-bottom: 6px; }
     .card-dark .hint { color: #d1ddff; margin-top: 2px; }
@@ -5050,6 +5103,17 @@ function renderWebPage(draws, message, webUser) {
       cancelBtn.addEventListener("click", resetProjectForm);
     }
 
+    function setupFlashMessages() {
+      document.querySelectorAll(".msg").forEach((el) => {
+        window.setTimeout(() => {
+          el.classList.add("msg-hide");
+          const removeEl = () => el.remove();
+          el.addEventListener("transitionend", removeEl, { once: true });
+          window.setTimeout(removeEl, 800);
+        }, 10000);
+      });
+    }
+
     function setupPanelAutoRefresh() {
       const root = document.getElementById("panelLiveRoot");
       if (!root) return;
@@ -5086,9 +5150,14 @@ function renderWebPage(draws, message, webUser) {
       async function pollPanelLive() {
         if (shouldSkipPoll()) return;
         try {
+          const tg = window.Telegram?.WebApp;
+          const headers = { Accept: "application/json" };
+          if (tg?.initData) {
+            headers["X-Telegram-Init-Data"] = tg.initData;
+          }
           const response = await fetch("${PANEL_BASE}/live", {
             credentials: "same-origin",
-            headers: { Accept: "application/json" },
+            headers,
           });
           if (!response.ok) return;
           const data = await response.json();
@@ -5147,6 +5216,7 @@ function renderWebPage(draws, message, webUser) {
     setupSettingsPanel();
     setupAdminPanels();
     setupPanelAutoRefresh();
+    setupFlashMessages();
   </script>
 </body>
 </html>`;
@@ -5256,6 +5326,16 @@ app.get("/", (_req, res) => {
 });
 
 panelRouter.get("/", webAuth.requireAuth, (req, res) => {
+  if (req.query.telegramInitData) {
+    const params = new URLSearchParams();
+    if (req.query.msg) {
+      params.set("msg", String(req.query.msg));
+    }
+    const qs = params.toString();
+    res.redirect(303, `${PANEL_BASE}${qs ? `?${qs}` : ""}`);
+    return;
+  }
+
   if (!isOrganizer(req.webUser.id)) {
     res.type("html").send(renderOrganizerGatePage(BOT_USERNAME));
     return;
@@ -5823,6 +5903,13 @@ bot.on("my_chat_member", async (ctx) => {
   if (status === "administrator" || status === "member") {
     upsertKnownChannel(payload.chat, payload.from?.id);
   }
+});
+
+bot.use(async (ctx, next) => {
+  if (ctx.from?.id && ctx.chat?.type === "private") {
+    upsertUserMeta(ctx.from);
+  }
+  await next();
 });
 
 bot.on("channel_post", async (ctx) => {

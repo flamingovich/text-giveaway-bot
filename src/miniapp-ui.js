@@ -5,6 +5,70 @@
  * @see https://docs.telegram-mini-apps.com/platform/viewport
  * @see https://core.telegram.org/bots/webapps
  */
+
+const THEME_STORAGE_KEY = "rollerbot-theme";
+const THEME_CSS_KEYS = {
+  bg_color: "--tg-theme-bg-color",
+  text_color: "--tg-theme-text-color",
+  hint_color: "--tg-theme-hint-color",
+  link_color: "--tg-theme-link-color",
+  button_color: "--tg-theme-button-color",
+  button_text_color: "--tg-theme-button-text-color",
+  secondary_bg_color: "--tg-theme-secondary-bg-color",
+};
+const MANUAL_LIGHT_THEME = {
+  bg_color: "#eef3ff",
+  text_color: "#151a2d",
+  hint_color: "#65708a",
+  link_color: "#325fff",
+  button_color: "#325fff",
+  button_text_color: "#ffffff",
+  secondary_bg_color: "#ffffff",
+};
+const MANUAL_DARK_THEME = {
+  bg_color: "#1c2536",
+  text_color: "#eef1f7",
+  hint_color: "#93a0b8",
+  link_color: "#6b9aff",
+  button_color: "#5b8cff",
+  button_text_color: "#ffffff",
+  secondary_bg_color: "#232f42",
+};
+
+function getMiniAppHeadScript() {
+  return `
+(function () {
+  var KEY = ${JSON.stringify(THEME_STORAGE_KEY)};
+  var themeKeys = ${JSON.stringify(THEME_CSS_KEYS)};
+  var manualLightTheme = ${JSON.stringify(MANUAL_LIGHT_THEME)};
+  var manualDarkTheme = ${JSON.stringify(MANUAL_DARK_THEME)};
+
+  function applyThemeParams(params) {
+    if (!params) return;
+    var root = document.documentElement;
+    for (var key in themeKeys) {
+      if (params[key]) {
+        root.style.setProperty(themeKeys[key], params[key], "important");
+      }
+    }
+  }
+
+  function resolveMode() {
+    var saved = localStorage.getItem(KEY);
+    if (saved === "light" || saved === "dark") return saved;
+    var tg = window.Telegram && window.Telegram.WebApp;
+    if (tg && tg.colorScheme === "dark") return "dark";
+    if (tg && tg.colorScheme === "light") return "light";
+    return "light";
+  }
+
+  var mode = resolveMode();
+  document.documentElement.setAttribute("data-app-theme", mode);
+  applyThemeParams(mode === "dark" ? manualDarkTheme : manualLightTheme);
+})();
+`;
+}
+
 function getMiniAppStyles() {
   return `
     :root {
@@ -13,15 +77,28 @@ function getMiniAppStyles() {
       --mini-pad-x: 12px;
       --mini-pad-top: max(6px, var(--tg-safe-area-inset-top, env(safe-area-inset-top, 0px)));
       --mini-pad-bottom: max(10px, var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
-      --tg-theme-bg-color: #eef3ff;
-      --tg-theme-text-color: #151a2d;
-      --tg-theme-hint-color: #65708a;
-      --tg-theme-link-color: #325fff;
-      --tg-theme-button-color: #325fff;
-      --tg-theme-button-text-color: #ffffff;
-      --tg-theme-secondary-bg-color: #ffffff;
       --bg-dark: #152238;
       --app-bg-image-dark: url("/brand/background-dark.png");
+    }
+
+    html[data-app-theme="light"] {
+      --tg-theme-bg-color: ${MANUAL_LIGHT_THEME.bg_color} !important;
+      --tg-theme-text-color: ${MANUAL_LIGHT_THEME.text_color} !important;
+      --tg-theme-hint-color: ${MANUAL_LIGHT_THEME.hint_color} !important;
+      --tg-theme-link-color: ${MANUAL_LIGHT_THEME.link_color} !important;
+      --tg-theme-button-color: ${MANUAL_LIGHT_THEME.button_color} !important;
+      --tg-theme-button-text-color: ${MANUAL_LIGHT_THEME.button_text_color} !important;
+      --tg-theme-secondary-bg-color: ${MANUAL_LIGHT_THEME.secondary_bg_color} !important;
+    }
+
+    html[data-app-theme="dark"] {
+      --tg-theme-bg-color: ${MANUAL_DARK_THEME.bg_color} !important;
+      --tg-theme-text-color: ${MANUAL_DARK_THEME.text_color} !important;
+      --tg-theme-hint-color: ${MANUAL_DARK_THEME.hint_color} !important;
+      --tg-theme-link-color: ${MANUAL_DARK_THEME.link_color} !important;
+      --tg-theme-button-color: ${MANUAL_DARK_THEME.button_color} !important;
+      --tg-theme-button-text-color: ${MANUAL_DARK_THEME.button_text_color} !important;
+      --tg-theme-secondary-bg-color: ${MANUAL_DARK_THEME.secondary_bg_color} !important;
     }
 
     html {
@@ -166,21 +243,6 @@ function getMiniAppStyles() {
       min-width: 0;
       min-height: 56px;
       padding: 9px 4px;
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 22%, transparent);
-    }
-
-    body.mini-app-shell.app-theme-dark .quick-action:not(.quick-action-primary) {
-      background: var(--tg-theme-secondary-bg-color);
-      color: var(--tg-theme-link-color, var(--tg-theme-button-color));
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 30%, transparent);
-    }
-
-    body.mini-app-shell.app-theme-dark .draw-input,
-    body.mini-app-shell.app-theme-dark .draw-file-btn,
-    body.mini-app-shell.app-theme-dark .draw-paste-btn {
-      background: color-mix(in srgb, var(--tg-theme-bg-color) 88%, #000);
-      color: var(--tg-theme-text-color);
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 28%, transparent);
     }
 
     body.mini-app-shell .draw-file-btn,
@@ -192,40 +254,6 @@ function getMiniAppStyles() {
       line-height: 1;
       font-size: 13px;
       font-weight: 600;
-    }
-
-    body.mini-app-shell.app-theme-dark .history-time-row,
-    body.mini-app-shell.app-theme-dark .history-chip,
-    body.mini-app-shell.app-theme-dark .stat-card,
-    body.mini-app-shell.app-theme-dark .draw-block,
-    body.mini-app-shell.app-theme-dark .history-details {
-      background: color-mix(in srgb, var(--tg-theme-bg-color) 92%, #000);
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 24%, transparent);
-    }
-
-    body.mini-app-shell.app-theme-dark .winner-card {
-      background: var(--tg-theme-secondary-bg-color);
-    }
-
-    body.mini-app-shell.app-theme-dark .history-card,
-    body.mini-app-shell.app-theme-dark .project-card,
-    body.mini-app-shell.app-theme-dark .access-card {
-      background: var(--tg-theme-secondary-bg-color);
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 24%, transparent);
-    }
-
-    body.mini-app-shell.app-theme-dark .history-card.history-card-active {
-      border: 2px solid #5b8cff;
-    }
-
-    body.mini-app-shell.app-theme-light .history-card.history-card-active {
-      border: 2px solid #325fff;
-    }
-
-    body.mini-app-shell.app-theme-dark .msg {
-      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color) 90%, #000);
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 22%, transparent);
-      color: var(--tg-theme-text-color);
     }
 
     body.mini-app-shell .quick-actions {
@@ -244,8 +272,6 @@ function getMiniAppStyles() {
     body.mini-app-shell .card {
       padding: 12px;
       border-radius: 12px;
-      background: var(--tg-theme-secondary-bg-color);
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 22%, transparent);
       box-shadow: none;
     }
 
@@ -288,8 +314,6 @@ function getMiniAppStyles() {
     body.mini-app-shell .stat-card {
       padding: 8px 9px;
       border-radius: 10px;
-      background: var(--tg-theme-bg-color);
-      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color) 18%, transparent);
     }
 
     body.mini-app-shell .stat-card-label {
@@ -508,34 +532,10 @@ function getMiniAppInitScript(options = {}) {
   return `
 (function () {
   const tg = window.Telegram?.WebApp;
-  const THEME_KEY = "rollerbot-theme";
-  const themeKeys = {
-    bg_color: "--tg-theme-bg-color",
-    text_color: "--tg-theme-text-color",
-    hint_color: "--tg-theme-hint-color",
-    link_color: "--tg-theme-link-color",
-    button_color: "--tg-theme-button-color",
-    button_text_color: "--tg-theme-button-text-color",
-    secondary_bg_color: "--tg-theme-secondary-bg-color",
-  };
-  const manualLightTheme = {
-    bg_color: "#eef3ff",
-    text_color: "#151a2d",
-    hint_color: "#65708a",
-    link_color: "#325fff",
-    button_color: "#325fff",
-    button_text_color: "#ffffff",
-    secondary_bg_color: "#ffffff",
-  };
-  const manualDarkTheme = {
-    bg_color: "#1c2536",
-    text_color: "#eef1f7",
-    hint_color: "#93a0b8",
-    link_color: "#6b9aff",
-    button_color: "#5b8cff",
-    button_text_color: "#ffffff",
-    secondary_bg_color: "#232f42",
-  };
+  const THEME_KEY = ${JSON.stringify(THEME_STORAGE_KEY)};
+  const themeKeys = ${JSON.stringify(THEME_CSS_KEYS)};
+  const manualLightTheme = ${JSON.stringify(MANUAL_LIGHT_THEME)};
+  const manualDarkTheme = ${JSON.stringify(MANUAL_DARK_THEME)};
   let themeMode;
 
   function getInitialThemeMode() {
@@ -579,7 +579,7 @@ function getMiniAppInitScript(options = {}) {
     const root = document.documentElement;
     for (const [key, cssVar] of Object.entries(themeKeys)) {
       if (params[key]) {
-        root.style.setProperty(cssVar, params[key]);
+        root.style.setProperty(cssVar, params[key], "important");
       }
     }
   }
@@ -607,6 +607,7 @@ function getMiniAppInitScript(options = {}) {
 
   function applyAppearance() {
     const isDark = resolveDark();
+    document.documentElement.setAttribute("data-app-theme", isDark ? "dark" : "light");
     document.body.classList.toggle("app-theme-dark", isDark);
     document.body.classList.toggle("app-theme-light", !isDark);
     applyThemeParams(isDark ? manualDarkTheme : manualLightTheme);
@@ -663,6 +664,14 @@ function getMiniAppInitScript(options = {}) {
     tg.ready();
     tg.expand();
     enableShell();
+    tg.onEvent("themeChanged", () => {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved !== "light" && saved !== "dark") {
+        themeMode = getTelegramDark() ? "dark" : "light";
+        localStorage.setItem(THEME_KEY, themeMode);
+      }
+      applyAppearance();
+    });
     ${authSession ? `
     if (tg.initData) {
       fetch("/auth/session", {
@@ -684,4 +693,10 @@ function getMiniAppInitScript(options = {}) {
 `;
 }
 
-module.exports = { getMiniAppStyles, getMiniAppInitScript };
+module.exports = {
+  getMiniAppStyles,
+  getMiniAppInitScript,
+  getMiniAppHeadScript,
+  MANUAL_DARK_THEME,
+  MANUAL_LIGHT_THEME,
+};
