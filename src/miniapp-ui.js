@@ -265,7 +265,7 @@ function getMiniAppStyles() {
     body.mini-app-shell img,
     body.mini-app-shell input,
     body.mini-app-shell select,
-    body.mini-app-shell button:not(.theme-toggle-btn):not(.settings-action-btn),
+    body.mini-app-shell button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn),
     body.mini-app-shell .history-list,
     body.mini-app-shell .history-card {
       max-width: 100%;
@@ -383,12 +383,6 @@ function getMiniAppStyles() {
     body.mini-app-shell .winner-action-btn {
       font-size: 11px;
       padding: 7px 8px;
-    }
-
-    body.mini-app-shell .winner-card-qr {
-      width: 64px;
-      height: 64px;
-      padding: 3px;
     }
 
     body.mini-app-shell .history-details summary {

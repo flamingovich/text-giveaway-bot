@@ -2,6 +2,7 @@ const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const fs = require("fs");
+const crypto = require("crypto");
 const express = require("express");
 const multer = require("multer");
 const QRCode = require("qrcode");
@@ -22,6 +23,7 @@ const SUPER_ADMIN_IDS = (process.env.SUPER_ADMIN_IDS || process.env.ADMIN_IDS ||
   .filter(Number.isFinite);
 const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
+const PANEL_POLL_MS = Number(process.env.PANEL_POLL_MS || 8_000);
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
 const PANEL_BASE = "/panel";
@@ -2059,9 +2061,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
         : notifySent
         ? `<span class="winner-badge">Уведомлён</span>`
         : `<span class="winner-badge">Ожидает</span>`;
-  const qrBlock =
+  const copyBtn =
     trcAddress !== "Не указан"
-      ? `<img src="${PANEL_BASE}/qr?text=${encodeURIComponent(trcAddress)}" alt="" class="winner-card-qr" />`
+      ? `<button type="button" class="winner-copy-btn" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
       : "";
   const payButton = isPaid || isExpired
     ? ""
@@ -2085,16 +2087,15 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
           ${usernameMetaHtml}
           <div class="winner-card-badges">${refBadge}${statusBadge}</div>
         </div>
-        ${qrBlock}
       </div>
       <div class="winner-card-row">
         <span class="draw-ico">${renderFormIcon("prize")}</span>
         <span class="winner-card-row-text"><strong>К выплате:</strong> ${escapeHtml(payoutText)}</span>
       </div>
       <div class="winner-card-row winner-card-address-row">
-        <span class="draw-ico">${renderFormIcon("link")}</span>
         <div class="winner-address-wrap">
           <span class="winner-address-text">${escapeHtml(trcAddress)}</span>
+          ${copyBtn}
         </div>
       </div>
       ${payButton}
@@ -2102,38 +2103,42 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
   `;
 }
 
-function renderWebPage(draws, message, webUser) {
-  const ownerId = webUser?.id ?? getDefaultOwnerId();
-  const showAccessPanel = isSuperAdmin(ownerId);
-  const userProfiles = readUserProjectProfiles();
-  const delegatedAdmins = showAccessPanel ? readDelegatedAdmins().admins || [] : [];
-  const superAdminLabels = SUPER_ADMIN_IDS.map((id) =>
-    renderAccessPersonCard(id, userProfiles, {
-      badge: "суперадмин",
-      superClass: "access-card-super",
-    }),
-  ).join("");
-  const delegatedAdminRows = delegatedAdmins
-    .map((entry) => renderAccessPersonCard(entry.userId, userProfiles, {
-        entry,
-        removable: true,
-      }))
-    .join("");
-  const projects = filterByOwner(readProjects().projects || [], ownerId);
-  const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
-  const projectOptions = projects
-    .map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`)
-    .join("");
-  const channelOptions = knownChannels
-    .map((channel) => {
-      const preferredValue = channel.username ? `@${channel.username}` : channel.id;
-      const title = channel.title || preferredValue;
-      return `<option value="${escapeHtml(preferredValue)}">${escapeHtml(title)}</option>`;
-    })
-    .join("");
-  const drawsStats = computeDrawStats(draws, userProfiles);
+function getOwnerDraws(ownerId) {
+  const data = readData();
+  return filterByOwner(data.draws, ownerId).sort(
+    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+  );
+}
 
-  const drawBlocks = draws
+function buildPanelLiveFingerprint(draws, userProfiles) {
+  const payload = draws.map((draw) => {
+    const winnerStates = (draw.winnerIds || []).map((winnerId) => {
+      const notify = draw.winnerNotifications?.[String(winnerId)] || {};
+      const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+      return {
+        winnerId,
+        notify,
+        referralVerified: Boolean(projectData.referralVerified),
+        selfReportedNonReferral: Boolean(projectData.selfReportedNonReferral),
+        trc20Address: projectData.trc20Address || "",
+      };
+    });
+    return {
+      id: draw.id,
+      status: draw.status,
+      participantCount: draw.participantIds?.length || 0,
+      winnerIds: draw.winnerIds || [],
+      winnerStates,
+      endAt: draw.endAt || "",
+      publishAt: draw.publishAt || "",
+      prize: draw.prize || "",
+    };
+  });
+  return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
+}
+
+function renderDrawHistoryBlocks(draws, projects, userProfiles) {
+  return draws
     .map((draw) => {
       const project = projects.find((item) => item.id === draw.projectId);
       const statusLabel = {
@@ -2199,7 +2204,7 @@ function renderWebPage(draws, message, webUser) {
 
           ${
             draw.status === DRAW_STATUS.FINISHED
-              ? `<details class="history-details">
+              ? `<details class="history-details" data-details-key="winners-${escapeHtml(draw.id)}">
                   <summary>
                     <span class="draw-ico history-details-chevron">${renderFormIcon("chevron")}</span>
                     <span class="draw-ico">${renderFormIcon("winners")}</span>
@@ -2212,7 +2217,7 @@ function renderWebPage(draws, message, webUser) {
               : ""
           }
 
-          <details class="history-details">
+          <details class="history-details" data-details-key="meta-${escapeHtml(draw.id)}">
             <summary>
               <span class="draw-ico history-details-chevron">${renderFormIcon("chevron")}</span>
               <span class="draw-ico">${renderFormIcon("channel")}</span>
@@ -2242,6 +2247,81 @@ function renderWebPage(draws, message, webUser) {
       `;
     })
     .join("");
+}
+
+function renderPanelLiveHtml(draws, projects, userProfiles) {
+  const drawsStats = computeDrawStats(draws, userProfiles);
+  const drawBlocks = renderDrawHistoryBlocks(draws, projects, userProfiles);
+  return `
+      <section class="card history-section">
+        <h2 class="create-title draw-history-title">
+          <span class="create-title-icon">${renderFormIcon("history")}</span>
+          История розыгрышей
+        </h2>
+        <div class="stats-row">
+          <div class="stat-card">
+            <span class="stat-card-label">Всего</span>
+            <span class="stat-card-value">${drawsStats.total}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-card-label">Активных</span>
+            <span class="stat-card-value">${drawsStats.active}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-card-label">Выплачено за ${escapeHtml(drawsStats.monthLabel)}</span>
+            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidThisMonth)}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-card-label">Выплачено за всё время</span>
+            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidAllTime)}</span>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        ${
+          drawBlocks
+            ? `<div class="history-list">${drawBlocks}</div>`
+            : `<div class="access-empty">
+              <span class="draw-ico">${renderFormIcon("gift")}</span>
+              <span>Розыгрышей пока нет</span>
+            </div>`
+        }
+      </section>
+  `;
+}
+
+function renderWebPage(draws, message, webUser) {
+  const ownerId = webUser?.id ?? getDefaultOwnerId();
+  const showAccessPanel = isSuperAdmin(ownerId);
+  const userProfiles = readUserProjectProfiles();
+  const delegatedAdmins = showAccessPanel ? readDelegatedAdmins().admins || [] : [];
+  const superAdminLabels = SUPER_ADMIN_IDS.map((id) =>
+    renderAccessPersonCard(id, userProfiles, {
+      badge: "суперадмин",
+      superClass: "access-card-super",
+    }),
+  ).join("");
+  const delegatedAdminRows = delegatedAdmins
+    .map((entry) => renderAccessPersonCard(entry.userId, userProfiles, {
+        entry,
+        removable: true,
+      }))
+    .join("");
+  const projects = filterByOwner(readProjects().projects || [], ownerId);
+  const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
+  const projectOptions = projects
+    .map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`)
+    .join("");
+  const channelOptions = knownChannels
+    .map((channel) => {
+      const preferredValue = channel.username ? `@${channel.username}` : channel.id;
+      const title = channel.title || preferredValue;
+      return `<option value="${escapeHtml(preferredValue)}">${escapeHtml(title)}</option>`;
+    })
+    .join("");
+  const panelLiveVersion = buildPanelLiveFingerprint(draws, userProfiles);
+  const panelLiveHtml = renderPanelLiveHtml(draws, projects, userProfiles);
 
   const projectsBlocks = projects.map((project) => renderProjectCard(project)).join("");
   const channelBlocks = knownChannels.map((channel) => renderChannelCard(channel)).join("");
@@ -2411,6 +2491,14 @@ function renderWebPage(draws, message, webUser) {
     h3 { margin: 0; }
     .subtitle { color: var(--sub); margin-bottom: 18px; }
     .grid { display: grid; grid-template-columns: 1fr; gap: 16px; width: 100%; min-width: 0; max-width: 100%; }
+    #panelLiveRoot {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
     .card {
       background: var(--card);
       border-radius: 16px;
@@ -3081,7 +3169,7 @@ function renderWebPage(draws, message, webUser) {
       background: #fff;
     }
     input, select,
-    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn) {
+    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn):not(.winner-copy-btn) {
       width: 100%;
     }
     .card-dark input,
@@ -3089,7 +3177,7 @@ function renderWebPage(draws, message, webUser) {
       border: 1px solid #6f86d8;
       background: rgba(255, 255, 255, 0.96);
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn) {
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn) {
       background: var(--primary);
       color: #fff;
       border: none;
@@ -3097,7 +3185,7 @@ function renderWebPage(draws, message, webUser) {
       font-weight: 700;
       transition: all 0.18s ease;
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):hover { background: var(--primary-2); transform: translateY(-1px); }
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):hover { background: var(--primary-2); transform: translateY(-1px); }
     button.theme-toggle-btn {
       width: 36px;
       min-width: 36px;
@@ -3847,17 +3935,6 @@ function renderWebPage(draws, message, webUser) {
       background: #ffebe9;
       border-color: #ff8182;
     }
-    .winner-card-qr {
-      width: 72px;
-      height: 72px;
-      flex-shrink: 0;
-      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
-      border-radius: 8px;
-      background: #fff;
-      padding: 4px;
-      object-fit: contain;
-      box-sizing: border-box;
-    }
     .winner-card-row {
       display: flex;
       align-items: flex-start;
@@ -3885,12 +3962,16 @@ function renderWebPage(draws, message, webUser) {
     .winner-card-address-row {
       align-items: center;
     }
+    .winner-card-address-row .winner-address-wrap {
+      width: 100%;
+    }
     .winner-address-wrap {
       flex: 1;
       min-width: 0;
       display: flex;
       align-items: center;
-      padding: 5px 8px;
+      gap: 5px;
+      padding: 5px 6px 5px 8px;
       border-radius: 8px;
       background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 8%, transparent);
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
@@ -3909,9 +3990,46 @@ function renderWebPage(draws, message, webUser) {
       white-space: nowrap;
       line-height: 1.3;
     }
+    .winner-copy-btn {
+      width: 20px;
+      height: 20px;
+      min-width: 20px;
+      max-width: 20px;
+      padding: 0;
+      margin: 0;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 5px;
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 12%, transparent);
+      color: var(--tg-theme-button-color, var(--primary));
+      cursor: pointer;
+      transform: none;
+      font-weight: 400;
+      box-sizing: border-box;
+    }
+    .winner-copy-btn:hover,
+    .winner-copy-btn:focus-visible {
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 22%, transparent);
+      transform: none;
+    }
+    .winner-copy-btn svg {
+      width: 12px;
+      height: 12px;
+      display: block;
+    }
     body.app-theme-dark .winner-address-wrap {
       background: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 10%, transparent);
       border-color: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 18%, transparent);
+    }
+    body.app-theme-dark .winner-copy-btn {
+      background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 16%, transparent);
+    }
+    body.app-theme-dark .winner-copy-btn:hover,
+    body.app-theme-dark .winner-copy-btn:focus-visible {
+      background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 26%, transparent);
     }
     .winner-card-actions {
       display: flex;
@@ -4350,41 +4468,9 @@ function renderWebPage(draws, message, webUser) {
 
       </div>
 
-      <section class="card history-section">
-        <h2 class="create-title draw-history-title">
-          <span class="create-title-icon">${renderFormIcon("history")}</span>
-          История розыгрышей
-        </h2>
-        <div class="stats-row">
-          <div class="stat-card">
-            <span class="stat-card-label">Всего</span>
-            <span class="stat-card-value">${drawsStats.total}</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-card-label">Активных</span>
-            <span class="stat-card-value">${drawsStats.active}</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-card-label">Выплачено за ${escapeHtml(drawsStats.monthLabel)}</span>
-            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidThisMonth)}</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-card-label">Выплачено за всё время</span>
-            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidAllTime)}</span>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        ${
-          drawBlocks
-            ? `<div class="history-list">${drawBlocks}</div>`
-            : `<div class="access-empty">
-              <span class="draw-ico">${renderFormIcon("gift")}</span>
-              <span>Розыгрышей пока нет</span>
-            </div>`
-        }
-      </section>
+      <div id="panelLiveRoot" data-version="${escapeHtml(panelLiveVersion)}">
+        ${panelLiveHtml}
+      </div>
     </div>
   </div>
   <script>
@@ -4517,6 +4603,29 @@ function renderWebPage(draws, message, webUser) {
           if (!href || !tg?.openTelegramLink) return;
           event.preventDefault();
           tg.openTelegramLink(href);
+        });
+      });
+    }
+
+    function setupCopyButtons() {
+      document.querySelectorAll(".winner-copy-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const text = btn.getAttribute("data-copy") || "";
+          if (!text) return;
+          try {
+            await navigator.clipboard.writeText(text);
+            btn.title = "Скопировано";
+            setTimeout(() => {
+              btn.title = "Копировать";
+            }, 1500);
+          } catch (error) {
+            const area = document.createElement("textarea");
+            area.value = text;
+            document.body.appendChild(area);
+            area.select();
+            document.execCommand("copy");
+            area.remove();
+          }
         });
       });
     }
@@ -4708,6 +4817,78 @@ function renderWebPage(draws, message, webUser) {
       cancelBtn.addEventListener("click", resetProjectForm);
     }
 
+    function setupPanelAutoRefresh() {
+      const root = document.getElementById("panelLiveRoot");
+      if (!root) return;
+
+      const pollMs = ${PANEL_POLL_MS};
+      let timerId = null;
+
+      function captureDetailsState() {
+        return Array.from(root.querySelectorAll("details[data-details-key]"))
+          .filter((el) => el.open)
+          .map((el) => el.getAttribute("data-details-key"))
+          .filter(Boolean);
+      }
+
+      function restoreDetailsState(openKeys) {
+        openKeys.forEach((key) => {
+          const el = root.querySelector('details[data-details-key="' + key + '"]');
+          if (el) el.open = true;
+        });
+      }
+
+      function shouldSkipPoll() {
+        if (document.hidden) return true;
+        if (document.querySelector("input:focus, select:focus, textarea:focus, [contenteditable=true]:focus")) {
+          return true;
+        }
+        const createPanel = document.getElementById("createDrawPanel");
+        const addProjectWrap = document.getElementById("addProjectWrap");
+        if (createPanel && !createPanel.classList.contains("panel-hidden")) return true;
+        if (addProjectWrap && !addProjectWrap.classList.contains("panel-hidden")) return true;
+        return false;
+      }
+
+      async function pollPanelLive() {
+        if (shouldSkipPoll()) return;
+        try {
+          const response = await fetch("${PANEL_BASE}/live", {
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+          });
+          if (!response.ok) return;
+          const data = await response.json();
+          if (!data?.html || data.version === root.dataset.version) return;
+
+          const scrollY = window.scrollY;
+          const openDetails = captureDetailsState();
+          root.innerHTML = data.html;
+          root.dataset.version = data.version;
+          restoreDetailsState(openDetails);
+          window.scrollTo(0, scrollY);
+          setupCopyButtons();
+          setupProfileLinks();
+        } catch (error) {
+          // ignore transient network errors
+        }
+      }
+
+      function schedulePoll() {
+        if (timerId) window.clearInterval(timerId);
+        timerId = window.setInterval(pollPanelLive, pollMs);
+      }
+
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          pollPanelLive();
+        }
+      });
+
+      schedulePoll();
+      window.setTimeout(pollPanelLive, 1500);
+    }
+
     function setupAccessDeleteButtons() {
       document.querySelectorAll(".access-delete-btn").forEach((btn) => {
         btn.addEventListener("click", (event) => {
@@ -4727,10 +4908,12 @@ function renderWebPage(draws, message, webUser) {
     setupAccessDeleteButtons();
     setupPrizeTypeToggle();
     setupPreventNumberWheel();
+    setupCopyButtons();
     setupProfileLinks();
     setupPublishEndToggles();
     setupSettingsPanel();
     setupAdminPanels();
+    setupPanelAutoRefresh();
   </script>
 </body>
 </html>`;
@@ -4845,11 +5028,19 @@ panelRouter.get("/", webAuth.requireAuth, (req, res) => {
     return;
   }
 
-  const data = readData();
-  const draws = filterByOwner(data.draws, req.webUser.id).sort(
-    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
-  );
+  const draws = getOwnerDraws(req.webUser.id);
   res.type("html").send(renderWebPage(draws, req.query.msg, req.webUser));
+});
+
+panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, (req, res) => {
+  const ownerId = req.webUser.id;
+  const draws = getOwnerDraws(ownerId);
+  const userProfiles = readUserProjectProfiles();
+  const projects = filterByOwner(readProjects().projects || [], ownerId);
+  res.json({
+    version: buildPanelLiveFingerprint(draws, userProfiles),
+    html: renderPanelLiveHtml(draws, projects, userProfiles),
+  });
 });
 
 panelRouter.post("/admin/access", webAuth.requireAuth, requireOrganizer, requireSuperAdmin, async (req, res) => {
@@ -5904,53 +6095,67 @@ bot.action("jp:reg:nonref", async (ctx) => {
 bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
   const drawId = ctx.match[1];
   const selected = Number(ctx.match[2]);
-  const sessionKey = winnerVerificationSessionKey(ctx.from.id, drawId);
-  const session = winnerVerificationSessions.get(sessionKey);
-  if (!session) {
-    await ctx.answerCbQuery("Сессия проверки устарела.");
-    return;
-  }
+  const userId = ctx.from.id;
+  const sessionKey = winnerVerificationSessionKey(userId, drawId);
 
-  const data = readData();
-  const draw = data.draws.find((item) => item.id === drawId);
-  if (!draw) {
+  try {
+    const data = readData();
+    const draw = data.draws.find((item) => item.id === drawId);
+    if (!draw) {
+      winnerVerificationSessions.delete(sessionKey);
+      await ctx.answerCbQuery("Розыгрыш не найден.");
+      return;
+    }
+
+    const notify = draw.winnerNotifications?.[String(userId)];
+    if (!notify || notify.status === "expired") {
+      await ctx.answerCbQuery("Сессия проверки устарела.");
+      return;
+    }
+
+    if (notify.verifiedAt || notify.status === "confirmed") {
+      await ctx.answerCbQuery("Вы уже прошли проверку ✅");
+      return;
+    }
+
+    const expiresAtISO = notify.expiresAt;
+    const isExpired = expiresAtISO
+      ? DateTime.fromISO(expiresAtISO, { zone: TIMEZONE }) < DateTime.now().setZone(TIMEZONE)
+      : false;
+    if (isExpired) {
+      await markWinnerNotificationExpired(draw, userId);
+      writeData(data);
+      await ctx.answerCbQuery("Время подтверждения истекло.");
+      return;
+    }
+
+    const memorySession = winnerVerificationSessions.get(sessionKey);
+    const correctAnswer = notify.captchaAnswer ?? memorySession?.correct;
+    if (correctAnswer == null) {
+      await ctx.answerCbQuery("Сессия проверки устарела. Попросите организатора отправить уведомление снова.");
+      return;
+    }
+
+    if (selected !== correctAnswer) {
+      await ctx.answerCbQuery("Неверно, попробуйте еще раз.");
+      return;
+    }
+
     winnerVerificationSessions.delete(sessionKey);
-    await ctx.answerCbQuery("Розыгрыш не найден.");
-    return;
-  }
-
-  const notify = draw.winnerNotifications?.[String(ctx.from.id)];
-  const expiresAtISO = notify?.expiresAt || session.expiresAt;
-  const isExpired = expiresAtISO
-    ? DateTime.fromISO(expiresAtISO, { zone: TIMEZONE }) < DateTime.now().setZone(TIMEZONE)
-    : false;
-  if (isExpired) {
-    await markWinnerNotificationExpired(draw, ctx.from.id);
+    notify.verifiedAt = new Date().toISOString();
+    notify.status = "confirmed";
     writeData(data);
-    await ctx.answerCbQuery("Время подтверждения истекло.");
-    return;
-  }
 
-  if (selected !== session.correct) {
-    await ctx.answerCbQuery("Неверно, попробуйте еще раз.");
-    return;
-  }
-
-  winnerVerificationSessions.delete(sessionKey);
-  if (draw) {
-    if (!draw.winnerNotifications) {
-      draw.winnerNotifications = {};
+    await ctx.answerCbQuery("Проверка пройдена ✅");
+    await ctx.reply("✅ Успешно! Ожидайте выплаты приза!");
+  } catch (error) {
+    console.error("Ошибка проверки победителя:", error);
+    try {
+      await ctx.answerCbQuery("Не удалось обработать ответ. Попробуйте ещё раз.");
+    } catch {
+      // ignore secondary callback errors
     }
-    if (!draw.winnerNotifications[String(ctx.from.id)]) {
-      draw.winnerNotifications[String(ctx.from.id)] = {};
-    }
-    draw.winnerNotifications[String(ctx.from.id)].verifiedAt = new Date().toISOString();
-    draw.winnerNotifications[String(ctx.from.id)].status = "confirmed";
-    writeData(data);
   }
-
-  await ctx.answerCbQuery("Проверка пройдена ✅");
-  await ctx.reply("✅ Успешно! Ожидайте выплаты приза!");
 });
 
 bot.catch((error) => {
