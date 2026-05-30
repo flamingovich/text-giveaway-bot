@@ -9,6 +9,7 @@ const { Telegraf, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
 const { createWebAuth, validateInitData } = require("./web-auth");
 const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp");
+const { getMiniAppStyles, getMiniAppInitScript } = require("./miniapp-ui");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -23,7 +24,8 @@ const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
-const WEB_AUTH_DISABLED = process.env.WEB_AUTH_DISABLED === "true";
+const WEB_ONLY = process.env.WEB_ONLY === "true";
+const WEB_AUTH_DISABLED = process.env.WEB_AUTH_DISABLED === "true" || WEB_ONLY;
 let BOT_USERNAME = (process.env.BOT_USERNAME || "").replace("@", "");
 const TRC20_GUIDE_IMAGES = [
   path.join(__dirname, "..", "assets", "trc20-guide", "step-1.png"),
@@ -63,6 +65,8 @@ const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 const USER_PROJECT_PROFILES_FILE = path.join(DATA_DIR, "user-project-profiles.json");
 const DELEGATED_ADMINS_FILE = path.join(DATA_DIR, "delegated-admins.json");
 const ASSETS_DIR = path.join(__dirname, "..", "assets");
+const BRAND_LOGO_FILE = path.join(__dirname, "..", "rollerbot_logo.jpg");
+const BRAND_BACKGROUND_FILE = path.join(__dirname, "..", "background.jpg");
 
 const DRAW_STATUS = {
   DRAFT: "draft",
@@ -153,8 +157,8 @@ function getDelegatedAdminIds() {
   return (readDelegatedAdmins().admins || []).map((entry) => Number(entry.userId)).filter(Number.isFinite);
 }
 
-function addDelegatedAdmin(userId, label, addedBy) {
-  const id = Number(userId);
+function addDelegatedAdmin(user, label, addedBy) {
+  const id = Number(user?.id);
   if (!Number.isFinite(id) || id <= 0) {
     return { ok: false, error: "Укажите корректный Telegram ID." };
   }
@@ -163,16 +167,25 @@ function addDelegatedAdmin(userId, label, addedBy) {
   }
   const data = readDelegatedAdmins();
   if ((data.admins || []).some((entry) => Number(entry.userId) === id)) {
-    return { ok: false, error: "Этот ID уже в списке админов." };
+    return { ok: false, error: "Этот пользователь уже в списке админов." };
   }
   data.admins = data.admins || [];
   data.admins.push({
     userId: id,
+    username: user.username || "",
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
     label: String(label || "").trim(),
     addedAt: new Date().toISOString(),
     addedBy: Number(addedBy) || null,
   });
   writeDelegatedAdmins(data);
+  upsertUserMeta({
+    id,
+    username: user.username || "",
+    first_name: user.first_name || "",
+    last_name: user.last_name || "",
+  });
   return { ok: true };
 }
 
@@ -458,6 +471,33 @@ function formatDateTime(isoString) {
   return dt.toFormat("dd.MM.yyyy HH:mm");
 }
 
+const RU_MONTHS_SHORT = {
+  1: "янв.",
+  2: "февр.",
+  3: "мар.",
+  4: "апр.",
+  5: "мая",
+  6: "июня",
+  7: "июля",
+  8: "авг.",
+  9: "сент.",
+  10: "окт.",
+  11: "нояб.",
+  12: "дек.",
+};
+
+function formatCardDateTime(isoString) {
+  if (!isoString) {
+    return "вручную";
+  }
+  const dt = DateTime.fromISO(isoString, { zone: TIMEZONE });
+  if (!dt.isValid) {
+    return "не задано";
+  }
+  const month = RU_MONTHS_SHORT[dt.month] || dt.toFormat("LLL");
+  return `${dt.day} ${month} ${dt.year} в ${dt.toFormat("HH:mm")}`;
+}
+
 function formatDateTimeForInput(isoString) {
   if (!isoString) {
     return "";
@@ -497,6 +537,118 @@ function formatRubAmount(value) {
   return `${formatted}₽`;
 }
 
+function formatUsdAmount(value) {
+  const amount = Math.floor(Number(value));
+  const formatted = String(amount).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${formatted}$`;
+}
+
+function formatRubStatDisplay(value) {
+  const amount = Math.floor(Number(value) || 0);
+  const formatted = String(amount).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${formatted} ₽`;
+}
+
+function formatUsdStatDisplay(value) {
+  const amount = Math.floor(Number(value) || 0);
+  const formatted = String(amount).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${formatted} $`;
+}
+
+function formatPaidStatDisplay(rub, usd) {
+  const parts = [];
+  if (rub > 0) parts.push(formatRubStatDisplay(rub));
+  if (usd > 0) parts.push(formatUsdStatDisplay(usd));
+  return parts.length ? parts.join(" · ") : "0 ₽";
+}
+
+function isMoneyPrizeType(prizeType) {
+  return prizeType === "money_rub" || prizeType === "money_usd";
+}
+
+function getDrawPrizeAmount(draw) {
+  if (draw.prizeType === "money_usd") {
+    const total = Number.isFinite(draw.prizeAmountUsd)
+      ? Number(draw.prizeAmountUsd)
+      : parseRubAmountFromText(draw.prize);
+    return Number.isFinite(total) && total > 0 ? total : 0;
+  }
+  if (draw.prizeType === "money_rub") {
+    const total = Number.isFinite(draw.prizeAmountRub)
+      ? Number(draw.prizeAmountRub)
+      : parseRubAmountFromText(draw.prize);
+    return Number.isFinite(total) && total > 0 ? total : 0;
+  }
+  return 0;
+}
+
+function formatMoneyAmount(value, prizeType) {
+  if (prizeType === "money_usd") {
+    return formatUsdAmount(value);
+  }
+  return formatRubAmount(value);
+}
+
+function getWinnerPayoutAmount(draw, projectData) {
+  if (!isMoneyPrizeType(draw.prizeType)) {
+    return 0;
+  }
+  const total = getDrawPrizeAmount(draw);
+  if (!Number.isFinite(total) || total <= 0) {
+    return 0;
+  }
+  const winnerCount = Math.max(1, (draw.winnerIds || []).length || Number(draw.winnersCount) || 1);
+  let perWinner = Math.floor(total / winnerCount);
+  if (projectData?.selfReportedNonReferral) {
+    perWinner = Math.floor(perWinner / 2);
+  }
+  return perWinner;
+}
+
+function computeDrawStats(draws, userProfiles) {
+  const now = DateTime.now().setZone(TIMEZONE);
+  const monthName = now.setLocale("ru").toFormat("LLLL");
+  const monthLabel = monthName.charAt(0).toUpperCase() + monthName.slice(1);
+  let paidThisMonthRub = 0;
+  let paidAllTimeRub = 0;
+  let paidThisMonthUsd = 0;
+  let paidAllTimeUsd = 0;
+
+  for (const draw of draws) {
+    for (const winnerId of draw.winnerIds || []) {
+      const notifyInfo = draw.winnerNotifications?.[String(winnerId)];
+      if (!notifyInfo?.paidAt || !isMoneyPrizeType(draw.prizeType)) {
+        continue;
+      }
+      const paidAt = DateTime.fromISO(notifyInfo.paidAt, { zone: TIMEZONE });
+      if (!paidAt.isValid) {
+        continue;
+      }
+      const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+      const amount = getWinnerPayoutAmount(draw, projectData);
+      if (draw.prizeType === "money_usd") {
+        paidAllTimeUsd += amount;
+        if (paidAt.year === now.year && paidAt.month === now.month) {
+          paidThisMonthUsd += amount;
+        }
+      } else {
+        paidAllTimeRub += amount;
+        if (paidAt.year === now.year && paidAt.month === now.month) {
+          paidThisMonthRub += amount;
+        }
+      }
+    }
+  }
+
+  return {
+    total: draws.length,
+    active: draws.filter((draw) => draw.status === DRAW_STATUS.ACTIVE).length,
+    monthLabel,
+    paidThisMonth: formatPaidStatDisplay(paidThisMonthRub, paidThisMonthUsd),
+    paidAllTime: formatPaidStatDisplay(paidAllTimeRub, paidAllTimeUsd),
+  };
+}
+
 function parseRubAmountFromText(text) {
   const digits = String(text || "").replace(/[^\d]/g, "");
   if (!digits) {
@@ -506,33 +658,44 @@ function parseRubAmountFromText(text) {
 }
 
 function getPerWinnerPrizeText(draw) {
-  if (draw.prizeType !== "money_rub") {
+  if (!isMoneyPrizeType(draw.prizeType)) {
     return draw.prize;
   }
 
-  const total = Number.isFinite(draw.prizeAmountRub)
-    ? Number(draw.prizeAmountRub)
-    : parseRubAmountFromText(draw.prize);
+  const total = getDrawPrizeAmount(draw);
   if (!Number.isFinite(total) || total <= 0) {
     return draw.prize;
   }
 
   const winnerCount = Math.max(1, (draw.winnerIds || []).length || Number(draw.winnersCount) || 1);
   const perWinner = Math.floor(total / winnerCount);
-  return formatRubAmount(perWinner);
+  return formatMoneyAmount(perWinner, draw.prizeType);
 }
 
 function getWinnerPayoutText(draw, projectData) {
   const base = getPerWinnerPrizeText(draw);
-  if (!projectData?.selfReportedNonReferral || draw.prizeType !== "money_rub") {
+  if (!projectData?.selfReportedNonReferral || !isMoneyPrizeType(draw.prizeType)) {
     return base;
   }
 
-  const amount = parseRubAmountFromText(base);
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return base;
+  const amount = getWinnerPayoutAmount(draw, projectData);
+  return formatMoneyAmount(amount, draw.prizeType);
+}
+
+function isWinnerNotificationExpired(notifyInfo) {
+  if (!notifyInfo) {
+    return false;
   }
-  return formatRubAmount(Math.floor(amount / 2));
+  if (notifyInfo.status === "expired") {
+    return true;
+  }
+  if (notifyInfo.verifiedAt) {
+    return false;
+  }
+  const expiresAt = notifyInfo.expiresAt
+    ? DateTime.fromISO(notifyInfo.expiresAt, { zone: TIMEZONE })
+    : null;
+  return Boolean(expiresAt?.isValid && expiresAt <= DateTime.now().setZone(TIMEZONE));
 }
 
 function getWinnerConfirmWindow(draw) {
@@ -763,6 +926,9 @@ function getKeyboard(drawId, count) {
 async function ensureBotUsername() {
   if (BOT_USERNAME) {
     return BOT_USERNAME;
+  }
+  if (WEB_ONLY) {
+    throw new Error("В режиме WEB_ONLY укажите BOT_USERNAME в .env");
   }
   const me = await bot.telegram.getMe();
   BOT_USERNAME = (me.username || "").replace("@", "");
@@ -1090,12 +1256,12 @@ function getUserProfileBundle(userProfiles, userId, projectId) {
 }
 
 function getWinnerDisplayName(meta, userId) {
-  if (meta.username) {
-    return `@${meta.username}`;
-  }
   const fullName = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
   if (fullName) {
     return fullName;
+  }
+  if (meta.username) {
+    return `@${meta.username}`;
   }
   return `ID ${userId}`;
 }
@@ -1132,6 +1298,133 @@ async function enrichUserAvatar(userId) {
   } catch (error) {
     // Игнорируем, если Telegram не вернул фото профиля.
   }
+}
+
+function findUserInProfilesByUsername(username) {
+  const needle = String(username || "").replace(/^@/, "").trim().toLowerCase();
+  if (!needle) {
+    return null;
+  }
+  const profiles = readUserProjectProfiles();
+  for (const [userKey, node] of Object.entries(profiles.users || {})) {
+    const profileUsername = node.meta?.username;
+    if (profileUsername && profileUsername.toLowerCase() === needle) {
+      return {
+        id: Number(userKey),
+        username: profileUsername,
+        first_name: node.meta.first_name || "",
+        last_name: node.meta.last_name || "",
+      };
+    }
+  }
+  return null;
+}
+
+async function resolveTelegramUser(ref) {
+  const raw = String(ref || "").trim();
+  if (!raw) {
+    return { ok: false, error: "Укажите @username или числовой Telegram ID." };
+  }
+
+  if (/^\d+$/.test(raw)) {
+    const id = Number(raw);
+    if (!Number.isFinite(id) || id <= 0) {
+      return { ok: false, error: "Укажите корректный Telegram ID." };
+    }
+    const profiles = readUserProjectProfiles();
+    const meta = profiles.users?.[String(id)]?.meta || {};
+    return {
+      ok: true,
+      user: {
+        id,
+        username: meta.username || "",
+        first_name: meta.first_name || "",
+        last_name: meta.last_name || "",
+      },
+    };
+  }
+
+  const username = raw.replace(/^@/, "").trim();
+  if (!/^[a-zA-Z][a-zA-Z0-9_]{4,31}$/.test(username)) {
+    return { ok: false, error: "Неверный формат @username. Пример: @durov" };
+  }
+
+  const local = findUserInProfilesByUsername(username);
+  if (local?.id) {
+    return { ok: true, user: local };
+  }
+
+  try {
+    const chat = await bot.telegram.getChat(`@${username}`);
+    if (chat?.id) {
+      const user = {
+        id: chat.id,
+        username: chat.username || username,
+        first_name: chat.first_name || "",
+        last_name: chat.last_name || "",
+      };
+      upsertUserMeta(user);
+      return { ok: true, user };
+    }
+  } catch (error) {
+    // Пользователь не найден через API — см. сообщение ниже.
+  }
+
+  return {
+    ok: false,
+    error: `Не найден @${username}. Попросите человека написать боту /start или укажите его числовой ID.`,
+  };
+}
+
+function getAccessPersonMeta(userId, userProfiles, entry) {
+  const meta = userProfiles.users?.[String(userId)]?.meta || {};
+  return {
+    username: meta.username || entry?.username || "",
+    first_name: meta.first_name || entry?.first_name || "",
+    last_name: meta.last_name || entry?.last_name || "",
+    avatarFileId: meta.avatarFileId || "",
+  };
+}
+
+function renderAccessPersonCard(userId, userProfiles, options = {}) {
+  const { badge = "", removable = false, superClass = "", entry = {} } = options;
+  const person = getAccessPersonMeta(userId, userProfiles, entry);
+  const fullName = [person.first_name, person.last_name].filter(Boolean).join(" ").trim();
+  const displayName = fullName || (person.username ? `@${person.username}` : `ID ${userId}`);
+  const usernameLine = person.username ? `@${person.username}` : "без username";
+  const initial = (fullName || person.username || String(userId)).charAt(0).toUpperCase();
+  const avatar = person.avatarFileId
+    ? `<img src="/avatar/${encodeURIComponent(String(userId))}" alt="" class="access-avatar" />`
+    : `<div class="access-avatar access-avatar-fallback">${escapeHtml(initial)}</div>`;
+  const badgeHtml = badge ? `<span class="access-badge">${escapeHtml(badge)}</span>` : "";
+  const deleteAction = removable
+    ? `<div class="access-card-actions">
+          <form method="post" action="/admin/access/${encodeURIComponent(String(userId))}/remove" class="project-delete-form">
+            <button
+              type="submit"
+              class="project-icon-btn project-delete-btn access-delete-btn"
+              title="Удалить"
+              data-access-name="${escapeHtml(displayName)}"
+            >${renderFormIcon("delete")}</button>
+          </form>
+        </div>`
+    : "";
+
+  return `
+    <article class="access-card ${superClass}">
+      <div class="access-card-head${removable ? " access-card-head-removable" : ""}">
+        ${deleteAction}
+        <div class="access-avatar-wrap">${avatar}</div>
+        <div class="access-card-body">
+          <div class="access-card-name-row">
+            <h3 class="access-card-name">${escapeHtml(displayName)}</h3>
+            ${badgeHtml}
+          </div>
+          <div class="access-card-meta">${escapeHtml(usernameLine)}</div>
+        </div>
+      </div>
+    </article>
+  `;
 }
 
 function buildCaptchaTask() {
@@ -1456,38 +1749,207 @@ function redirectWithMessage(res, message) {
   res.redirect(`/?msg=${encodeURIComponent(message)}`);
 }
 
+function renderDesignBanner() {
+  return "";
+}
+
+function renderFormIcon(type) {
+  const icons = {
+    gift: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 7h-2.18C17.84 4.36 15.39 3 12.75 3S7.66 4.36 6.18 7H4c-1.1 0-2 .9-2 2v2c0 1.1.9 2 2 2h1v8c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-8h1c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2zm-7 12H9v-8h4v8zm2-13.5c.83 0 1.5.67 1.5 1.5H11c0-.83.67-1.5 1.5-1.5zM20 9h-5V7.5C15 6.12 13.88 5 12.5 5S10 6.12 10 7.5V9H4V9h16z"/></svg>',
+    project: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>',
+    channel: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18 8A6 6 0 1 0 6 8c0 7-3 9-3 9h18s-3-2-3-9zm-5 11v2H11v-2H8l4-4 4 4h-3z"/></svg>',
+    prize: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.65 1.87 1.96 0 2.4-.98 2.4-1.59 0-.83-.44-1.61-2.67-2.14-2.48-.6-4.18-1.62-4.18-3.67 0-1.72 1.39-2.84 3.11-3.21V4h2.67v1.95c1.86.45 2.79 1.86 2.85 3.39H14.3c-.05-1.11-.64-1.87-2.22-1.87-1.5 0-2.4.68-2.4 1.64 0 .84.65 1.39 2.67 1.91s4.18 1.39 4.18 3.91c-.01 1.83-1.38 2.83-3.12 3.16z"/></svg>',
+    photo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>',
+    winners: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>',
+    start: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>',
+    finish: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm4.2 14.2L11 13V7h1.5v5.2l4.5 2.7-.8 1.3z"/></svg>',
+    confirm: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>',
+    link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>',
+    delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
+    user: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>',
+    history: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7-1.93-.79-3.68-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6-1.41-1.41z"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
+    trophy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/></svg>',
+  };
+  return icons[type] || "";
+}
+
+function renderQuickActionIcon(type) {
+  if (type === "create") {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>';
+  }
+  if (type === "projects") {
+    return renderFormIcon("project");
+  }
+  if (type === "access") {
+    return renderFormIcon("confirm");
+  }
+  return "";
+}
+
+function drawLabel(iconType, text) {
+  return `<label class="draw-label"><span class="draw-ico">${renderFormIcon(iconType)}</span><span class="draw-label-text">${escapeHtml(text)}</span></label>`;
+}
+
+function renderProjectLogo(project) {
+  if (project.logoPath) {
+    const src = `/uploads/${encodeURIComponent(path.basename(project.logoPath))}`;
+    return `<img src="${src}" alt="" class="project-card-logo" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex');" /><span class="project-card-logo-fallback" style="display:none">${renderFormIcon("photo")}</span>`;
+  }
+  return `<span class="project-card-logo-fallback">${renderFormIcon("photo")}</span>`;
+}
+
+function renderProjectCard(project) {
+  const refLink = project.refLink || "";
+  return `
+    <article class="project-card">
+      <div class="project-card-head">
+        <div class="project-card-logo-wrap">${renderProjectLogo(project)}</div>
+        <div class="project-card-body">
+          <h3 class="project-card-name">${escapeHtml(project.name)}</h3>
+          ${
+            refLink
+              ? `<a class="project-card-link" href="${escapeHtml(refLink)}" target="_blank" rel="noopener noreferrer">
+                  <span class="draw-ico">${renderFormIcon("link")}</span>
+                  <span class="project-card-link-text">${escapeHtml(refLink)}</span>
+                </a>`
+              : ""
+          }
+        </div>
+        <div class="project-card-actions">
+          <button
+            type="button"
+            class="project-icon-btn project-edit-btn"
+            title="Редактировать"
+            data-project-id="${escapeHtml(project.id)}"
+            data-project-name="${escapeHtml(project.name)}"
+            data-project-ref="${escapeHtml(refLink)}"
+          >${renderFormIcon("edit")}</button>
+          <form method="post" action="/projects/${encodeURIComponent(project.id)}/delete" class="project-delete-form">
+            <button
+              type="submit"
+              class="project-icon-btn project-delete-btn"
+              title="Удалить"
+              data-project-name="${escapeHtml(project.name)}"
+            >${renderFormIcon("delete")}</button>
+          </form>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderHistoryProjectLogo(project) {
+  if (project?.logoPath) {
+    const src = `/uploads/${encodeURIComponent(path.basename(project.logoPath))}`;
+    return `<img src="${src}" alt="" class="history-project-logo" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex');" /><span class="history-project-logo-fallback" style="display:none">${renderFormIcon("project")}</span>`;
+  }
+  return `<span class="history-project-logo-fallback">${renderFormIcon("project")}</span>`;
+}
+
+function renderHistoryCoverSide(imagePath) {
+  if (!imagePath) {
+    return "";
+  }
+  const src = `/uploads/${encodeURIComponent(path.basename(imagePath))}`;
+  return `<div class="history-cover-side"><img src="${src}" alt="" class="history-thumb" loading="lazy" /></div>`;
+}
+
+function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
+  const { meta, projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+  const fullName = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
+  const displayName = fullName || (meta.username ? `@${meta.username}` : `ID ${winnerId}`);
+  const usernameLine = meta.username ? `@${meta.username}` : "без username";
+  const usernameMetaHtml = fullName
+    ? `<div class="winner-card-meta">${escapeHtml(usernameLine)}</div>`
+    : !meta.username
+      ? `<div class="winner-card-meta">без username</div>`
+      : "";
+  const initial = (fullName || meta.username || String(winnerId)).charAt(0).toUpperCase() || "?";
+  const avatar = meta.avatarFileId
+    ? `<img src="/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="winner-card-avatar" />`
+    : `<div class="winner-card-avatar winner-card-avatar-fallback">${escapeHtml(initial)}</div>`;
+  const trcAddress = projectData.trc20Address || "Не указан";
+  const notifyInfo = winnerNotifications[String(winnerId)];
+  const payoutText = getWinnerPayoutText(draw, projectData);
+  const isPaid = Boolean(notifyInfo?.paidAt);
+  const isVerified = Boolean(notifyInfo?.verifiedAt);
+  const notifySent = Boolean(notifyInfo?.sentAt);
+  const isExpired = isWinnerNotificationExpired(notifyInfo);
+  const refBadge = projectData.selfReportedNonReferral
+    ? `<span class="winner-badge winner-badge-warn">Не реф</span>`
+    : `<span class="winner-badge winner-badge-ok">Реф</span>`;
+  const statusBadge = isPaid
+    ? `<span class="winner-badge winner-badge-paid">Выплачено</span>`
+    : isVerified
+      ? `<span class="winner-badge winner-badge-ok">Проверен</span>`
+      : isExpired
+        ? `<span class="winner-badge winner-badge-danger">Не отметился</span>`
+        : notifySent
+        ? `<span class="winner-badge">Уведомлён</span>`
+        : `<span class="winner-badge">Ожидает</span>`;
+  const copyBtn =
+    trcAddress !== "Не указан"
+      ? `<button type="button" class="project-icon-btn winner-copy-btn" title="Копировать" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
+      : "";
+  const qrBlock =
+    trcAddress !== "Не указан"
+      ? `<img src="/qr?text=${encodeURIComponent(trcAddress)}" alt="" class="winner-card-qr" />`
+      : "";
+  const payButton = isPaid || isExpired
+    ? ""
+    : `<div class="winner-card-actions">
+        <form method="post" action="/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
+          <button type="submit" class="winner-action-btn">Оплатил</button>
+        </form>
+      </div>`;
+
+  return `
+    <article class="winner-card">
+      <div class="winner-card-head">
+        ${avatar}
+        <div class="winner-card-body">
+          <div class="winner-card-name">${escapeHtml(displayName)}</div>
+          ${usernameMetaHtml}
+          <div class="winner-card-badges">${refBadge}${statusBadge}</div>
+        </div>
+        ${qrBlock}
+      </div>
+      <div class="winner-card-row">
+        <span class="draw-ico">${renderFormIcon("prize")}</span>
+        <span class="winner-card-row-text"><strong>К выплате:</strong> ${escapeHtml(payoutText)}</span>
+      </div>
+      <div class="winner-card-row winner-card-address-row">
+        <span class="draw-ico">${renderFormIcon("link")}</span>
+        <span class="winner-address-text">${escapeHtml(trcAddress)}</span>
+        ${copyBtn}
+      </div>
+      ${payButton}
+    </article>
+  `;
+}
+
 function renderWebPage(draws, message, webUser) {
   const ownerId = webUser?.id ?? getDefaultOwnerId();
   const showAccessPanel = isSuperAdmin(ownerId);
+  const userProfiles = readUserProjectProfiles();
   const delegatedAdmins = showAccessPanel ? readDelegatedAdmins().admins || [] : [];
-  const superAdminLabels = SUPER_ADMIN_IDS.map(
-    (id) => `<div class="access-item access-item-super"><strong>${escapeHtml(String(id))}</strong> <span class="access-badge">суперадмин</span></div>`,
+  const superAdminLabels = SUPER_ADMIN_IDS.map((id) =>
+    renderAccessPersonCard(id, userProfiles, {
+      badge: "суперадмин",
+      superClass: "access-card-super",
+    }),
   ).join("");
   const delegatedAdminRows = delegatedAdmins
-    .map((entry) => {
-      const note = entry.label ? ` — ${escapeHtml(entry.label)}` : "";
-      const added = entry.addedAt ? `<div class="access-meta">Добавлен: ${escapeHtml(formatDateTime(entry.addedAt))}</div>` : "";
-      return `
-        <div class="access-item">
-          <div class="access-item-head">
-            <strong>${escapeHtml(String(entry.userId))}</strong>${note}
-          </div>
-          ${added}
-          <form method="post" action="/admin/access/${encodeURIComponent(String(entry.userId))}/remove" class="access-remove-form">
-            <button type="submit" class="btn-danger">Удалить</button>
-          </form>
-        </div>
-      `;
-    })
+    .map((entry) => renderAccessPersonCard(entry.userId, userProfiles, {
+        entry,
+        removable: true,
+      }))
     .join("");
   const projects = filterByOwner(readProjects().projects || [], ownerId);
   const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
-  const userProfiles = readUserProjectProfiles();
-  const userLabel = webUser?.user?.username
-    ? `@${webUser.user.username}`
-    : webUser?.user?.first_name
-      ? webUser.user.first_name
-      : `ID ${ownerId}`;
   const projectOptions = projects
     .map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`)
     .join("");
@@ -1495,16 +1957,10 @@ function renderWebPage(draws, message, webUser) {
     .map((channel) => {
       const preferredValue = channel.username ? `@${channel.username}` : channel.id;
       const title = channel.title || preferredValue;
-      const subtitle = channel.username ? `@${channel.username}` : channel.id;
-      return `<option value="${escapeHtml(preferredValue)}">${escapeHtml(title)} (${escapeHtml(subtitle)})</option>`;
+      return `<option value="${escapeHtml(preferredValue)}">${escapeHtml(title)}</option>`;
     })
     .join("");
-  const drawsStats = {
-    total: draws.length,
-    active: draws.filter((d) => d.status === DRAW_STATUS.ACTIVE).length,
-    scheduled: draws.filter((d) => d.status === DRAW_STATUS.SCHEDULED).length,
-    finished: draws.filter((d) => d.status === DRAW_STATUS.FINISHED).length,
-  };
+  const drawsStats = computeDrawStats(draws, userProfiles);
 
   const drawBlocks = draws
     .map((draw) => {
@@ -1518,119 +1974,94 @@ function renderWebPage(draws, message, webUser) {
       const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED;
       const canFinishNow = draw.status === DRAW_STATUS.ACTIVE;
       const winnerNotifications = draw.winnerNotifications || {};
-      const imagePreview = draw.imagePath
-        ? `<img src="/uploads/${encodeURIComponent(path.basename(draw.imagePath))}" alt="cover" class="history-thumb" />`
-        : "";
-      const projectLogo = project?.logoPath
-        ? `<img src="/uploads/${encodeURIComponent(path.basename(project.logoPath))}" alt="project-logo" class="logo" />`
-        : "";
+      const projectLogo = renderHistoryProjectLogo(project);
+      const coverPreview = renderHistoryCoverSide(draw.imagePath);
       const winnerRows = (draw.winnerIds || [])
-        .map((winnerId) => {
-          const { meta, projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
-          const displayName = getWinnerDisplayName(meta, winnerId);
-          const nickname = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim() || "Не указан";
-          const username = meta.username ? `@${meta.username}` : "Нет username";
-          const avatar = meta.avatarFileId
-            ? `<img src="/avatar/${encodeURIComponent(String(winnerId))}" alt="winner-avatar" class="winner-avatar" />`
-            : `<div class="winner-avatar winner-avatar-fallback">${escapeHtml(
-                (nickname || displayName).charAt(0).toUpperCase() || "?"
-              )}</div>`;
-          const trcAddress = projectData.trc20Address || "Не указан";
-          const notifyInfo = winnerNotifications[String(winnerId)];
-          const expireLine =
-            notifyInfo?.expiresAt ? `⏳ Дедлайн: ${escapeHtml(formatDateTime(notifyInfo.expiresAt))}` : null;
-          const notifyStatus = notifyInfo
-            ? [
-                `✅ Уведомление отправлено: ${escapeHtml(formatDateTime(notifyInfo.sentAt))}`,
-                notifyInfo.verifiedAt
-                  ? `🤖 Проверка пройдена: ${escapeHtml(formatDateTime(notifyInfo.verifiedAt))}`
-                  : notifyInfo.status === "expired"
-                    ? "⛔ Время подтверждения истекло"
-                    : "🤖 Проверка не пройдена",
-                expireLine,
-              ].join("<br>")
-            : "⏳ Уведомление не отправляли";
-          const notifyButtonText = notifyInfo ? "Отправить повторно" : "Отправить уведомление";
-          const paidStatus = notifyInfo?.paidAt
-            ? `💸 Выплачено: ${escapeHtml(formatDateTime(notifyInfo.paidAt))}`
-            : "💸 Не выплачено";
-          const payoutText = getWinnerPayoutText(draw, projectData);
-          const refStatusText = projectData.selfReportedNonReferral
-            ? "⚠️ Статус: не реф (выплата /2)"
-            : "✅ Статус: реф";
-          const qr = trcAddress !== "Не указан"
-            ? `<img src="/qr?text=${encodeURIComponent(trcAddress)}" alt="trc-qr" class="qr" />`
-            : "";
-
-          return `
-            <div class="winner-item">
-              <div class="winner-head">
-                ${avatar}
-                <div>
-                  <div><strong>${escapeHtml(displayName)}</strong> (${escapeHtml(String(winnerId))})</div>
-                  <div><strong>Никнейм:</strong> ${escapeHtml(nickname)}</div>
-                  <div><strong>Username:</strong> ${escapeHtml(username)}</div>
-                  <div><strong>${escapeHtml(refStatusText)}</strong></div>
-                </div>
-              </div>
-              <div><strong>К выплате:</strong> ${escapeHtml(payoutText)}</div>
-              <div><strong>TRC-20:</strong> ${escapeHtml(trcAddress)}</div>
-              <div class="winner-meta">${notifyStatus}</div>
-              <div class="winner-meta">${paidStatus}</div>
-              ${qr}
-              <form method="post" action="/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
-                <button type="submit">Оплатил</button>
-              </form>
-              <form method="post" action="/draws/${encodeURIComponent(draw.id)}/notify/${encodeURIComponent(String(winnerId))}">
-                <button type="submit">${notifyButtonText}</button>
-              </form>
-            </div>
-          `;
-        })
+        .map((winnerId) => renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications))
         .join("");
 
       return `
-        <article class="card history-card">
-          <div class="history-top">
-            <div class="history-main">
-              <div class="history-project">
-                ${projectLogo}
-                <span>${escapeHtml(project?.name || "Проект не указан")}</span>
+        <article class="history-card">
+          <div class="history-card-head">
+            <div class="history-project">
+              <span class="history-project-logo-wrap">${projectLogo}</span>
+              <span class="history-project-name">${escapeHtml(project?.name || "Проект не указан")}</span>
+            </div>
+            <span class="history-status status-${escapeHtml(draw.status)}">${escapeHtml(statusLabel)}</span>
+          </div>
+
+          <div class="history-body${coverPreview ? "" : " history-body-no-cover"}">
+            <div class="history-body-main">
+              <div class="history-prize-row">
+                <span class="draw-ico">${renderFormIcon("prize")}</span>
+                <span class="history-prize">${escapeHtml(draw.prize)}</span>
               </div>
-              <h3 class="history-prize">${escapeHtml(draw.prize)}</h3>
-              <div class="history-time">Публикация: ${escapeHtml(formatDateTime(draw.publishAt))}</div>
-              <div class="history-time">Окончание: ${escapeHtml(formatDateTime(draw.endAt))}</div>
+
+              <div class="history-times">
+                <div class="history-time-row">
+                  <span class="draw-ico">${renderFormIcon("start")}</span>
+                  <span class="history-time-text"><span class="history-time-label">Начало:</span> ${escapeHtml(formatCardDateTime(draw.publishAt))}</span>
+                </div>
+                <div class="history-time-row">
+                  <span class="draw-ico">${renderFormIcon("finish")}</span>
+                  <span class="history-time-text"><span class="history-time-label">Конец:</span> ${escapeHtml(formatCardDateTime(draw.endAt))}</span>
+                </div>
+              </div>
+
+              <div class="history-chips">
+                <span class="history-chip">
+                  <span class="draw-ico">${renderFormIcon("winners")}</span>
+                  <span class="history-chip-label">Участников</span>
+                  <span class="history-chip-value">${draw.participantIds.length}</span>
+                </span>
+                <span class="history-chip">
+                  <span class="draw-ico">${renderFormIcon("trophy")}</span>
+                  <span class="history-chip-label">Призовых мест</span>
+                  <span class="history-chip-value">${draw.winnersCount}</span>
+                </span>
+              </div>
             </div>
-            <div class="history-side">
-              <span class="badge status-${escapeHtml(draw.status)}">${escapeHtml(statusLabel)}</span>
-              ${imagePreview}
-            </div>
+            ${coverPreview}
           </div>
-          <div class="history-chips">
-            <span class="chip">👥 Участников: ${draw.participantIds.length}</span>
-            <span class="chip">🎯 Призовых мест: ${draw.winnersCount}</span>
-          </div>
+
           ${
             draw.status === DRAW_STATUS.FINISHED
-              ? `<details class="winner-block"><summary>Победители и выплаты</summary>${winnerRows || "<p>Победителей нет.</p>"}</details>`
+              ? `<details class="history-details">
+                  <summary>
+                    <span class="draw-ico history-details-chevron">${renderFormIcon("chevron")}</span>
+                    <span class="draw-ico">${renderFormIcon("winners")}</span>
+                    <span>Победители и выплаты</span>
+                  </summary>
+                  <div class="history-details-anim">
+                    <div class="history-details-content winner-details-content">${winnerRows || "<p class=\"history-empty-note\">Победителей нет.</p>"}</div>
+                  </div>
+                </details>`
               : ""
           }
-          <details class="meta-details">
-            <summary>Дополнительно</summary>
-            <div class="meta-lines">
-              <div><strong>Канал:</strong> ${escapeHtml(draw.channelId)}</div>
-              <div><strong>ID:</strong> ${escapeHtml(draw.id)}</div>
+
+          <details class="history-details">
+            <summary>
+              <span class="draw-ico history-details-chevron">${renderFormIcon("chevron")}</span>
+              <span class="draw-ico">${renderFormIcon("channel")}</span>
+              <span>Дополнительно</span>
+            </summary>
+            <div class="history-details-anim">
+              <div class="history-details-content history-meta-lines">
+                <div><strong>Канал:</strong> ${escapeHtml(draw.channelId)}</div>
+                <div><strong>ID:</strong> ${escapeHtml(draw.id)}</div>
+              </div>
             </div>
           </details>
-          <div class="actions">
+
+          <div class="history-actions">
             ${
               canPublishNow
-                ? `<form method="post" action="/draws/${encodeURIComponent(draw.id)}/publish-now"><button>Опубликовать сейчас</button></form>`
+                ? `<form method="post" action="/draws/${encodeURIComponent(draw.id)}/publish-now"><button type="submit" class="history-action-btn">Опубликовать сейчас</button></form>`
                 : ""
             }
             ${
               canFinishNow
-                ? `<form method="post" action="/draws/${encodeURIComponent(draw.id)}/finish-now"><button class="danger">Завершить сейчас</button></form>`
+                ? `<form method="post" action="/draws/${encodeURIComponent(draw.id)}/finish-now"><button type="submit" class="history-action-btn history-action-danger">Завершить сейчас</button></form>`
                 : ""
             }
           </div>
@@ -1639,25 +2070,7 @@ function renderWebPage(draws, message, webUser) {
     })
     .join("");
 
-  const projectsBlocks = projects
-    .map((project) => {
-      const logo = project.logoPath
-        ? `<img src="/uploads/${encodeURIComponent(path.basename(project.logoPath))}" alt="project-logo" class="logo" />`
-        : "";
-      return `
-        <article class="card">
-          <div class="row-between">
-            <h3>${escapeHtml(project.name)}</h3>
-            <small>${escapeHtml(project.id)}</small>
-          </div>
-          ${logo}
-          <p><strong>Реф-ссылка:</strong> <a href="${escapeHtml(project.refLink)}" target="_blank">${escapeHtml(
-            project.refLink
-          )}</a></p>
-        </article>
-      `;
-    })
-    .join("");
+  const projectsBlocks = projects.map((project) => renderProjectCard(project)).join("");
 
   return `
 <!doctype html>
@@ -1670,7 +2083,8 @@ function renderWebPage(draws, message, webUser) {
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     :root {
-      --bg: #f3f6ff;
+      --bg: #dbe8f8;
+      --app-bg-image: url("/brand/background.jpg");
       --card: #ffffff;
       --text: #151a2d;
       --sub: #65708a;
@@ -1681,23 +2095,72 @@ function renderWebPage(draws, message, webUser) {
       --ok-line: #a7e6bc;
       --ok-text: #1f6a3c;
     }
+    * { box-sizing: border-box; }
+    img, video { max-width: 100%; height: auto; }
+    html {
+      overflow-x: hidden;
+      max-width: 100%;
+      overscroll-behavior-x: none;
+    }
     body {
       font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: linear-gradient(180deg, #eef3ff 0%, var(--bg) 100%);
+      background-color: var(--bg);
       margin: 0 auto;
       color: var(--text);
-      max-width: 480px;
+      max-width: 100%;
+      width: 100%;
       min-height: 100vh;
+      overflow-x: hidden;
+      overscroll-behavior-x: none;
+      position: relative;
     }
-    body.telegram-miniapp {
-      padding-bottom: env(safe-area-inset-bottom);
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background-color: var(--bg);
+      background-image: var(--app-bg-image);
+      background-repeat: repeat-y;
+      background-position: center top;
+      background-size: min(100vw, 760px) auto;
+      pointer-events: none;
     }
-    .container { max-width: 480px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 24px; }
+    .site-header {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      box-shadow: 0 2px 10px rgba(27, 45, 94, 0.06);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      width: 100%;
+      padding-top: env(safe-area-inset-top);
+    }
+    .site-header-inner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: 100%;
+      width: 100%;
+      margin: 0 auto;
+      padding: 10px 16px;
+      min-height: 52px;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .container {
+      max-width: 100%;
+      width: 100%;
+      margin: 0 auto;
+      padding: 16px 16px 24px;
+      overflow-x: hidden;
+      box-sizing: border-box;
+    }
     h1 { margin: 0 0 14px; font-size: 24px; letter-spacing: 0.2px; }
     h2 { margin-top: 0; margin-bottom: 14px; font-size: 22px; }
     h3 { margin: 0; }
     .subtitle { color: var(--sub); margin-bottom: 18px; }
-    .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 16px; width: 100%; min-width: 0; max-width: 100%; }
     .card {
       background: var(--card);
       border-radius: 16px;
@@ -1712,13 +2175,573 @@ function renderWebPage(draws, message, webUser) {
     }
     .card-dark .subtitle { color: #dce4ff; }
     .create-panel {
-      background: linear-gradient(145deg, #20346f 0%, #2850bb 62%, #2f60f5 100%);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      box-shadow: 0 18px 42px rgba(22, 43, 110, 0.35);
-      max-width: 980px;
-      margin: 0 auto;
+      background: var(--tg-theme-secondary-bg-color, var(--card));
+      color: var(--tg-theme-text-color, var(--text));
+      border: 1px solid var(--line);
+      box-shadow: 0 4px 16px rgba(27, 45, 94, 0.06);
+      padding: 14px;
+      max-width: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
+      max-height: 5000px;
+      opacity: 1;
+      transform: translateY(0);
+      transition:
+        max-height 0.24s ease,
+        opacity 0.18s ease,
+        transform 0.22s ease,
+        padding 0.22s ease,
+        border-width 0.18s ease,
+        box-shadow 0.18s ease;
     }
     .create-form { display: grid; gap: 10px; }
+    .create-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+    }
+    .create-title-icon {
+      width: 22px;
+      height: 22px;
+      display: inline-flex;
+      color: var(--tg-theme-button-color, var(--primary));
+    }
+    .create-title-icon svg { width: 22px; height: 22px; }
+    .draw-form {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-family: inherit;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    .draw-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      border-radius: 12px;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    .draw-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .draw-field { min-width: 0; overflow: hidden; }
+    .draw-label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--tg-theme-hint-color, var(--sub));
+      margin-bottom: 4px;
+      min-width: 0;
+      white-space: nowrap;
+    }
+    .draw-label-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .draw-ico {
+      width: 14px;
+      height: 14px;
+      display: inline-flex;
+      color: var(--tg-theme-button-color, var(--primary));
+      flex-shrink: 0;
+    }
+    .draw-ico svg { width: 14px; height: 14px; display: block; }
+    .draw-input {
+      width: 100%;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      color: var(--tg-theme-text-color, var(--text));
+      padding: 9px 10px;
+      box-sizing: border-box;
+    }
+    .draw-form select.draw-input {
+      appearance: none;
+      -webkit-appearance: none;
+      padding-right: 28px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='%2365708a'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      cursor: pointer;
+    }
+    .draw-input:focus {
+      outline: none;
+      border-color: var(--tg-theme-button-color, var(--primary));
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 18%, transparent);
+    }
+    .draw-timing-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      align-items: end;
+      width: 100%;
+    }
+    .draw-inline-full {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+    }
+    .draw-input-num {
+      width: 52px;
+      flex: 0 0 52px;
+      padding: 9px 6px;
+      text-align: center;
+    }
+    .draw-input-unit {
+      flex: 1 1 auto;
+      min-width: 72px;
+      padding: 9px 26px 9px 8px;
+      font-size: 13px;
+    }
+    .draw-block-confirm {
+      padding: 8px 10px;
+    }
+    .projects-list,
+    .access-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    .projects-list-title,
+    .access-list-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 12px 0 6px;
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+    }
+    .projects-list-title .draw-ico,
+    .access-list-title .draw-ico {
+      width: 16px;
+      height: 16px;
+    }
+    .projects-list-title .draw-ico svg,
+    .access-list-title .draw-ico svg {
+      width: 16px;
+      height: 16px;
+    }
+    .project-card {
+      padding: 10px;
+      border-radius: 12px;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      max-width: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    .project-card-head {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .project-card-logo-wrap {
+      width: 44px;
+      height: 44px;
+      flex: 0 0 44px;
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .project-card-logo {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .project-card-logo-fallback {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 70%, transparent);
+    }
+    .project-card-logo-fallback svg {
+      width: 22px;
+      height: 22px;
+    }
+    .project-card-body {
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .project-card-name {
+      margin: 0 0 4px;
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .project-card-link {
+      display: flex;
+      align-items: flex-start;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--tg-theme-link-color, var(--primary));
+      text-decoration: none;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .project-card-link .draw-ico {
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .project-card-link-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      flex: 1 1 auto;
+      direction: rtl;
+      text-align: left;
+      unicode-bidi: plaintext;
+    }
+    .project-card-actions {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+      align-items: flex-start;
+      justify-self: end;
+    }
+    .project-delete-form {
+      margin: 0;
+      display: inline-flex;
+    }
+    .project-icon-btn {
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      color: var(--tg-theme-button-color, var(--primary));
+      cursor: pointer;
+      padding: 0;
+      flex-shrink: 0;
+    }
+    .project-icon-btn:hover,
+    .project-icon-btn:focus-visible {
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      transform: none;
+    }
+    .project-icon-btn svg {
+      width: 16px;
+      height: 16px;
+      display: block;
+    }
+    .project-delete-btn {
+      color: #c0392b;
+      border-color: color-mix(in srgb, #c0392b 28%, transparent);
+    }
+    .project-delete-btn:hover,
+    .project-delete-btn:focus-visible {
+      background: #fff5f5;
+      color: #c0392b;
+      transform: none;
+    }
+    .project-form-footer {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    .project-cancel-btn {
+      align-self: flex-start;
+      padding: 0;
+      min-height: 0;
+    }
+    .projects-empty,
+    .access-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 18px 12px;
+      border-radius: 12px;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px dashed color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 28%, transparent);
+      color: var(--tg-theme-hint-color, var(--sub));
+      font-size: 13px;
+      font-weight: 600;
+      text-align: center;
+    }
+    .projects-empty .draw-ico,
+    .access-empty .draw-ico {
+      width: 28px;
+      height: 28px;
+      color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 55%, transparent);
+    }
+    .projects-empty .draw-ico svg,
+    .access-empty .draw-ico svg {
+      width: 28px;
+      height: 28px;
+    }
+    .access-card {
+      padding: 10px;
+      border-radius: 12px;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      max-width: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    .access-card-super {
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 6%, var(--tg-theme-bg-color, #f5f8ff));
+    }
+    .access-card-head {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .access-card-head-removable {
+      grid-template-columns: auto 48px minmax(0, 1fr);
+    }
+    .access-avatar-wrap {
+      width: 48px;
+      height: 48px;
+      flex-shrink: 0;
+    }
+    .access-avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+      display: block;
+    }
+    .access-avatar-fallback {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      color: var(--tg-theme-button-color, var(--primary));
+      font-weight: 800;
+      font-size: 18px;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+    }
+    .access-card-body {
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .access-card-name-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      margin-bottom: 2px;
+    }
+    .access-card-name {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .access-card-meta {
+      font-size: 12px;
+      color: var(--tg-theme-hint-color, var(--sub));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .access-badge {
+      flex-shrink: 0;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--tg-theme-button-color, var(--primary));
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 12%, #fff);
+      border-radius: 999px;
+      padding: 2px 7px;
+    }
+    .access-card-actions {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+      align-items: center;
+      justify-self: start;
+    }
+    .access-form {
+      margin-top: 4px;
+    }
+    .draw-media-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 6px;
+      width: 100%;
+      max-width: 100%;
+    }
+    .draw-paste-btn {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 9px 8px;
+      border-radius: 10px;
+      border: 1px dashed color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 38%, transparent);
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      color: var(--tg-theme-button-color, var(--primary));
+      cursor: pointer;
+      min-height: 38px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .draw-file-btn {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 9px 8px;
+      border-radius: 10px;
+      border: 1px dashed color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 38%, transparent);
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      color: var(--tg-theme-button-color, var(--primary));
+      cursor: pointer;
+      min-height: 38px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .draw-file-btn:hover,
+    .draw-file-btn:focus-visible,
+    .draw-paste-btn:hover,
+    .draw-paste-btn:focus-visible {
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      color: var(--tg-theme-button-color, var(--primary));
+      transform: none;
+    }
+    .draw-file-btn input { display: none; }
+    .draw-link-btn {
+      background: none;
+      border: none;
+      color: var(--tg-theme-link-color, var(--primary));
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 0;
+      width: auto;
+      min-height: 0;
+      text-align: left;
+      cursor: pointer;
+    }
+    .draw-field-hidden { display: none !important; }
+    .anim-collapse {
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+      pointer-events: none;
+      transition: max-height 0.22s ease, opacity 0.18s ease;
+    }
+    .anim-collapse.anim-collapse-open {
+      max-height: 220px;
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .draw-timing-row .anim-collapse.anim-collapse-open {
+      max-height: 120px;
+    }
+    .draw-form .paste-preview {
+      display: none;
+      margin-top: 6px;
+      border-radius: 10px;
+      max-height: 100px;
+      width: 100%;
+      object-fit: cover;
+    }
+    .draw-submit {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 13px 16px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 800;
+      font-family: inherit;
+      background: var(--tg-theme-button-color, var(--primary));
+      color: var(--tg-theme-button-text-color, #fff);
+      border: none;
+      cursor: pointer;
+    }
+    .draw-submit:hover,
+    .draw-submit:focus-visible {
+      background: var(--tg-theme-button-color, var(--primary));
+      color: var(--tg-theme-button-text-color, #fff);
+      filter: brightness(1.06);
+      transform: none;
+    }
+    .draw-submit .draw-ico { color: inherit; width: 18px; height: 18px; }
+    .draw-submit .draw-ico svg { width: 18px; height: 18px; }
     .form-section-card {
       background: rgba(255, 255, 255, 0.1);
       border: 1px solid rgba(231, 238, 255, 0.22);
@@ -1737,13 +2760,16 @@ function renderWebPage(draws, message, webUser) {
     label { display: block; font-size: 12px; margin-bottom: 6px; color: #3b4560; font-weight: 600; }
     .card-dark label { color: #e7edff; }
     input, select, button {
-      width: 100%;
       border-radius: 12px;
       border: 1px solid #cfd8ef;
       padding: 9px 11px;
       font-size: 13px;
       box-sizing: border-box;
       background: #fff;
+    }
+    input, select,
+    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn) {
+      width: 100%;
     }
     .card-dark input,
     .card-dark select {
@@ -1785,7 +2811,7 @@ function renderWebPage(draws, message, webUser) {
     .hint { color: var(--sub); font-size: 12px; margin-top: 4px; margin-bottom: 6px; }
     .card-dark .hint { color: #d1ddff; margin-top: 2px; }
     .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-    .actions form { margin: 0; width: auto; min-width: 220px; }
+    .actions form { margin: 0; width: auto; min-width: 0; flex: 1 1 140px; max-width: 100%; }
     .preview { width: 100%; max-height: 280px; object-fit: cover; border-radius: 12px; margin: 10px 0; border: 1px solid #ececec; }
     .logo { width: 88px; height: 88px; object-fit: contain; border: 1px solid #ececec; border-radius: 12px; padding: 8px; background: #fff; }
     .winner-block { margin-top: 12px; padding: 10px 12px; border: 1px solid #e2e8fb; border-radius: 12px; background: #f9fbff; }
@@ -1838,6 +2864,17 @@ function renderWebPage(draws, message, webUser) {
       max-width: 100%;
       background: #fff;
     }
+    .design-banner {
+      background: #fff8e6;
+      border: 1px solid #ffe2a8;
+      color: #6a4f00;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px 14px;
+      border-radius: 12px;
+      margin-bottom: 14px;
+      text-align: center;
+    }
     .section-title {
       margin: 8px 0 4px;
       font-size: 12px;
@@ -1847,60 +2884,688 @@ function renderWebPage(draws, message, webUser) {
       font-weight: 800;
     }
     .admin-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .quick-actions {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .quick-action {
+      flex: 1 1 0;
+      width: auto;
+      min-width: 0;
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 10px 6px;
+      min-height: 58px;
+      border-radius: 12px;
+      border: 1px solid #cad6ff;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      color: var(--tg-theme-button-color, #325fff);
+      cursor: pointer;
+      font-weight: 700;
+      transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.15s ease, box-shadow 0.18s ease, filter 0.18s ease;
+    }
+    .quick-action:hover,
+    .quick-action:focus-visible {
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      color: var(--tg-theme-button-color, #325fff);
+      transform: translateY(-1px);
+    }
+    .quick-action-primary {
+      background: var(--tg-theme-button-color, var(--primary));
+      color: var(--tg-theme-button-text-color, #fff);
+      border-color: transparent;
+    }
+    .quick-action-primary:hover,
+    .quick-action-primary:focus-visible {
+      background: var(--tg-theme-button-color, var(--primary));
+      color: var(--tg-theme-button-text-color, #fff);
+      filter: brightness(1.06);
+      transform: translateY(-1px);
+    }
+    .quick-action.qa-active {
+      outline: none;
+      box-shadow: inset 0 0 0 1.5px var(--tg-theme-button-color, var(--primary));
+    }
+    .quick-action-primary.qa-active {
+      filter: brightness(1.06);
+      box-shadow: none;
+    }
+    .qa-icon {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      line-height: 0;
+    }
+    .qa-icon svg {
+      width: 22px;
+      height: 22px;
+      display: block;
+      flex-shrink: 0;
+    }
+    .quick-action .qa-label {
+      font-size: 11px;
+      line-height: 1.15;
+      text-align: center;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .page-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      object-fit: cover;
+      flex-shrink: 0;
+      display: block;
+      box-shadow: 0 2px 8px rgba(27, 45, 94, 0.12);
+    }
+    .page-title {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 17px;
+      line-height: 1;
+      min-width: 0;
+    }
+    .page-title-brand {
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+    }
+    .page-title-sub {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--tg-theme-hint-color, var(--sub));
+    }
     .btn-secondary { background: #ffffff; color: #2c3f86; border: 1px solid #cad6ff; }
     .btn-secondary:hover { background: #f5f8ff; }
     .btn-danger { background: #fff5f5; color: #b42318; border: 1px solid #fecdca; }
     .btn-danger:hover { background: #fee4e2; }
-    .access-item {
-      border: 1px solid #dce4fb;
-      border-radius: 10px;
-      padding: 10px 12px;
-      background: #fff;
+    .panel-hidden {
+      max-height: 0;
+      opacity: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      border-width: 0;
+      box-shadow: none;
+      transform: translateY(-6px);
+      pointer-events: none;
+    }
+    .admin-panels-stack {
+      display: grid;
+      min-height: 0;
+      min-width: 0;
+    }
+    .admin-panels-stack:not(:has(.create-panel:not(.panel-hidden))) {
+      display: none;
+    }
+    .admin-panels-stack > .create-panel {
+      grid-area: 1 / 1;
+      width: 100%;
+      min-width: 0;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .create-panel,
+      .panel-hidden,
+      .anim-collapse,
+      .history-details-anim,
+      .history-details-chevron,
+      .history-details summary,
+      .quick-action {
+        transition: none !important;
+      }
+    }
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0;
+      width: 100%;
+      min-width: 0;
+    }
+    .stat-card {
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      border-radius: 12px;
+      padding: 10px;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .stat-card-label {
+      display: block;
+      color: var(--tg-theme-hint-color, #7582a5);
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.25;
+      margin-bottom: 4px;
+    }
+    .stat-card-value {
+      display: block;
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+      line-height: 1.15;
+    }
+    .stat-card-value-rub {
+      font-size: 17px;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .draw-history-title { margin: 0 0 10px; font-size: 17px; }
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+    }
+    .history-card {
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      border-radius: 12px;
+      padding: 10px;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .history-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
       margin-bottom: 8px;
     }
-    .access-item-super { background: #f5f8ff; }
-    .access-item-head { margin-bottom: 4px; }
-    .access-meta { color: #5d6c8f; font-size: 12px; margin-bottom: 8px; }
-    .access-badge {
-      display: inline-block;
+    .history-project {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    .history-project-logo-wrap {
+      width: 28px;
+      height: 28px;
+      flex: 0 0 28px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .history-project-logo {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .history-project-logo-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--tg-theme-button-color, var(--primary));
+    }
+    .history-project-logo-fallback svg {
+      width: 16px;
+      height: 16px;
+    }
+    .history-project-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--tg-theme-text-color, var(--text));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .history-status {
+      flex-shrink: 0;
       font-size: 11px;
       font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: #2e4db9;
-      background: #e8efff;
+      padding: 4px 8px;
       border-radius: 999px;
-      padding: 2px 8px;
-      margin-left: 6px;
+      border: 1px solid transparent;
     }
-    .access-remove-form { margin: 0; }
-    .access-remove-form button { margin-top: 4px; padding: 8px 12px; font-size: 13px; }
-    .access-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid #e2e8fb; }
-    .panel-hidden { display: none; }
-    .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 10px 0 2px; }
-    .stat-card { background: #fff; border: 1px solid #dde5fb; border-radius: 12px; padding: 10px 12px; }
-    .stat-card span { color: #7582a5; font-size: 12px; display: block; margin-bottom: 4px; }
-    .stat-card b { font-size: 20px; }
-    .draw-history-title { margin: 2px 0 10px; font-size: 20px; }
-    .history-card { border-left: 4px solid #b8c9ff; padding: 14px; }
-    .history-top { display: flex; justify-content: space-between; gap: 12px; }
-    .history-main { min-width: 0; }
-    .history-project { display: flex; align-items: center; gap: 8px; color: #5d6b8f; font-size: 13px; }
-    .history-project .logo { width: 28px; height: 28px; padding: 3px; border-radius: 8px; }
-    .history-prize { margin: 4px 0 6px; font-size: 20px; line-height: 1.25; }
-    .history-time { color: #6b7694; font-size: 13px; margin-bottom: 2px; }
-    .history-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-    .history-thumb { width: 110px; height: 72px; border-radius: 10px; object-fit: cover; border: 1px solid #dde5fb; }
-    .history-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-    .chip { background: #f4f7ff; border: 1px solid #dce4fb; border-radius: 999px; padding: 6px 10px; font-size: 12px; color: #334a88; }
-    .meta-details { margin-top: 10px; border: 1px solid #e2e8fb; border-radius: 10px; background: #fbfcff; padding: 8px 10px; }
-    .meta-details summary { cursor: pointer; font-weight: 600; color: #4f5c7f; }
-    .meta-lines { margin-top: 8px; display: grid; gap: 4px; font-size: 13px; color: #3d4460; }
+    .history-cover-side {
+      flex-shrink: 0;
+      width: 104px;
+      align-self: stretch;
+      min-height: 104px;
+      border-radius: 10px;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      padding: 5px;
+      box-sizing: border-box;
+    }
+    .history-body {
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
+      margin-bottom: 8px;
+      min-width: 0;
+    }
+    .history-body-main {
+      flex: 1;
+      min-width: 0;
+    }
+    .history-body-no-cover .history-body-main {
+      width: 100%;
+    }
+    .history-thumb {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+      border-radius: 6px;
+    }
+    .history-prize-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+      min-width: 0;
+    }
+    .history-prize-row .draw-ico {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+    .history-prize-row .draw-ico svg {
+      width: 16px;
+      height: 16px;
+    }
+    .history-prize {
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.2;
+      color: var(--tg-theme-text-color, var(--text));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .history-times {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .history-time-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 12%, transparent);
+    }
+    .history-time-row .draw-ico {
+      width: 13px;
+      height: 13px;
+      flex-shrink: 0;
+    }
+    .history-time-row .draw-ico svg {
+      width: 13px;
+      height: 13px;
+    }
+    .history-time-text {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--tg-theme-hint-color, var(--sub));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .history-time-label {
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+    }
+    .history-chips {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .history-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--tg-theme-hint-color, var(--sub));
+      min-width: 0;
+      justify-content: center;
+    }
+    .history-chip-label {
+      white-space: nowrap;
+    }
+    .history-chip-value {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+    }
+    .history-chip .draw-ico {
+      width: 14px;
+      height: 14px;
+      color: var(--tg-theme-button-color, var(--primary));
+    }
+    .history-chip .draw-ico svg {
+      width: 14px;
+      height: 14px;
+    }
+    .history-details {
+      margin-top: 6px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      overflow: hidden;
+    }
+    .history-details summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--tg-theme-text-color, var(--text));
+      list-style: none;
+      transition: background 0.15s ease;
+    }
+    .history-details summary:hover {
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 6%, transparent);
+    }
+    .history-details summary::-webkit-details-marker {
+      display: none;
+    }
+    .history-details-chevron {
+      transition: transform 0.22s ease;
+      color: var(--tg-theme-hint-color, var(--sub));
+    }
+    .history-details[open] .history-details-chevron {
+      transform: rotate(180deg);
+    }
+    .history-details-anim {
+      display: grid;
+      grid-template-rows: 0fr;
+      opacity: 0;
+      transition: grid-template-rows 0.22s ease, opacity 0.18s ease;
+    }
+    .history-details[open] .history-details-anim {
+      grid-template-rows: 1fr;
+      opacity: 1;
+    }
+    .history-details-content {
+      overflow: hidden;
+      min-height: 0;
+      padding: 8px 10px 10px;
+      border-top: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 12%, transparent);
+    }
+    .history-meta-lines {
+      display: grid;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--tg-theme-hint-color, var(--sub));
+      word-break: break-all;
+    }
+    .history-empty-note {
+      margin: 0;
+      font-size: 12px;
+      color: var(--tg-theme-hint-color, var(--sub));
+    }
+    .winner-details-content {
+      display: grid;
+      gap: 8px;
+    }
+    .winner-card {
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      border-radius: 10px;
+      padding: 10px;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      min-width: 0;
+    }
+    .winner-card-head {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 8px;
+      min-width: 0;
+    }
+    .winner-card-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+      flex-shrink: 0;
+    }
+    .winner-card-avatar-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--tg-theme-bg-color, #edf2ff);
+      color: var(--tg-theme-button-color, var(--primary));
+      font-weight: 800;
+      font-size: 16px;
+    }
+    .winner-card-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .winner-card-name {
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, var(--text));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .winner-card-meta {
+      font-size: 12px;
+      color: var(--tg-theme-hint-color, var(--sub));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .winner-card-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .winner-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      color: var(--tg-theme-hint-color, var(--sub));
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+    }
+    .winner-badge-ok {
+      color: #1a7f37;
+      background: #e8f5ec;
+      border-color: #b7dfc4;
+    }
+    .winner-badge-warn {
+      color: #9a6700;
+      background: #fff8e6;
+      border-color: #f0d58b;
+    }
+    .winner-badge-paid {
+      color: #1a7f37;
+      background: #e8f5ec;
+      border-color: #b7dfc4;
+    }
+    .winner-badge-danger {
+      color: #cf222e;
+      background: #ffebe9;
+      border-color: #ff8182;
+    }
+    .winner-card-qr {
+      width: 72px;
+      height: 72px;
+      flex-shrink: 0;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      border-radius: 8px;
+      background: #fff;
+      padding: 4px;
+      object-fit: contain;
+      box-sizing: border-box;
+    }
+    .winner-card-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      margin-bottom: 6px;
+      min-width: 0;
+      font-size: 12px;
+      color: var(--tg-theme-text-color, var(--text));
+    }
+    .winner-card-row .draw-ico {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      margin-top: 1px;
+      color: var(--tg-theme-button-color, var(--primary));
+    }
+    .winner-card-row .draw-ico svg {
+      width: 14px;
+      height: 14px;
+    }
+    .winner-card-row-text {
+      min-width: 0;
+      word-break: break-word;
+    }
+    .winner-card-address-row {
+      align-items: center;
+    }
+    .winner-address-text {
+      flex: 1;
+      min-width: 0;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--tg-theme-hint-color, var(--sub));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .winner-copy-btn {
+      flex-shrink: 0;
+    }
+    .winner-card-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .winner-card-actions form {
+      margin: 0;
+      flex: 1;
+      min-width: 0;
+    }
+    .winner-action-btn {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: none;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      background: var(--tg-theme-button-color, var(--primary));
+      color: var(--tg-theme-button-text-color, #fff);
+    }
+    .winner-action-btn:hover,
+    .winner-action-btn:focus-visible {
+      filter: brightness(1.06);
+      transform: none;
+    }
+    .winner-action-secondary {
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      color: var(--tg-theme-text-color, var(--text));
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+    }
+    .winner-action-muted {
+      opacity: 0.65;
+      cursor: default;
+    }
+    .winner-action-btn:disabled {
+      opacity: 0.65;
+      cursor: default;
+      pointer-events: none;
+    }
+    .history-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .history-actions form {
+      margin: 0;
+      width: 100%;
+    }
+    .history-action-btn {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: none;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 800;
+      cursor: pointer;
+      background: var(--tg-theme-button-color, var(--primary));
+      color: var(--tg-theme-button-text-color, #fff);
+    }
+    .history-action-btn:hover,
+    .history-action-btn:focus-visible {
+      filter: brightness(1.06);
+      transform: none;
+    }
+    .history-action-danger {
+      background: #d73a49;
+      color: #fff;
+    }
+    .history-action-danger:hover,
+    .history-action-danger:focus-visible {
+      background: #d73a49;
+      filter: brightness(1.06);
+    }
     .status-active { background: #eaffef; color: #21754a; border-color: #b7edc9; }
     .status-scheduled { background: #eef3ff; color: #2d56cc; border-color: #d4dfff; }
     .status-finished { background: #f3f4f8; color: #555f76; border-color: #dde1ea; }
     .project-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .history-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .compact-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .compact-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
     .subtle-details { margin-top: 4px; border: 1px dashed rgba(211, 223, 255, 0.6); border-radius: 10px; padding: 6px 8px; }
@@ -1908,220 +3573,305 @@ function renderWebPage(draws, message, webUser) {
     .form-footer { display: flex; justify-content: flex-end; margin-top: 2px; }
     .form-footer button { max-width: 220px; }
     @media (max-width: 900px) {
-      .row, .row-3 { grid-template-columns: 1fr; }
+      body:not(.mini-app-shell) .row,
+      body:not(.mini-app-shell) .row-3 { grid-template-columns: 1fr; }
       .actions form { width: 100%; }
-      .container { padding: 16px; }
-      .admin-actions, .stats-row, .project-layout, .history-list { grid-template-columns: 1fr; }
-      .history-side { align-items: flex-start; }
-      .history-thumb { width: 100%; max-width: 220px; height: auto; }
-      .compact-grid-2, .compact-grid-3 { grid-template-columns: 1fr; }
+      body:not(.mini-app-shell) .container { padding: 16px; }
+      body:not(.mini-app-shell) .admin-actions,
+      body:not(.mini-app-shell) .stats-row,
+      body:not(.mini-app-shell) .project-layout { grid-template-columns: 1fr; }
+      body:not(.mini-app-shell) .compact-grid-2,
+      body:not(.mini-app-shell) .compact-grid-3 { grid-template-columns: 1fr; }
       .form-footer button { max-width: none; }
     }
+    ${getMiniAppStyles()}
   </style>
 </head>
 <body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <img src="/brand/logo.jpg" alt="" class="page-logo" width="36" height="36" loading="eager" />
+      <h1 class="page-title"><span class="page-title-brand">RollerBot</span><span class="page-title-sub">Панель розыгрышей</span></h1>
+    </div>
+  </header>
   <div class="container">
-    <h1>Розыгрыши Telegram</h1>
-    <div class="subtitle">Кабинет: ${escapeHtml(userLabel)}</div>
     ${message ? `<div class="msg">${escapeHtml(message)}</div>` : ""}
     <div class="grid">
-      <div class="admin-actions">
-        <button id="toggleCreateDrawBtn" type="button">Создать розыгрыш</button>
-        <button id="toggleProjectsBtn" type="button" class="btn-secondary">Управление проектами</button>
-        ${showAccessPanel ? `<button id="toggleAccessBtn" type="button" class="btn-secondary">Управление доступом</button>` : ""}
+      <div class="quick-actions">
+        <button id="toggleCreateDrawBtn" type="button" class="quick-action">
+          <span class="qa-icon">${renderQuickActionIcon("create")}</span>
+          <span class="qa-label">Создать</span>
+        </button>
+        <button id="toggleProjectsBtn" type="button" class="quick-action">
+          <span class="qa-icon">${renderQuickActionIcon("projects")}</span>
+          <span class="qa-label">Проекты</span>
+        </button>
+        ${
+          showAccessPanel
+            ? `<button id="toggleAccessBtn" type="button" class="quick-action">
+          <span class="qa-icon">${renderQuickActionIcon("access")}</span>
+          <span class="qa-label">Доступ</span>
+        </button>`
+            : ""
+        }
       </div>
 
-      <section id="createDrawPanel" class="card card-dark create-panel panel-hidden">
-        <h2>Создать розыгрыш</h2>
-        <div class="subtitle">Только нужные поля: быстрое создание без перегруза.</div>
-        <form id="create-draw-form" method="post" action="/draws" enctype="multipart/form-data" class="create-form">
-          <div class="form-section-card">
-            <div class="section-caption">Проект и канал</div>
-            <div class="compact-grid-2">
-              <label>Проект
-                <select name="projectId" required>
-                  <option value="">-- Выбрать проект --</option>
+      <div class="admin-panels-stack">
+      <section id="createDrawPanel" class="card create-panel panel-hidden">
+        <h2 class="create-title">
+          <span class="create-title-icon">${renderFormIcon("gift")}</span>
+          Новый розыгрыш
+        </h2>
+        <form id="create-draw-form" method="post" action="/draws" enctype="multipart/form-data" class="draw-form">
+          <div class="draw-block">
+            <div class="draw-row-2">
+              <div class="draw-field">
+                ${drawLabel("project", "Проект")}
+                <select class="draw-input" name="projectId" required>
+                  <option value="">Выберите</option>
                   ${projectOptions}
                 </select>
-              </label>
-              <label>Канал из подключенных
-                <select name="knownChannelId">
-                  <option value="">-- Выбрать --</option>
+              </div>
+              <div class="draw-field">
+                ${drawLabel("channel", "Канал")}
+                <select class="draw-input" name="knownChannelId">
+                  <option value="">Выберите</option>
                   ${channelOptions}
                 </select>
-              </label>
+              </div>
             </div>
-            <details class="subtle-details">
-              <summary>Указать канал вручную (если пересылка не работает)</summary>
-              <label style="margin-top:8px;">@username или -100...
-                <input name="channelId" placeholder="@my_channel или -1001234567890" />
-              </label>
-            </details>
-            <p class="hint">Нет канала в списке? Добавьте бота админом в канал и перешлите любой пост из канала боту @${escapeHtml(
-              BOT_USERNAME
-            )} (команда /link_channel).</p>
+            <div id="manualChannelWrap" class="draw-field anim-collapse">
+              <input class="draw-input" name="channelId" placeholder="@channel" />
+            </div>
+            <button type="button" id="toggleManualChannel" class="draw-link-btn">Другой канал</button>
           </div>
 
-          <div class="form-section-card">
-            <div class="section-caption">Приз и медиа</div>
-            <div class="compact-grid-2">
-              <label>Тип приза
-                <select id="prizeType" name="prizeType" required>
-                  <option value="money_rub">Денежный (₽)</option>
+          <div class="draw-block">
+            <div class="draw-row-2">
+              <div class="draw-field">
+                ${drawLabel("prize", "Приз")}
+                <select class="draw-input" id="prizeType" name="prizeType" required>
+                  <option value="money_rub">Деньги ₽</option>
+                  <option value="money_usd">Деньги $</option>
                   <option value="custom">Другое</option>
                 </select>
-              </label>
-              <div id="moneyPrizeFields">
-                <label>Сумма в рублях
-                  <input name="prizeAmountRub" type="number" min="1" step="1" placeholder="50000" />
-                </label>
               </div>
-              <div id="customPrizeFields" style="display:none;">
-                <label>Описание приза
-                  <input name="prizeCustomText" placeholder="Например: iPhone 16 Pro" />
-                </label>
+              <div class="draw-field" id="moneyPrizeFields">
+                ${drawLabel("prize", "Сумма")}
+                <input class="draw-input" name="prizeAmount" type="number" min="1" step="1" placeholder="50000" />
+              </div>
+              <div class="draw-field" id="customPrizeFields" style="display:none;">
+                ${drawLabel("gift", "Описание")}
+                <input class="draw-input" name="prizeCustomText" placeholder="iPhone 16 Pro" />
               </div>
             </div>
-            <div class="compact-grid-2">
-              <label>Картинка (необязательно)
-                <input id="draw-image-input" name="image" type="file" accept="image/*" />
-              </label>
-              <details class="subtle-details">
-                <summary>Вставить из буфера обмена</summary>
-                <div class="paste-box">
-                  <div class="title">Вставьте картинку (Cmd+V)</div>
-                  <div id="draw-paste-target" class="paste-target" contenteditable="true">
-                    Нажмите сюда и вставьте картинку
-                  </div>
-                  <input type="hidden" id="draw-clipboard-data" name="imageClipboardData" data-field-name="imageClipboardData" />
-                  <img id="draw-paste-preview" class="paste-preview" alt="draw-clipboard-preview" />
-                </div>
-              </details>
+            <div class="draw-field">
+              ${drawLabel("photo", "Обложка")}
+              <div class="draw-media-row">
+                <label class="draw-file-btn">
+                  <input id="draw-image-input" name="image" type="file" accept="image/*" />
+                  Галерея
+                </label>
+                <div id="draw-paste-target" class="draw-paste-btn" contenteditable="true">Вставить</div>
+              </div>
+              <input type="hidden" id="draw-clipboard-data" name="imageClipboardData" data-field-name="imageClipboardData" />
+              <img id="draw-paste-preview" class="paste-preview" alt="" />
             </div>
           </div>
 
-          <div class="form-section-card">
-            <div class="section-caption">Параметры публикации</div>
-            <div class="compact-grid-3">
-              <label>Победителей
-                <input name="winnersCount" type="number" min="1" max="20" value="1" required />
-              </label>
-              <label>Когда публиковать
-                <select id="publishMode" name="publishMode">
+          <div class="draw-block">
+            <div class="draw-row-2">
+              <div class="draw-field">
+                ${drawLabel("winners", "Победители")}
+                <input class="draw-input" name="winnersCount" type="number" min="1" max="20" value="1" required />
+              </div>
+              <div class="draw-field">
+                ${drawLabel("start", "Старт")}
+                <select class="draw-input" id="publishMode" name="publishMode">
                   <option value="now">Сейчас</option>
                   <option value="scheduled">По времени</option>
                 </select>
-              </label>
-              <label id="publishAtWrap">Время публикации
-                <input name="publishAt" type="datetime-local" value="${escapeHtml(
-                  formatDateTimeForInput(DateTime.now().setZone(TIMEZONE).plus({ minutes: 1 }).toISO())
-                )}" />
-              </label>
+              </div>
             </div>
-            <div class="compact-grid-2">
-              <label>Как завершать
-                <select id="endMode" name="endMode">
+            <div class="draw-field anim-collapse" id="publishAtWrap">
+              <input class="draw-input" name="publishAt" type="datetime-local" value="${escapeHtml(
+                formatDateTimeForInput(DateTime.now().setZone(TIMEZONE).plus({ minutes: 1 }).toISO())
+              )}" />
+            </div>
+            <div class="draw-timing-row">
+              <div class="draw-field">
+                ${drawLabel("finish", "Финиш")}
+                <select class="draw-input" id="endMode" name="endMode">
+                  <option value="scheduled" selected>По времени</option>
                   <option value="manual">Вручную</option>
-                  <option value="scheduled">По времени</option>
                 </select>
-              </label>
-              <label id="endAfterWrap">Время завершения
-                <div class="compact-grid-2">
-                  <input name="endAfterValue" type="number" min="1" step="1" placeholder="10" />
-                  <select name="endAfterUnit">
-                    <option value="minutes">Минут</option>
-                    <option value="hours">Часов</option>
-                    <option value="days">Дней</option>
+              </div>
+              <div class="draw-field anim-collapse anim-collapse-open" id="endAfterWrap">
+                ${drawLabel("finish", "Длительность")}
+                <div class="draw-inline-full">
+                  <input class="draw-input draw-input-num" name="endAfterValue" type="number" min="1" step="1" value="10" />
+                  <select class="draw-input draw-input-unit" name="endAfterUnit">
+                    <option value="minutes">мин.</option>
+                    <option value="hours">ч.</option>
+                    <option value="days">дн.</option>
                   </select>
                 </div>
-              </label>
-            </div>
-            <div class="compact-grid-2">
-              <label>Таймер подтверждения победы
-                <div class="compact-grid-2">
-                  <input name="winnerConfirmValue" type="number" min="1" step="1" value="30" />
-                  <select name="winnerConfirmUnit">
-                    <option value="minutes">Минут</option>
-                    <option value="hours">Часов</option>
-                  </select>
-                </div>
-              </label>
+              </div>
             </div>
           </div>
-          <div class="form-footer">
-            <button type="submit">Создать розыгрыш</button>
+
+          <div class="draw-block draw-block-confirm">
+            <div class="draw-field">
+              ${drawLabel("confirm", "Подтверждение")}
+              <div class="draw-inline-full">
+                <input class="draw-input draw-input-num" name="winnerConfirmValue" type="number" min="1" step="1" value="30" />
+                <select class="draw-input draw-input-unit" name="winnerConfirmUnit">
+                  <option value="minutes">мин.</option>
+                  <option value="hours">ч.</option>
+                </select>
+              </div>
+            </div>
           </div>
+
+          <button type="submit" class="draw-submit">
+            <span class="draw-ico">${renderFormIcon("gift")}</span>
+            Создать розыгрыш
+          </button>
         </form>
       </section>
 
-      <section id="projectsPanel" class="card panel-hidden">
-        <h2>Управление проектами</h2>
-        <div class="project-layout">
-          <div>
-            <form id="create-project-form" method="post" action="/projects" enctype="multipart/form-data">
-              <label>Название проекта
-                <input name="name" required />
-              </label>
-              <label>Реферальная ссылка
-                <input name="refLink" type="url" placeholder="https://..." required />
-              </label>
-              <label>Лого (png/svg/webp, желательно прозрачный фон)
-                <input id="project-logo-input" name="logo" type="file" accept="image/*" />
-              </label>
-              <div class="paste-box">
-                <div class="title">Или вставьте лого из буфера обмена</div>
-                <div id="project-paste-target" class="paste-target" contenteditable="true">
-                  Нажмите сюда и вставьте картинку (Cmd+V)
-                </div>
-                <input type="hidden" id="project-clipboard-data" name="logoClipboardData" data-field-name="logoClipboardData" />
-                <img id="project-paste-preview" class="paste-preview" alt="project-clipboard-preview" />
+      <section id="projectsPanel" class="card create-panel panel-hidden">
+        <h2 class="create-title">
+          <span class="create-title-icon">${renderFormIcon("project")}</span>
+          Проекты
+        </h2>
+        <form id="create-project-form" method="post" action="/projects" enctype="multipart/form-data" class="draw-form">
+          <div class="draw-block">
+            <div class="draw-field">
+              ${drawLabel("project", "Название")}
+              <input class="draw-input" name="name" required placeholder="Pokerdom" />
+            </div>
+            <div class="draw-field">
+              ${drawLabel("link", "Реферальная ссылка")}
+              <input class="draw-input" name="refLink" type="url" placeholder="https://..." required />
+            </div>
+          </div>
+          <div class="draw-block">
+            <div class="draw-field">
+              ${drawLabel("photo", "Лого")}
+              <div class="draw-media-row">
+                <label class="draw-file-btn">
+                  <input id="project-logo-input" name="logo" type="file" accept="image/png,image/svg+xml,image/webp,image/jpeg" />
+                  Файл
+                </label>
+                <div id="project-paste-target" class="draw-paste-btn" contenteditable="true">Вставить</div>
               </div>
-              <button type="submit">Добавить проект</button>
-            </form>
+              <input type="hidden" id="project-clipboard-data" name="logoClipboardData" data-field-name="logoClipboardData" />
+              <img id="project-paste-preview" class="paste-preview" alt="" />
+            </div>
           </div>
-          <div>
-            ${projectsBlocks || `<article class="card"><p>Проектов пока нет.</p></article>`}
+          <div class="project-form-footer">
+            <button type="button" id="project-edit-cancel" class="draw-link-btn project-cancel-btn" style="display:none;">Отмена редактирования</button>
+            <button type="submit" id="project-submit-btn" class="draw-submit">
+              <span class="draw-ico">${renderFormIcon("project")}</span>
+              <span id="project-submit-label">Добавить проект</span>
+            </button>
           </div>
+        </form>
+
+        <div class="projects-list-title">
+          <span class="draw-ico">${renderFormIcon("project")}</span>
+          Мои проекты
+        </div>
+        <div class="projects-list">
+          ${
+            projectsBlocks ||
+            `<div class="projects-empty">
+              <span class="draw-ico">${renderFormIcon("project")}</span>
+              <span>Проектов пока нет — добавьте первый выше</span>
+            </div>`
+          }
         </div>
       </section>
 
       ${
         showAccessPanel
           ? `
-      <section id="accessPanel" class="card panel-hidden">
-        <h2>Управление доступом</h2>
-        <div class="subtitle">Добавляйте Telegram ID пользователей с доступом к панели и админ-командам бота (/create_draw и др.). Только вы (суперадмин) можете менять этот список.</div>
-        <div class="section-title">Суперадмины (.env)</div>
-        ${superAdminLabels || `<p class="hint">SUPER_ADMIN_IDS не задан.</p>`}
-        <div class="section-title">Делегированные админы</div>
-        ${
-          delegatedAdminRows ||
-          `<p class="hint">Пока нет делегированных админов. Добавьте Telegram ID ниже (узнать ID: @userinfobot).</p>`
-        }
-        <form method="post" action="/admin/access" class="access-form">
-          <div class="compact-grid-2">
-            <label>Telegram ID
-              <input name="userId" type="number" min="1" step="1" required placeholder="123456789" />
-            </label>
-            <label>Заметка (необязательно)
-              <input name="label" placeholder="Имя или роль" />
-            </label>
+      <section id="accessPanel" class="card create-panel panel-hidden">
+        <h2 class="create-title">
+          <span class="create-title-icon">${renderFormIcon("confirm")}</span>
+          Доступ
+        </h2>
+
+        <div class="access-list-title">
+          <span class="draw-ico">${renderFormIcon("confirm")}</span>
+          Суперадмины
+        </div>
+        <div class="access-list">
+          ${
+            superAdminLabels ||
+            `<div class="access-empty">
+              <span class="draw-ico">${renderFormIcon("confirm")}</span>
+              <span>SUPER_ADMIN_IDS не задан</span>
+            </div>`
+          }
+        </div>
+
+        <div class="access-list-title">
+          <span class="draw-ico">${renderFormIcon("winners")}</span>
+          Админы
+        </div>
+        <div class="access-list">
+          ${
+            delegatedAdminRows ||
+            `<div class="access-empty">
+              <span class="draw-ico">${renderFormIcon("winners")}</span>
+              <span>Делегированных админов пока нет</span>
+            </div>`
+          }
+        </div>
+
+        <form method="post" action="/admin/access" class="draw-form access-form">
+          <div class="draw-block">
+            <div class="draw-field">
+              ${drawLabel("user", "Telegram")}
+              <input class="draw-input" name="userRef" type="text" required placeholder="@username или 123456789" />
+            </div>
           </div>
-          <button type="submit">Добавить админа</button>
+          <button type="submit" class="draw-submit">
+            <span class="draw-ico">${renderFormIcon("confirm")}</span>
+            Добавить админа
+          </button>
         </form>
       </section>
       `
           : ""
       }
 
-      <section class="card">
-        <h2 class="draw-history-title">История розыгрышей</h2>
-        <div class="subtitle" style="margin-bottom:10px;">Компактная лента с ключевыми данными и быстрыми действиями.</div>
+      </div>
+
+      <section class="card history-section">
+        <h2 class="create-title draw-history-title">
+          <span class="create-title-icon">${renderFormIcon("history")}</span>
+          История розыгрышей
+        </h2>
         <div class="stats-row">
-          <div class="stat-card"><span>Всего</span><b>${drawsStats.total}</b></div>
-          <div class="stat-card"><span>Активных</span><b>${drawsStats.active}</b></div>
-          <div class="stat-card"><span>Запланированных</span><b>${drawsStats.scheduled}</b></div>
-          <div class="stat-card"><span>Завершенных</span><b>${drawsStats.finished}</b></div>
+          <div class="stat-card">
+            <span class="stat-card-label">Всего</span>
+            <span class="stat-card-value">${drawsStats.total}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-card-label">Активных</span>
+            <span class="stat-card-value">${drawsStats.active}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-card-label">Выплачено за ${escapeHtml(drawsStats.monthLabel)}</span>
+            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidThisMonth)}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-card-label">Выплачено за всё время</span>
+            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidAllTime)}</span>
+          </div>
         </div>
       </section>
 
@@ -2129,30 +3879,16 @@ function renderWebPage(draws, message, webUser) {
         ${
           drawBlocks
             ? `<div class="history-list">${drawBlocks}</div>`
-            : `<article class="card"><p>Розыгрышей пока нет.</p></article>`
+            : `<div class="access-empty">
+              <span class="draw-ico">${renderFormIcon("gift")}</span>
+              <span>Розыгрышей пока нет</span>
+            </div>`
         }
       </section>
     </div>
   </div>
   <script>
-    (function () {
-      const tg = window.Telegram?.WebApp;
-      if (!tg) return;
-      tg.ready();
-      tg.expand();
-      document.body.classList.add("telegram-miniapp");
-      if (tg.themeParams?.bg_color) {
-        document.body.style.background = tg.themeParams.bg_color;
-      }
-      if (tg.initData) {
-        fetch("/auth/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initData: tg.initData }),
-          credentials: "same-origin",
-        }).catch(() => {});
-      }
-    })();
+    ${getMiniAppInitScript({ authSession: true, previewShell: WEB_ONLY })}
 
     function setupPasteImage(targetId, hiddenInputId, previewId) {
       const target = document.getElementById(targetId);
@@ -2179,7 +3915,7 @@ function renderWebPage(draws, message, webUser) {
           hiddenInput.value = dataUrl;
           preview.src = dataUrl;
           preview.style.display = "block";
-          target.textContent = "Картинка из буфера вставлена ✅";
+          target.textContent = "✓";
         };
         reader.readAsDataURL(file);
       });
@@ -2242,16 +3978,56 @@ function renderWebPage(draws, message, webUser) {
       const prizeType = document.getElementById("prizeType");
       const moneyFields = document.getElementById("moneyPrizeFields");
       const customFields = document.getElementById("customPrizeFields");
+      const prizeAmountInput = moneyFields?.querySelector('input[name="prizeAmount"]');
       if (!prizeType || !moneyFields || !customFields) return;
 
       function sync() {
-        const isMoney = prizeType.value === "money_rub";
+        const isMoney = prizeType.value === "money_rub" || prizeType.value === "money_usd";
         moneyFields.style.display = isMoney ? "block" : "none";
         customFields.style.display = isMoney ? "none" : "block";
+        if (prizeAmountInput) {
+          prizeAmountInput.placeholder = prizeType.value === "money_usd" ? "500" : "50000";
+        }
       }
 
       prizeType.addEventListener("change", sync);
       sync();
+    }
+
+    function setupPreventNumberWheel() {
+      document.addEventListener(
+        "wheel",
+        (event) => {
+          const target = event.target;
+          if (target instanceof HTMLInputElement && target.type === "number") {
+            event.preventDefault();
+          }
+        },
+        { passive: false, capture: true }
+      );
+    }
+
+    function setupCopyButtons() {
+      document.querySelectorAll(".winner-copy-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const text = btn.getAttribute("data-copy") || "";
+          if (!text) return;
+          try {
+            await navigator.clipboard.writeText(text);
+            btn.title = "Скопировано";
+            setTimeout(() => {
+              btn.title = "Копировать";
+            }, 1500);
+          } catch (error) {
+            const area = document.createElement("textarea");
+            area.value = text;
+            document.body.appendChild(area);
+            area.select();
+            document.execCommand("copy");
+            area.remove();
+          }
+        });
+      });
     }
 
     function setupPublishEndToggles() {
@@ -2262,17 +4038,28 @@ function renderWebPage(draws, message, webUser) {
       if (!publishMode || !publishAtWrap || !endMode || !endAfterWrap) return;
 
       function syncPublish() {
-        publishAtWrap.style.display = publishMode.value === "scheduled" ? "block" : "none";
+        publishAtWrap.classList.toggle("anim-collapse-open", publishMode.value === "scheduled");
       }
 
       function syncEnd() {
-        endAfterWrap.style.display = endMode.value === "scheduled" ? "block" : "none";
+        endAfterWrap.classList.toggle("anim-collapse-open", endMode.value === "scheduled");
       }
 
       publishMode.addEventListener("change", syncPublish);
       endMode.addEventListener("change", syncEnd);
       syncPublish();
       syncEnd();
+    }
+
+    function setupManualChannelToggle() {
+      const btn = document.getElementById("toggleManualChannel");
+      const wrap = document.getElementById("manualChannelWrap");
+      if (!btn || !wrap) return;
+      btn.addEventListener("click", () => {
+        const willOpen = !wrap.classList.contains("anim-collapse-open");
+        wrap.classList.toggle("anim-collapse-open", willOpen);
+        btn.textContent = willOpen ? "Скрыть" : "Другой канал";
+      });
     }
 
     function setupAdminPanels() {
@@ -2284,63 +4071,143 @@ function renderWebPage(draws, message, webUser) {
       const accessPanel = document.getElementById("accessPanel");
       if (!createBtn || !projectsBtn || !createPanel || !projectsPanel) return;
 
+      function getTabButtons() {
+        return [createBtn, projectsBtn, accessBtn].filter(Boolean);
+      }
+
+      function setActiveTab(btn) {
+        for (const item of getTabButtons()) {
+          item.classList.remove("qa-active", "quick-action-primary");
+        }
+        if (btn) {
+          btn.classList.add("qa-active", "quick-action-primary");
+        }
+      }
+
       function closeOtherPanels(exceptPanel) {
         const panels = [
-          { panel: createPanel, btn: createBtn, open: "Скрыть создание розыгрыша", closed: "Создать розыгрыш" },
-          { panel: projectsPanel, btn: projectsBtn, open: "Скрыть управление проектами", closed: "Управление проектами" },
+          { panel: createPanel, btn: createBtn },
+          { panel: projectsPanel, btn: projectsBtn },
         ];
         if (accessPanel && accessBtn) {
-          panels.push({ panel: accessPanel, btn: accessBtn, open: "Скрыть управление доступом", closed: "Управление доступом" });
+          panels.push({ panel: accessPanel, btn: accessBtn });
         }
         for (const item of panels) {
           if (item.panel === exceptPanel) continue;
           item.panel.classList.add("panel-hidden");
-          item.btn.textContent = item.closed;
         }
       }
 
-      createBtn.addEventListener("click", () => {
-        const willOpen = createPanel.classList.contains("panel-hidden");
-        createPanel.classList.toggle("panel-hidden");
+      function togglePanel(panel, btn) {
+        const willOpen = panel.classList.contains("panel-hidden");
+        panel.classList.toggle("panel-hidden");
         if (willOpen) {
-          closeOtherPanels(createPanel);
-          createBtn.textContent = "Скрыть создание розыгрыша";
+          closeOtherPanels(panel);
+          setActiveTab(btn);
         } else {
-          createBtn.textContent = "Создать розыгрыш";
+          setActiveTab(null);
         }
-      });
+      }
 
-      projectsBtn.addEventListener("click", () => {
-        const willOpen = projectsPanel.classList.contains("panel-hidden");
-        projectsPanel.classList.toggle("panel-hidden");
-        if (willOpen) {
-          closeOtherPanels(projectsPanel);
-          projectsBtn.textContent = "Скрыть управление проектами";
-        } else {
-          projectsBtn.textContent = "Управление проектами";
-        }
-      });
-
+      createBtn.addEventListener("click", () => togglePanel(createPanel, createBtn));
+      projectsBtn.addEventListener("click", () => togglePanel(projectsPanel, projectsBtn));
       if (accessPanel && accessBtn) {
-        accessBtn.addEventListener("click", () => {
-          const willOpen = accessPanel.classList.contains("panel-hidden");
-          accessPanel.classList.toggle("panel-hidden");
-          if (willOpen) {
-            closeOtherPanels(accessPanel);
-            accessBtn.textContent = "Скрыть управление доступом";
-          } else {
-            accessBtn.textContent = "Управление доступом";
+        accessBtn.addEventListener("click", () => togglePanel(accessPanel, accessBtn));
+      }
+    }
+
+    function setupProjectFormEdit() {
+      const form = document.getElementById("create-project-form");
+      const cancelBtn = document.getElementById("project-edit-cancel");
+      const submitLabel = document.getElementById("project-submit-label");
+      const submitBtn = document.getElementById("project-submit-btn");
+      const nameInput = form?.querySelector('[name="name"]');
+      const refInput = form?.querySelector('[name="refLink"]');
+      const logoInput = document.getElementById("project-logo-input");
+      const clipboardInput = document.getElementById("project-clipboard-data");
+      const pastePreview = document.getElementById("project-paste-preview");
+      if (!form || !cancelBtn || !submitLabel || !nameInput || !refInput) return;
+
+      function resetProjectForm() {
+        form.action = "/projects";
+        nameInput.value = "";
+        refInput.value = "";
+        if (logoInput) logoInput.value = "";
+        if (clipboardInput) {
+          clipboardInput.value = "";
+          clipboardInput.removeAttribute("name");
+        }
+        if (pastePreview) {
+          pastePreview.style.display = "none";
+          pastePreview.removeAttribute("src");
+        }
+        cancelBtn.style.display = "none";
+        submitLabel.textContent = "Добавить проект";
+        if (submitBtn) {
+          submitBtn.querySelector(".draw-ico").innerHTML = ${JSON.stringify(renderFormIcon("project"))};
+        }
+      }
+
+      document.querySelectorAll(".project-edit-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const projectId = btn.dataset.projectId || "";
+          if (!projectId) return;
+          form.action = "/projects/" + encodeURIComponent(projectId) + "/update";
+          nameInput.value = btn.dataset.projectName || "";
+          refInput.value = btn.dataset.projectRef || "";
+          if (logoInput) logoInput.value = "";
+          if (clipboardInput) {
+            clipboardInput.value = "";
+            clipboardInput.removeAttribute("name");
+          }
+          if (pastePreview) {
+            pastePreview.style.display = "none";
+            pastePreview.removeAttribute("src");
+          }
+          cancelBtn.style.display = "";
+          submitLabel.textContent = "Сохранить";
+          if (submitBtn) {
+            submitBtn.querySelector(".draw-ico").innerHTML = ${JSON.stringify(renderFormIcon("edit"))};
+          }
+          form.scrollIntoView({ behavior: "smooth", block: "start" });
+          nameInput.focus();
+        });
+      });
+
+      document.querySelectorAll(".project-delete-btn").forEach((btn) => {
+        btn.addEventListener("click", (event) => {
+          const name = btn.dataset.projectName || "проект";
+          if (!confirm("Удалить проект «" + name + "»?")) {
+            event.preventDefault();
           }
         });
-      }
+      });
+
+      cancelBtn.addEventListener("click", resetProjectForm);
+    }
+
+    function setupAccessDeleteButtons() {
+      document.querySelectorAll(".access-delete-btn").forEach((btn) => {
+        btn.addEventListener("click", (event) => {
+          const name = btn.dataset.accessName || "админа";
+          if (!confirm("Удалить доступ у «" + name + "»?")) {
+            event.preventDefault();
+          }
+        });
+      });
     }
 
     setupPasteImage("draw-paste-target", "draw-clipboard-data", "draw-paste-preview");
     setupPasteImage("project-paste-target", "project-clipboard-data", "project-paste-preview");
     setupClipboardSubmit("create-draw-form", "draw-clipboard-data", "draw-image-input", "pasted-draw");
     setupClipboardSubmit("create-project-form", "project-clipboard-data", "project-logo-input", "pasted-logo");
+    setupProjectFormEdit();
+    setupAccessDeleteButtons();
     setupPrizeTypeToggle();
+    setupPreventNumberWheel();
+    setupCopyButtons();
     setupPublishEndToggles();
+    setupManualChannelToggle();
     setupAdminPanels();
   </script>
 </body>
@@ -2387,6 +4254,20 @@ const upload = multer({
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(webAuth.attachUser);
+app.get("/brand/logo.jpg", (req, res) => {
+  if (!fs.existsSync(BRAND_LOGO_FILE)) {
+    res.status(404).end();
+    return;
+  }
+  res.sendFile(BRAND_LOGO_FILE);
+});
+app.get("/brand/background.jpg", (req, res) => {
+  if (!fs.existsSync(BRAND_BACKGROUND_FILE)) {
+    res.status(404).end();
+    return;
+  }
+  res.sendFile(BRAND_BACKGROUND_FILE);
+});
 app.use("/uploads", webAuth.requireAuth, requireOrganizer, express.static(UPLOADS_DIR));
 
 app.post("/auth/session", (req, res) => {
@@ -2419,6 +4300,8 @@ registerJoinMiniApp(app, {
   upsertUserMeta,
   addUserToDraw,
   ASSETS_DIR,
+  BOT_USERNAME,
+  designPreview: WEB_ONLY,
 });
 
 app.get("/", webAuth.requireAuth, (req, res) => {
@@ -2434,13 +4317,24 @@ app.get("/", webAuth.requireAuth, (req, res) => {
   res.type("html").send(renderWebPage(draws, req.query.msg, req.webUser));
 });
 
-app.post("/admin/access", webAuth.requireAuth, requireOrganizer, requireSuperAdmin, (req, res) => {
-  const result = addDelegatedAdmin(req.body?.userId, req.body?.label, req.webUser.id);
+app.post("/admin/access", webAuth.requireAuth, requireOrganizer, requireSuperAdmin, async (req, res) => {
+  const resolved = await resolveTelegramUser(req.body?.userRef || req.body?.userId);
+  if (!resolved.ok) {
+    redirectWithMessage(res, resolved.error);
+    return;
+  }
+  const result = addDelegatedAdmin(resolved.user, req.body?.label, req.webUser.id);
   if (!result.ok) {
     redirectWithMessage(res, result.error);
     return;
   }
-  redirectWithMessage(res, `Админ ${req.body.userId} добавлен.`);
+  await enrichUserAvatar(resolved.user.id);
+  const display =
+    resolved.user.username
+      ? `@${resolved.user.username}`
+      : [resolved.user.first_name, resolved.user.last_name].filter(Boolean).join(" ").trim() ||
+        String(resolved.user.id);
+  redirectWithMessage(res, `Админ ${display} добавлен.`);
 });
 
 app.post(
@@ -2494,22 +4388,47 @@ app.get("/avatar/:userId", webAuth.requireAuth, requireOrganizer, async (req, re
   }
 });
 
-app.post("/projects", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
-  const ownerId = req.webUser.id;
+function deleteProjectLogoFile(logoPath) {
+  if (!logoPath) return;
+  try {
+    const resolved = path.isAbsolute(logoPath) ? logoPath : path.join(UPLOADS_DIR, path.basename(logoPath));
+    if (fs.existsSync(resolved)) {
+      fs.unlinkSync(resolved);
+    }
+  } catch {
+    // ignore cleanup errors
+  }
+}
+
+function parseProjectFormBody(req) {
   const body = req.body || {};
   const name = (body.name || "").trim();
   const refLink = (body.refLink || "").trim();
   const logoClipboardData = (body.logoClipboardData || "").trim();
+  return { name, refLink, logoClipboardData };
+}
+
+function resolveProjectLogoUpload(req, logoClipboardData, previousLogoPath = "") {
+  let logoPath = req.file ? req.file.path : "";
+  if (!logoPath && logoClipboardData) {
+    logoPath = saveClipboardImage(logoClipboardData, "project_logo");
+  }
+  if (logoPath && previousLogoPath && logoPath !== previousLogoPath) {
+    deleteProjectLogoFile(previousLogoPath);
+  }
+  return logoPath || previousLogoPath;
+}
+
+app.post("/projects", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
+  const ownerId = req.webUser.id;
+  const { name, refLink, logoClipboardData } = parseProjectFormBody(req);
 
   if (!name || !refLink) {
     redirectWithMessage(res, "Укажите название проекта и реф-ссылку.");
     return;
   }
 
-  let logoPath = req.file ? req.file.path : "";
-  if (!logoPath && logoClipboardData) {
-    logoPath = saveClipboardImage(logoClipboardData, "project_logo");
-  }
+  const logoPath = resolveProjectLogoUpload(req, logoClipboardData);
 
   const projectsData = readProjects();
   projectsData.projects.push({
@@ -2525,6 +4444,55 @@ app.post("/projects", webAuth.requireAuth, requireOrganizer, upload.single("logo
   redirectWithMessage(res, "Проект добавлен.");
 });
 
+app.post("/projects/:projectId/update", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
+  const ownerId = req.webUser.id;
+  const projectId = (req.params.projectId || "").trim();
+  const project = getProjectById(projectId, ownerId);
+  if (!project) {
+    redirectWithMessage(res, "Проект не найден.");
+    return;
+  }
+
+  const { name, refLink, logoClipboardData } = parseProjectFormBody(req);
+  if (!name || !refLink) {
+    redirectWithMessage(res, "Укажите название проекта и реф-ссылку.");
+    return;
+  }
+
+  const projectsData = readProjects();
+  const index = projectsData.projects.findIndex((item) => item.id === projectId);
+  if (index < 0) {
+    redirectWithMessage(res, "Проект не найден.");
+    return;
+  }
+
+  const logoPath = resolveProjectLogoUpload(req, logoClipboardData, project.logoPath || "");
+  projectsData.projects[index] = {
+    ...projectsData.projects[index],
+    name,
+    refLink,
+    logoPath,
+  };
+  writeProjects(projectsData);
+  redirectWithMessage(res, "Проект обновлён.");
+});
+
+app.post("/projects/:projectId/delete", webAuth.requireAuth, requireOrganizer, (req, res) => {
+  const ownerId = req.webUser.id;
+  const projectId = (req.params.projectId || "").trim();
+  const project = getProjectById(projectId, ownerId);
+  if (!project) {
+    redirectWithMessage(res, "Проект не найден.");
+    return;
+  }
+
+  const projectsData = readProjects();
+  projectsData.projects = projectsData.projects.filter((item) => item.id !== projectId);
+  writeProjects(projectsData);
+  deleteProjectLogoFile(project.logoPath);
+  redirectWithMessage(res, "Проект удалён.");
+});
+
 app.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image"), async (req, res) => {
   try {
     const ownerId = req.webUser.id;
@@ -2533,9 +4501,11 @@ app.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image")
     const selectedChannelId = (body.knownChannelId || "").trim();
     const channelId = selectedChannelId || manualChannelId;
     const projectId = (body.projectId || "").trim();
-    const prizeType = body.prizeType === "custom" ? "custom" : "money_rub";
-    const prizeAmountRubRaw = String(body.prizeAmountRub || "").replace(/\s+/g, "");
-    const prizeAmountRub = Number(prizeAmountRubRaw);
+    const prizeTypeRaw = body.prizeType || "money_rub";
+    const prizeType =
+      prizeTypeRaw === "custom" ? "custom" : prizeTypeRaw === "money_usd" ? "money_usd" : "money_rub";
+    const prizeAmountRaw = String(body.prizeAmount || body.prizeAmountRub || "").replace(/\s+/g, "");
+    const prizeAmount = Number(prizeAmountRaw);
     const prizeCustomText = (body.prizeCustomText || "").trim();
     const imageClipboardData = (body.imageClipboardData || "").trim();
     const endAfterValue = Number(body.endAfterValue);
@@ -2552,11 +4522,17 @@ app.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image")
 
     let prize = "";
     if (prizeType === "money_rub") {
-      if (!Number.isFinite(prizeAmountRub) || prizeAmountRub <= 0) {
+      if (!Number.isFinite(prizeAmount) || prizeAmount <= 0) {
         redirectWithMessage(res, "Для денежного приза укажите корректную сумму в рублях.");
         return;
       }
-      prize = formatRubAmount(prizeAmountRub);
+      prize = formatRubAmount(prizeAmount);
+    } else if (prizeType === "money_usd") {
+      if (!Number.isFinite(prizeAmount) || prizeAmount <= 0) {
+        redirectWithMessage(res, "Для денежного приза укажите корректную сумму в долларах.");
+        return;
+      }
+      prize = formatUsdAmount(prizeAmount);
     } else {
       if (!prizeCustomText) {
         redirectWithMessage(res, "Для типа приза «Другое» укажите описание.");
@@ -2644,7 +4620,8 @@ app.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image")
       channelId,
       prizeType,
       prize,
-      prizeAmountRub: prizeType === "money_rub" ? Math.floor(prizeAmountRub) : null,
+      prizeAmountRub: prizeType === "money_rub" ? Math.floor(prizeAmount) : null,
+      prizeAmountUsd: prizeType === "money_usd" ? Math.floor(prizeAmount) : null,
       imagePath: drawImagePath,
       publishAt: publishAtISO,
       endAt: endAtISO,
@@ -3372,14 +5349,33 @@ bot.catch((error) => {
   console.error("Ошибка бота:", error);
 });
 
-setInterval(async () => {
-  await schedulerTick();
-}, CHECK_INTERVAL_MS);
+if (!WEB_ONLY) {
+  setInterval(async () => {
+    await schedulerTick();
+  }, CHECK_INTERVAL_MS);
+}
+
+function printDesignPreviewUrls() {
+  const base = `http://localhost:${WEB_PORT}`;
+  console.log("");
+  console.log("Режим WEB_ONLY — только веб для дизайна (бот не запущен).");
+  console.log(`  Панель:        ${base}/`);
+  console.log(`  Join Mini App: ${base}/dev/preview/join`);
+  console.log(`  Gate:          ${base}/dev/preview/gate`);
+  console.log("");
+}
 
 async function bootstrap() {
   ensureStorage();
   migrateLegacyOwnership();
   await ensureBotUsername();
+
+  if (WEB_ONLY) {
+    app.listen(WEB_PORT, "0.0.0.0", () => {
+      printDesignPreviewUrls();
+    });
+    return;
+  }
 
   const panelUrl = WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`;
   if (WEB_PUBLIC_URL.startsWith("https://")) {
@@ -3409,5 +5405,7 @@ bootstrap().catch((error) => {
   process.exit(1);
 });
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+if (!WEB_ONLY) {
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+}

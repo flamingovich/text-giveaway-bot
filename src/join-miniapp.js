@@ -1,4 +1,5 @@
 const express = require("express");
+const { getMiniAppStyles, getMiniAppInitScript } = require("./miniapp-ui");
 
 function escapeHtml(value) {
   return String(value || "")
@@ -7,6 +8,26 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function renderDesignBanner() {
+  return "";
+}
+
+function renderDesignBannerStyles() {
+  return `
+    .design-banner {
+      background: #fff8e6;
+      border: 1px solid #ffe2a8;
+      color: #6a4f00;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px 14px;
+      border-radius: 12px;
+      margin-bottom: 14px;
+      text-align: center;
+    }
+  `;
 }
 
 function renderOrganizerGatePage(botUsername) {
@@ -47,9 +68,12 @@ function renderOrganizerGatePage(botUsername) {
       font-size: 14px;
       color: #6a4f00;
     }
+    ${renderDesignBannerStyles()}
+    ${getMiniAppStyles()}
   </style>
 </head>
 <body>
+  ${renderDesignBanner()}
   <div class="card">
     <h1>🎯 Панель организатора</h1>
     <p>Эта панель только для владельцев каналов, которые проводят розыgрыши.</p>
@@ -63,8 +87,7 @@ function renderOrganizerGatePage(botUsername) {
     </div>
   </div>
   <script>
-    const tg = window.Telegram?.WebApp;
-    if (tg) { tg.ready(); tg.expand(); }
+    ${getMiniAppInitScript({ authSession: false, previewShell: process.env.WEB_ONLY === "true" })}
   </script>
 </body>
 </html>`;
@@ -167,9 +190,35 @@ function renderJoinPage(drawId, draw, project) {
     .msg.ok { background: #ebfff1; color: var(--ok); border: 1px solid #a7e6bc; }
     .hidden { display: none !important; }
     .loading { text-align: center; color: var(--sub); padding: 24px; }
+    ${renderDesignBannerStyles()}
+    .preview-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .preview-nav button {
+      width: auto;
+      flex: 1 1 auto;
+      min-width: 72px;
+      padding: 8px 10px;
+      font-size: 12px;
+      background: #fff;
+      border: 1px solid #cfd8ef;
+      color: #334;
+    }
+    .preview-nav button.active {
+      background: #eef2ff;
+      border-color: #8fa8ff;
+      color: #2d49cc;
+    }
+    ${renderDesignBannerStyles()}
+    ${getMiniAppStyles()}
   </style>
 </head>
 <body>
+  ${renderDesignBanner()}
+  <div id="previewNav" class="preview-nav hidden"></div>
   <div class="hero">
     <h1>🎁 ${prize}</h1>
     <p>Проект: ${projectName}</p>
@@ -228,13 +277,9 @@ function renderJoinPage(drawId, draw, project) {
   </div>
 
   <script>
+    ${getMiniAppInitScript({ authSession: false, previewShell: process.env.WEB_ONLY === "true" })}
     const DRAW_ID = ${JSON.stringify(drawId)};
     const tg = window.Telegram?.WebApp;
-    if (tg) {
-      tg.ready();
-      tg.expand();
-      document.body.style.background = tg.themeParams?.bg_color || "";
-    }
 
     function initData() {
       return tg?.initData || "";
@@ -388,6 +433,39 @@ function renderJoinPage(drawId, draw, project) {
     });
 
     (async () => {
+      if (DRAW_ID === "preview") {
+        document.getElementById("loading").classList.add("hidden");
+        const nav = document.getElementById("previewNav");
+        nav.classList.remove("hidden");
+        const steps = [
+          { id: "captcha", label: "Капча" },
+          { id: "registration", label: "Рег." },
+          { id: "referral", label: "Реф" },
+          { id: "nickname", label: "Ник" },
+          { id: "trc20", label: "TRC-20" },
+          { id: "done", label: "Готово" },
+        ];
+        steps.forEach(({ id, label }) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = label;
+          btn.addEventListener("click", () => {
+            nav.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            if (id === "captcha") {
+              renderCaptcha({ a: 4, b: 7, options: [10, 11, 12] });
+            }
+            if (id === "done") {
+              document.getElementById("doneText").textContent = "Вы участвуете ✅";
+            }
+            showStep(id);
+          });
+          nav.appendChild(btn);
+        });
+        nav.querySelector("button")?.click();
+        return;
+      }
+
       if (!initData()) {
         document.getElementById("loading").classList.add("hidden");
         showMessage("Откройте участие через кнопку в Telegram.");
@@ -673,6 +751,27 @@ function registerJoinMiniApp(app, deps) {
       }),
     );
   });
+
+  if (deps.designPreview) {
+    const mockDraw = {
+      id: "preview",
+      prize: "50 000 ₽",
+      status: DRAW_STATUS.ACTIVE,
+      projectId: "demo",
+    };
+    const mockProject = {
+      name: "Demo Project",
+      refLink: "https://example.com/ref",
+    };
+
+    app.get("/dev/preview/join", (_req, res) => {
+      res.type("html").send(renderJoinPage("preview", mockDraw, mockProject));
+    });
+
+    app.get("/dev/preview/gate", (_req, res) => {
+      res.type("html").send(renderOrganizerGatePage(deps.BOT_USERNAME || "bot"));
+    });
+  }
 }
 
 module.exports = { renderOrganizerGatePage, registerJoinMiniApp };
