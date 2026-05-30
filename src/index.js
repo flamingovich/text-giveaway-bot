@@ -10,6 +10,7 @@ const { Telegraf, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
 const { createWebAuth, validateInitData, renderLoginPage } = require("./web-auth");
 const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp");
+const { registerWinnersMiniApp } = require("./winners-miniapp");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta } = require("./miniapp-ui");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -29,6 +30,8 @@ const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
 const PANEL_BASE = "/panel";
 const WEB_ONLY = process.env.WEB_ONLY === "true";
 const WEB_AUTH_DISABLED = process.env.WEB_AUTH_DISABLED === "true" || WEB_ONLY;
+const RECAPTCHA_SITE_KEY = process.env.RECAPTCHA_SITE_KEY || "";
+const RECAPTCHA_SECRET_KEY = process.env.RECAPTCHA_SECRET_KEY || "";
 let BOT_USERNAME = (process.env.BOT_USERNAME || "").replace("@", "");
 const TRC20_GUIDE_IMAGES = [
   path.join(__dirname, "..", "assets", "trc20-guide", "step-1.png"),
@@ -973,6 +976,25 @@ function getJoinWebAppUrl(drawId) {
   return `${WEB_PUBLIC_URL}/join/${encodeURIComponent(drawId)}`;
 }
 
+function getWinnersWebAppUrl(drawId) {
+  const base = (WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`).replace(/\/$/, "");
+  return `${base}/winners/${encodeURIComponent(drawId)}`;
+}
+
+function getWinnersDeepLink(drawId) {
+  if (!BOT_USERNAME) {
+    return "";
+  }
+  return `https://t.me/${BOT_USERNAME}?start=winners_${drawId}`;
+}
+
+function getWinnersChannelUrl(drawId) {
+  if (WEB_PUBLIC_URL.startsWith("https://")) {
+    return getWinnersWebAppUrl(drawId);
+  }
+  return getWinnersDeepLink(drawId);
+}
+
 function getPanelUrl() {
   const base = (WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`).replace(/\/$/, "");
   return `${base}${PANEL_BASE}`;
@@ -1047,9 +1069,12 @@ function getJoinDeepLink(drawId) {
 function getFinishedKeyboard(draw) {
   const prizeText = String(draw?.prize || "").trim();
   const shortPrize = prizeText.length > 24 ? `${prizeText.slice(0, 24)}...` : prizeText;
-  return Markup.inlineKeyboard([
-    Markup.button.callback(`Розыгрыш на ${shortPrize || "приз"} завершен`, "draw_finished"),
-  ]);
+  const text = `Розыгрыш на ${shortPrize || "приз"} завершен`;
+  const url = getWinnersChannelUrl(draw.id);
+  if (url) {
+    return Markup.inlineKeyboard([Markup.button.url(text, url)]);
+  }
+  return Markup.inlineKeyboard([Markup.button.callback(text, `winners:${draw.id}`)]);
 }
 
 async function publishDraw(draw) {
@@ -1640,6 +1665,51 @@ async function addUserToDraw(drawId, userId) {
   };
 }
 
+function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
+  if (!projectId) {
+    return false;
+  }
+  const data = readData();
+  return data.draws.some(
+    (draw) =>
+      draw.projectId === projectId &&
+      (excludeDrawId ? draw.id !== excludeDrawId : true) &&
+      (draw.participantIds || []).includes(userId),
+  );
+}
+
+async function tryAutoJoinDraw(draw, userId) {
+  if (draw.participantIds.includes(userId)) {
+    return { joined: true, already: true, message: "Вы уже участвуете!" };
+  }
+
+  if (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) {
+    const result = await addUserToDraw(draw.id, userId);
+    return {
+      joined: true,
+      already: Boolean(result.already),
+      message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+      messageHtml: result.messageHtml,
+    };
+  }
+
+  const profile = getUserProjectProfile(userId, draw.projectId);
+  const canSkip =
+    !draw.projectId ||
+    ((profile?.referralVerified || profile?.selfReportedNonReferral) && profile?.trc20Address);
+  if (canSkip) {
+    const result = await addUserToDraw(draw.id, userId);
+    return {
+      joined: true,
+      already: Boolean(result.already),
+      message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+      messageHtml: result.messageHtml,
+    };
+  }
+
+  return { joined: false };
+}
+
 async function sendCaptchaStep(ctx, session) {
   const task = buildCaptchaTask();
   session.step = "captcha";
@@ -1732,6 +1802,25 @@ async function sendTrc20Step(ctx, session) {
   setJoinSession(ctx.from.id, session);
 }
 
+async function startWinnersFlow(ctx, drawId) {
+  if (ctx.chat?.type !== "private") {
+    await ctx.reply("Откройте личный чат с ботом.");
+    return;
+  }
+
+  const data = readData();
+  const draw = data.draws.find((item) => item.id === drawId);
+  if (!draw || draw.status !== DRAW_STATUS.FINISHED) {
+    await ctx.reply("Розыgрыш не найден или ещё не завершён.");
+    return;
+  }
+
+  await ctx.reply(
+    "Нажмите кнопку ниже, чтобы посмотреть победителей.",
+    Markup.inlineKeyboard([Markup.button.webApp("🥳 Победители", getWinnersWebAppUrl(drawId))]),
+  );
+}
+
 async function startJoinFlow(ctx, drawId) {
   upsertUserMeta(ctx.from);
 
@@ -1752,33 +1841,21 @@ async function startJoinFlow(ctx, drawId) {
     return;
   }
 
+  const autoJoin = await tryAutoJoinDraw(draw, ctx.from.id);
+  if (autoJoin.joined) {
+    if (autoJoin.messageHtml) {
+      await ctx.reply(autoJoin.messageHtml, { parse_mode: "HTML" });
+    } else {
+      await ctx.reply(autoJoin.message || "Вы участвуете ✅");
+    }
+    return;
+  }
+
   if (WEB_PUBLIC_URL.startsWith("https://")) {
     await ctx.reply(
       "Нажмите кнопку ниже, чтобы пройти участие.",
       Markup.inlineKeyboard([Markup.button.webApp("🎁 Участвовать", getJoinWebAppUrl(drawId))]),
     );
-    return;
-  }
-
-  if (!draw.projectId) {
-    const result = await addUserToDraw(draw.id, ctx.from.id);
-    if (result.messageHtml) {
-      await ctx.reply(result.messageHtml, { parse_mode: "HTML" });
-    } else {
-      await ctx.reply(result.cbMessage || "Вы участвуете ✅");
-    }
-    return;
-  }
-
-  const profile = getUserProjectProfile(ctx.from.id, draw.projectId);
-  const canSkipVerification = profile?.referralVerified || profile?.selfReportedNonReferral;
-  if (canSkipVerification && profile?.trc20Address) {
-    const result = await addUserToDraw(draw.id, ctx.from.id);
-    if (result.messageHtml) {
-      await ctx.reply(result.messageHtml, { parse_mode: "HTML" });
-    } else {
-      await ctx.reply(result.cbMessage || "Вы участвуете ✅");
-    }
     return;
   }
 
@@ -2400,7 +2477,21 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
                   <div class="history-subtitle">Проект: ${escapeHtml(project?.name || "не указан")}</div>
                 </div>
               </div>
-              <span class="history-status status-${escapeHtml(draw.status)}">${escapeHtml(statusLabel)}</span>
+              <div class="history-head-actions">
+                <span class="history-status status-${escapeHtml(draw.status)}">${escapeHtml(statusLabel)}</span>
+                ${
+                  draw.status !== DRAW_STATUS.ACTIVE
+                    ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/delete" class="project-delete-form draw-delete-form">
+                        <button
+                          type="submit"
+                          class="project-icon-btn project-delete-btn draw-delete-btn"
+                          title="Удалить розыгрыш"
+                          data-draw-prize="${escapeHtml(draw.prize)}"
+                        >${renderFormIcon("delete")}</button>
+                      </form>`
+                    : ""
+                }
+              </div>
             </div>
             <div class="history-head-divider" aria-hidden="true"></div>
           </div>
@@ -3893,9 +3984,27 @@ function renderWebPage(draws, message, webUser) {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .history-status {
+    .history-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
       flex-shrink: 0;
       margin-top: 1px;
+    }
+    .draw-delete-form {
+      margin: 0;
+      display: inline-flex;
+    }
+    .draw-delete-btn {
+      width: 28px;
+      height: 28px;
+    }
+    .draw-delete-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+    .history-status {
+      flex-shrink: 0;
       font-size: 11px;
       font-weight: 700;
       padding: 4px 8px;
@@ -5093,10 +5202,19 @@ function renderWebPage(draws, message, webUser) {
         });
       });
 
-      document.querySelectorAll(".project-delete-btn").forEach((btn) => {
+      document.querySelectorAll(".project-delete-btn:not(.draw-delete-btn)").forEach((btn) => {
         btn.addEventListener("click", (event) => {
           const name = btn.dataset.projectName || "проект";
           if (!confirm("Удалить проект «" + name + "»?")) {
+            event.preventDefault();
+          }
+        });
+      });
+
+      document.querySelectorAll(".draw-delete-btn").forEach((btn) => {
+        btn.addEventListener("click", (event) => {
+          const prize = btn.dataset.drawPrize || "розыгрыш";
+          if (!confirm("Удалить розыгрыш «" + prize + "»?")) {
             event.preventDefault();
           }
         });
@@ -5326,7 +5444,6 @@ registerJoinMiniApp(app, {
   readProjects,
   getProjectById,
   DRAW_STATUS,
-  buildCaptchaTask,
   joinSessions,
   getUserProjectProfile,
   setUserProjectProfile,
@@ -5334,6 +5451,20 @@ registerJoinMiniApp(app, {
   addUserToDraw,
   ASSETS_DIR,
   BOT_USERNAME,
+  designPreview: WEB_ONLY,
+  RECAPTCHA_SITE_KEY,
+  RECAPTCHA_SECRET_KEY,
+});
+
+registerWinnersMiniApp(app, {
+  readData,
+  DRAW_STATUS,
+  readUserProjectProfiles,
+  getUserProfileBundle,
+  getWinnerDisplayName,
+  getWinnerPayoutText,
+  getTelegramUserProfileUrl,
+  bot: WEB_ONLY ? null : bot,
   designPreview: WEB_ONLY,
 });
 
@@ -5863,6 +5994,37 @@ panelRouter.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer,
   }
 });
 
+panelRouter.post("/draws/:id/delete", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+  const data = readData();
+  const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
+
+  if (!draw) {
+    redirectWithMessage(res, "Розыгрыш не найден.");
+    return;
+  }
+
+  if (draw.status === DRAW_STATUS.ACTIVE) {
+    redirectWithMessage(res, "Нельзя удалить активный розыгрыш. Сначала завершите его.");
+    return;
+  }
+
+  if (draw.messageId && draw.channelId) {
+    await safeDeleteMessage(draw.channelId, draw.messageId);
+  }
+
+  if (draw.imagePath && fs.existsSync(draw.imagePath)) {
+    try {
+      fs.unlinkSync(draw.imagePath);
+    } catch (error) {
+      console.warn("Не удалось удалить файл обложки розыгрыша:", error.message);
+    }
+  }
+
+  data.draws = data.draws.filter((item) => item.id !== draw.id);
+  writeData(data);
+  redirectWithMessage(res, "Розыгрыш удалён.");
+});
+
 panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
@@ -6027,6 +6189,12 @@ bot.start(async (ctx) => {
   if (payload.startsWith("join_")) {
     const drawId = payload.replace(/^join_/, "");
     await startJoinFlow(ctx, drawId);
+    return;
+  }
+
+  if (payload.startsWith("winners_")) {
+    const drawId = payload.replace(/^winners_/, "");
+    await startWinnersFlow(ctx, drawId);
     return;
   }
 
@@ -6360,13 +6528,9 @@ bot.action(/^join:(.+)$/, async (ctx) => {
     return;
   }
 
-  const profile = getUserProjectProfile(ctx.from.id, draw.projectId);
-  const hasReadyProfile =
-    !draw.projectId || ((profile?.referralVerified || profile?.selfReportedNonReferral) && profile?.trc20Address);
-
-  if (hasReadyProfile) {
-    const result = await addUserToDraw(drawId, ctx.from.id);
-    await ctx.answerCbQuery(result.cbMessage || "Вы участвуете ✅", { show_alert: true });
+  const autoJoin = await tryAutoJoinDraw(draw, ctx.from.id);
+  if (autoJoin.joined) {
+    await ctx.answerCbQuery(autoJoin.message || "Вы участвуете ✅", { show_alert: true });
     return;
   }
 
@@ -6399,8 +6563,19 @@ bot.action(/^join:(.+)$/, async (ctx) => {
   }
 });
 
+bot.action(/^winners:(.+)$/, async (ctx) => {
+  const drawId = ctx.match[1];
+  const url = getWinnersChannelUrl(drawId);
+  if (WEB_PUBLIC_URL.startsWith("https://") && url.startsWith("https://")) {
+    await ctx.answerCbQuery({ url });
+    return;
+  }
+  await ctx.answerCbQuery();
+  await startWinnersFlow(ctx, drawId);
+});
+
 bot.action("draw_finished", async (ctx) => {
-  await ctx.answerCbQuery("Розыгрыш уже завершен.");
+  await ctx.answerCbQuery("Нажмите кнопку «завершен» в посте — она откроет список победителей.");
 });
 
 bot.action(/^jp:cap:(\d+)$/, async (ctx) => {
@@ -6595,6 +6770,7 @@ function printDesignPreviewUrls() {
   console.log(`  Сайт:          ${base}/`);
   console.log(`  Панель:        ${base}${PANEL_BASE}`);
   console.log(`  Join Mini App: ${base}/dev/preview/join`);
+  console.log(`  Winners:       ${base}/dev/preview/winners`);
   console.log(`  Gate:          ${base}/dev/preview/gate`);
   console.log("");
 }
