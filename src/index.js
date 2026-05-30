@@ -7,6 +7,7 @@ const multer = require("multer");
 const QRCode = require("qrcode");
 const { Telegraf, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
+const { createWebAuth, validateInitData } = require("./web-auth");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -17,6 +18,7 @@ const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
+const WEB_AUTH_DISABLED = process.env.WEB_AUTH_DISABLED === "true";
 let BOT_USERNAME = (process.env.BOT_USERNAME || "").replace("@", "");
 const TRC20_GUIDE_IMAGES = [
   path.join(__dirname, "..", "assets", "trc20-guide", "step-1.png"),
@@ -39,6 +41,14 @@ if (ADMIN_IDS.length === 0 || ADMIN_IDS.every((id) => id === 123456789)) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
+const webAuth = createWebAuth({
+  botToken: BOT_TOKEN,
+  disabled: WEB_AUTH_DISABLED,
+  cookieSecure: WEB_PUBLIC_URL.startsWith("https://"),
+  defaultUserId: ADMIN_IDS[0],
+  botUsername: BOT_USERNAME,
+  publicUrl: WEB_PUBLIC_URL,
+});
 const app = express();
 const DATA_DIR = path.join(__dirname, "..", "data");
 const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
@@ -119,15 +129,118 @@ function writeUserProjectProfiles(data) {
   fs.writeFileSync(USER_PROJECT_PROFILES_FILE, JSON.stringify(data, null, 2), "utf8");
 }
 
-function getProjectById(projectId) {
+function getDefaultOwnerId() {
+  return ADMIN_IDS[0];
+}
+
+function itemBelongsToOwner(item, ownerId) {
+  const expected = Number(ownerId);
+  const actual = item?.ownerId != null ? Number(item.ownerId) : getDefaultOwnerId();
+  return actual === expected;
+}
+
+function filterByOwner(items, ownerId) {
+  return (items || []).filter((item) => itemBelongsToOwner(item, ownerId));
+}
+
+function migrateLegacyOwnership() {
+  const owner = getDefaultOwnerId();
+  let changed = false;
+
+  const projectsData = readProjects();
+  for (const project of projectsData.projects) {
+    if (project.ownerId == null) {
+      project.ownerId = owner;
+      changed = true;
+    }
+  }
+  if (changed) {
+    writeProjects(projectsData);
+  }
+
+  changed = false;
+  const drawsData = readData();
+  for (const draw of drawsData.draws) {
+    if (draw.ownerId == null) {
+      draw.ownerId = draw.createdBy != null ? Number(draw.createdBy) : owner;
+      changed = true;
+    }
+  }
+  if (changed) {
+    writeData(drawsData);
+  }
+
+  changed = false;
+  const channelsData = readKnownChannels();
+  for (const channel of channelsData.channels) {
+    if (channel.ownerId == null) {
+      channel.ownerId = owner;
+      changed = true;
+    }
+  }
+  if (changed) {
+    writeKnownChannels(channelsData);
+  }
+}
+
+function getProjectById(projectId, ownerId = null) {
   if (!projectId) {
     return null;
   }
   const data = readProjects();
-  return data.projects.find((project) => project.id === projectId) || null;
+  const project = data.projects.find((item) => item.id === projectId) || null;
+  if (!project) {
+    return null;
+  }
+  if (ownerId != null && !itemBelongsToOwner(project, ownerId)) {
+    return null;
+  }
+  return project;
 }
 
-function upsertKnownChannel(chat) {
+function findOwnedDrawInData(data, drawId, ownerId) {
+  const draw = data.draws.find((item) => item.id === drawId);
+  if (!draw || !itemBelongsToOwner(draw, ownerId)) {
+    return null;
+  }
+  return draw;
+}
+
+function normalizeChannelRef(channelId) {
+  return String(channelId || "").trim();
+}
+
+function findKnownChannel(channelId) {
+  const ref = normalizeChannelRef(channelId);
+  const channels = readKnownChannels().channels || [];
+  return (
+    channels.find((channel) => {
+      if (String(channel.id) === ref) {
+        return true;
+      }
+      if (channel.username && `@${channel.username}` === ref) {
+        return true;
+      }
+      if (channel.username && channel.username === ref.replace(/^@/, "")) {
+        return true;
+      }
+      return false;
+    }) || null
+  );
+}
+
+function channelAccessibleByOwner(channelId, ownerId) {
+  const known = findKnownChannel(channelId);
+  if (!known) {
+    return true;
+  }
+  if (known.ownerId == null) {
+    return true;
+  }
+  return Number(known.ownerId) === Number(ownerId);
+}
+
+function upsertKnownChannel(chat, ownerId = null) {
   if (!chat || chat.type !== "channel") {
     return;
   }
@@ -144,9 +257,13 @@ function upsertKnownChannel(chat) {
 
   if (existing) {
     Object.assign(existing, payload);
+    if (ownerId != null && existing.ownerId == null) {
+      existing.ownerId = Number(ownerId);
+    }
   } else {
     data.channels.push({
       ...payload,
+      ownerId: ownerId != null ? Number(ownerId) : null,
       addedAt: new Date().toISOString(),
     });
   }
@@ -450,6 +567,7 @@ function createSession(userId) {
       publishAt: "",
       endAt: "",
       winnersCount: 1,
+      ownerId: userId,
       createdBy: userId,
       createdAt: new Date().toISOString(),
       messageId: null,
@@ -1162,10 +1280,16 @@ function redirectWithMessage(res, message) {
   res.redirect(`/?msg=${encodeURIComponent(message)}`);
 }
 
-function renderWebPage(draws, message) {
-  const projects = readProjects().projects || [];
-  const knownChannels = readKnownChannels().channels || [];
+function renderWebPage(draws, message, webUser) {
+  const ownerId = webUser?.id ?? getDefaultOwnerId();
+  const projects = filterByOwner(readProjects().projects || [], ownerId);
+  const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
   const userProfiles = readUserProjectProfiles();
+  const userLabel = webUser?.user?.username
+    ? `@${webUser.user.username}`
+    : webUser?.user?.first_name
+      ? webUser.user.first_name
+      : `ID ${ownerId}`;
   const projectOptions = projects
     .map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`)
     .join("");
@@ -1342,8 +1466,9 @@ function renderWebPage(draws, message) {
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Управление розыгрышами</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     :root {
@@ -1361,11 +1486,16 @@ function renderWebPage(draws, message) {
     body {
       font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: linear-gradient(180deg, #eef3ff 0%, var(--bg) 100%);
-      margin: 0;
+      margin: 0 auto;
       color: var(--text);
+      max-width: 480px;
+      min-height: 100vh;
     }
-    .container { max-width: 1120px; margin: 0 auto; padding: 24px; }
-    h1 { margin: 0 0 14px; font-size: 30px; letter-spacing: 0.2px; }
+    body.telegram-miniapp {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .container { max-width: 480px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 24px; }
+    h1 { margin: 0 0 14px; font-size: 24px; letter-spacing: 0.2px; }
     h2 { margin-top: 0; margin-bottom: 14px; font-size: 22px; }
     h3 { margin: 0; }
     .subtitle { color: var(--sub); margin-bottom: 18px; }
@@ -1567,7 +1697,7 @@ function renderWebPage(draws, message) {
 <body>
   <div class="container">
     <h1>Розыгрыши Telegram</h1>
-    <div class="subtitle">Управление проектами, публикациями и участниками в одном месте.</div>
+    <div class="subtitle">Кабинет: ${escapeHtml(userLabel)}</div>
     ${message ? `<div class="msg">${escapeHtml(message)}</div>` : ""}
     <div class="grid">
       <div class="admin-actions">
@@ -1748,6 +1878,25 @@ function renderWebPage(draws, message) {
     </div>
   </div>
   <script>
+    (function () {
+      const tg = window.Telegram?.WebApp;
+      if (!tg) return;
+      tg.ready();
+      tg.expand();
+      document.body.classList.add("telegram-miniapp");
+      if (tg.themeParams?.bg_color) {
+        document.body.style.background = tg.themeParams.bg_color;
+      }
+      if (tg.initData) {
+        fetch("/auth/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initData: tg.initData }),
+          credentials: "same-origin",
+        }).catch(() => {});
+      }
+    })();
+
     function setupPasteImage(targetId, hiddenInputId, previewId) {
       const target = document.getElementById(targetId);
       const hiddenInput = document.getElementById(hiddenInputId);
@@ -1930,16 +2079,30 @@ const upload = multer({
   },
 });
 
+app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(UPLOADS_DIR));
+app.use(webAuth.attachUser);
+app.use("/uploads", webAuth.requireAuth, express.static(UPLOADS_DIR));
 
-app.get("/", (req, res) => {
-  const data = readData();
-  const draws = data.draws.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.type("html").send(renderWebPage(draws, req.query.msg));
+app.post("/auth/session", (req, res) => {
+  const user = validateInitData(req.body?.initData, BOT_TOKEN);
+  if (!user?.id) {
+    res.status(401).json({ ok: false });
+    return;
+  }
+  webAuth.setSessionCookie(res, user.id);
+  res.json({ ok: true, userId: user.id });
 });
 
-app.get("/qr", async (req, res) => {
+app.get("/", webAuth.requireAuth, (req, res) => {
+  const data = readData();
+  const draws = filterByOwner(data.draws, req.webUser.id).sort(
+    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+  );
+  res.type("html").send(renderWebPage(draws, req.query.msg, req.webUser));
+});
+
+app.get("/qr", webAuth.requireAuth, async (req, res) => {
   const text = String(req.query.text || "").trim();
   if (!text) {
     res.status(400).send("text is required");
@@ -1958,7 +2121,7 @@ app.get("/qr", async (req, res) => {
   }
 });
 
-app.get("/avatar/:userId", async (req, res) => {
+app.get("/avatar/:userId", webAuth.requireAuth, async (req, res) => {
   const userId = req.params.userId;
   const userProfiles = readUserProjectProfiles();
   const fileId = userProfiles.users?.[String(userId)]?.meta?.avatarFileId;
@@ -1975,7 +2138,8 @@ app.get("/avatar/:userId", async (req, res) => {
   }
 });
 
-app.post("/projects", upload.single("logo"), (req, res) => {
+app.post("/projects", webAuth.requireAuth, upload.single("logo"), (req, res) => {
+  const ownerId = req.webUser.id;
   const body = req.body || {};
   const name = (body.name || "").trim();
   const refLink = (body.refLink || "").trim();
@@ -1997,6 +2161,7 @@ app.post("/projects", upload.single("logo"), (req, res) => {
     name,
     refLink,
     logoPath,
+    ownerId,
     createdAt: new Date().toISOString(),
   });
   writeProjects(projectsData);
@@ -2004,8 +2169,9 @@ app.post("/projects", upload.single("logo"), (req, res) => {
   redirectWithMessage(res, "Проект добавлен.");
 });
 
-app.post("/draws", upload.single("image"), async (req, res) => {
+app.post("/draws", webAuth.requireAuth, upload.single("image"), async (req, res) => {
   try {
+    const ownerId = req.webUser.id;
     const body = req.body || {};
     const manualChannelId = (body.channelId || "").trim();
     const selectedChannelId = (body.knownChannelId || "").trim();
@@ -2048,8 +2214,13 @@ app.post("/draws", upload.single("image"), async (req, res) => {
       return;
     }
 
-    if (!getProjectById(projectId)) {
+    if (!getProjectById(projectId, ownerId)) {
       redirectWithMessage(res, "Выбранный проект не найден.");
+      return;
+    }
+
+    if (!channelAccessibleByOwner(channelId, ownerId)) {
+      redirectWithMessage(res, "Этот канал привязан к другому организатору.");
       return;
     }
 
@@ -2096,7 +2267,7 @@ app.post("/draws", upload.single("image"), async (req, res) => {
         redirectWithMessage(res, "Указанный чат не является каналом.");
         return;
       }
-      upsertKnownChannel(chat);
+      upsertKnownChannel(chat, ownerId);
     } catch (error) {
       redirectWithMessage(
         res,
@@ -2124,7 +2295,8 @@ app.post("/draws", upload.single("image"), async (req, res) => {
       endAfterValue: normalizedEndAfterValue,
       endAfterUnit: normalizedEndAfterUnit,
       winnersCount,
-      createdBy: ADMIN_IDS[0],
+      ownerId,
+      createdBy: ownerId,
       createdAt: new Date().toISOString(),
       messageId: null,
       messageType: "text",
@@ -2155,9 +2327,9 @@ app.post("/draws", upload.single("image"), async (req, res) => {
   }
 });
 
-app.post("/draws/:id/publish-now", async (req, res) => {
+app.post("/draws/:id/publish-now", webAuth.requireAuth, async (req, res) => {
   const data = readData();
-  const draw = data.draws.find((item) => item.id === req.params.id);
+  const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
 
   if (!draw) {
     redirectWithMessage(res, "Розыгрыш не найден.");
@@ -2179,9 +2351,9 @@ app.post("/draws/:id/publish-now", async (req, res) => {
   }
 });
 
-app.post("/draws/:id/finish-now", async (req, res) => {
+app.post("/draws/:id/finish-now", webAuth.requireAuth, async (req, res) => {
   const data = readData();
-  const draw = data.draws.find((item) => item.id === req.params.id);
+  const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
 
   if (!draw) {
     redirectWithMessage(res, "Розыгрыш не найден.");
@@ -2203,9 +2375,10 @@ app.post("/draws/:id/finish-now", async (req, res) => {
   }
 });
 
-app.post("/draws/:id/notify/:userId", async (req, res) => {
+app.post("/draws/:id/notify/:userId", webAuth.requireAuth, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
+  const ownerId = req.webUser.id;
 
   if (!Number.isInteger(userId)) {
     redirectWithMessage(res, "Некорректный userId победителя.");
@@ -2213,7 +2386,7 @@ app.post("/draws/:id/notify/:userId", async (req, res) => {
   }
 
   const data = readData();
-  const draw = data.draws.find((item) => item.id === drawId);
+  const draw = findOwnedDrawInData(data, drawId, ownerId);
   if (!draw) {
     redirectWithMessage(res, "Розыгрыш не найден.");
     return;
@@ -2227,7 +2400,7 @@ app.post("/draws/:id/notify/:userId", async (req, res) => {
   await enrichUserAvatar(userId);
 
   try {
-    await sendWinnerVerificationNotification(draw, userId, ADMIN_IDS[0]);
+    await sendWinnerVerificationNotification(draw, userId, ownerId);
   } catch (error) {
     redirectWithMessage(
       res,
@@ -2241,9 +2414,10 @@ app.post("/draws/:id/notify/:userId", async (req, res) => {
   redirectWithMessage(res, `Уведомление отправлено пользователю ${userId}.`);
 });
 
-app.post("/draws/:id/pay/:userId", async (req, res) => {
+app.post("/draws/:id/pay/:userId", webAuth.requireAuth, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
+  const ownerId = req.webUser.id;
 
   if (!Number.isInteger(userId)) {
     redirectWithMessage(res, "Некорректный userId победителя.");
@@ -2251,7 +2425,7 @@ app.post("/draws/:id/pay/:userId", async (req, res) => {
   }
 
   const data = readData();
-  const draw = data.draws.find((item) => item.id === drawId);
+  const draw = findOwnedDrawInData(data, drawId, ownerId);
   if (!draw) {
     redirectWithMessage(res, "Розыгрыш не найден.");
     return;
@@ -2279,7 +2453,7 @@ app.post("/draws/:id/pay/:userId", async (req, res) => {
     draw.winnerNotifications[String(userId)] = {};
   }
   draw.winnerNotifications[String(userId)].paidAt = new Date().toISOString();
-  draw.winnerNotifications[String(userId)].paidBy = ADMIN_IDS[0];
+  draw.winnerNotifications[String(userId)].paidBy = ownerId;
   writeData(data);
 
   redirectWithMessage(res, `Победителю ${userId} отмечена выплата.`);
@@ -2305,7 +2479,7 @@ bot.on("my_chat_member", async (ctx) => {
 
   const status = payload.new_chat_member?.status;
   if (status === "administrator" || status === "member") {
-    upsertKnownChannel(payload.chat);
+    upsertKnownChannel(payload.chat, payload.from?.id);
   }
 });
 
@@ -2324,24 +2498,17 @@ bot.start(async (ctx) => {
     return;
   }
 
-  if (!isAdmin(ctx)) {
-    await ctx.reply("Привет! Этот бот используется для участия в розыгрышах через кнопку в канале.");
-    return;
-  }
-
+  const panelUrl = WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`;
   await ctx.reply(
     [
-      "Привет! Я помогу управлять розыгрышами.",
+      "🎁 Roller Bot — розыгрыши в Telegram-каналах",
       "",
-      "Команды:",
-      "• /create_draw — создать розыгрыш через чат",
-      "• /my_draws — показать розыгрыши",
-      "• /cancel_draw — отменить создание",
-      "• /channels — список подключенных каналов",
-      "• /join <draw_id> — ручной запуск входа в розыгрыш",
+      "1. Добавьте бота админом в свой канал",
+      "2. Нажмите «Панель» и создайте розыгрыш",
       "",
-      `Веб-панель: ${WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`}`,
-    ].join("\n")
+      "Участникам: кнопка «Участвовать» в посте канала.",
+    ].join("\n"),
+    Markup.keyboard([[Markup.button.webApp("📱 Панель", panelUrl)]]).resize(),
   );
 });
 
@@ -2384,11 +2551,7 @@ bot.command("cancel_draw", async (ctx) => {
 });
 
 bot.command("channels", async (ctx) => {
-  if (!isAdmin(ctx)) {
-    return;
-  }
-
-  const channels = readKnownChannels().channels || [];
+  const channels = filterByOwner(readKnownChannels().channels || [], ctx.from.id);
   if (channels.length === 0) {
     await ctx.reply(
       [
@@ -2408,13 +2571,8 @@ bot.command("channels", async (ctx) => {
 });
 
 bot.command("my_draws", async (ctx) => {
-  if (!isAdmin(ctx)) {
-    return;
-  }
-
   const data = readData();
-  const myDraws = data.draws
-    .filter((draw) => draw.createdBy === ctx.from.id || draw.createdBy === ADMIN_IDS[0])
+  const myDraws = filterByOwner(data.draws, ctx.from.id)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, 10);
 
@@ -2828,7 +2986,24 @@ setInterval(async () => {
 
 async function bootstrap() {
   ensureStorage();
+  migrateLegacyOwnership();
   await ensureBotUsername();
+
+  const panelUrl = WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`;
+  if (WEB_PUBLIC_URL.startsWith("https://")) {
+    try {
+      await bot.telegram.setChatMenuButton({
+        menu_button: {
+          type: "web_app",
+          text: "Панель",
+          web_app: { url: panelUrl },
+        },
+      });
+    } catch (error) {
+      console.warn("Не удалось установить Menu Button:", error.message);
+    }
+  }
+
   app.listen(WEB_PORT, "0.0.0.0", () => {
     console.log(`Веб-панель запущена: ${WEB_PUBLIC_URL || `http://0.0.0.0:${WEB_PORT}`}`);
   });
