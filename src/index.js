@@ -1823,13 +1823,19 @@ function redirectWithMessage(res, message) {
 function renderLandingPage() {
   const botLink = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}` : "https://t.me";
   const botLabel = BOT_USERNAME ? `@${BOT_USERNAME}` : "Telegram-бот";
+  const landingBgTiles = Array.from({ length: 9 }, (_, index) =>
+    `<span class="landing-bg-tile${index % 2 === 1 ? " landing-bg-tile-mirror" : ""}" aria-hidden="true"></span>`,
+  ).join("");
   return `<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#152238" />
-  <title>RollerBot — скоро запуск</title>
+  <meta name="description" content="RollerBot — сервис розыгрышей в Telegram. Сайт скоро будет готов." />
+  <title>RollerBot — розыгрыши в Telegram</title>
+  <link rel="icon" href="/brand/logo.jpg" type="image/jpeg" />
+  <link rel="apple-touch-icon" href="/brand/logo.jpg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -1847,30 +1853,46 @@ function renderLandingPage() {
       padding: 24px 16px;
       background-color: #152238;
       position: relative;
-      overflow: hidden;
+      overflow-x: hidden;
     }
-    body::before {
-      content: "";
+    .landing-bg {
       position: fixed;
       inset: 0;
       z-index: 0;
+      overflow: hidden;
+      pointer-events: none;
+      background-color: #152238;
+    }
+    .landing-bg-strip {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      height: 100%;
+      min-width: 100vw;
+    }
+    .landing-bg-tile {
+      --landing-tile-width: min(760px, 100vw);
+      width: var(--landing-tile-width);
+      flex: 0 0 var(--landing-tile-width);
+      height: 100%;
       background-image: url("/brand/background-dark.png");
       background-repeat: repeat-y;
+      background-size: 100% auto;
       background-position: center top;
-      background-size: min(100vw, 760px) auto;
-      opacity: 0.55;
-      pointer-events: none;
+      opacity: 0.58;
     }
-    body::after {
-      content: "";
-      position: fixed;
+    .landing-bg-tile-mirror {
+      transform: scaleX(-1);
+    }
+    .landing-bg-overlay {
+      position: absolute;
       inset: 0;
-      z-index: 0;
       background:
         radial-gradient(ellipse 80% 60% at 50% -10%, rgba(91, 140, 255, 0.22) 0%, transparent 60%),
         radial-gradient(ellipse 60% 50% at 50% 110%, rgba(50, 95, 255, 0.14) 0%, transparent 55%),
-        linear-gradient(180deg, rgba(21, 34, 56, 0.35) 0%, rgba(21, 34, 56, 0.82) 100%);
-      pointer-events: none;
+        linear-gradient(180deg, rgba(21, 34, 56, 0.28) 0%, rgba(21, 34, 56, 0.84) 100%);
     }
     .shell {
       position: relative;
@@ -1889,10 +1911,14 @@ function renderLandingPage() {
         inset 0 1px 0 rgba(255, 255, 255, 0.06);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
     .logo-wrap {
-      position: relative;
-      display: inline-flex;
+      display: flex;
+      justify-content: center;
+      width: 100%;
       margin-bottom: 22px;
     }
     .logo {
@@ -1903,11 +1929,17 @@ function renderLandingPage() {
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
       border: 1px solid rgba(147, 160, 184, 0.16);
     }
+    .status-pill-wrap {
+      display: flex;
+      justify-content: center;
+      width: 100%;
+      margin-bottom: 18px;
+    }
     .status-pill {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
-      margin-bottom: 18px;
       padding: 7px 14px;
       border-radius: 999px;
       background: rgba(91, 140, 255, 0.12);
@@ -1917,6 +1949,7 @@ function renderLandingPage() {
       font-weight: 700;
       letter-spacing: 0.02em;
       text-transform: uppercase;
+      white-space: nowrap;
     }
     .status-dot {
       width: 8px;
@@ -1925,6 +1958,7 @@ function renderLandingPage() {
       background: #5b8cff;
       box-shadow: 0 0 0 0 rgba(91, 140, 255, 0.55);
       animation: pulse 2s ease-in-out infinite;
+      flex-shrink: 0;
     }
     @keyframes pulse {
       0%, 100% { box-shadow: 0 0 0 0 rgba(91, 140, 255, 0.45); }
@@ -1936,6 +1970,7 @@ function renderLandingPage() {
       font-weight: 800;
       letter-spacing: -0.03em;
       line-height: 1.1;
+      width: 100%;
     }
     .brand span {
       background: linear-gradient(135deg, #ffffff 0%, #9bb8ff 100%);
@@ -1949,17 +1984,20 @@ function renderLandingPage() {
       font-weight: 700;
       line-height: 1.3;
       color: #f4f6fb;
+      width: 100%;
     }
     .lead {
       margin: 0 0 26px;
       color: #93a0b8;
       font-size: 15px;
       line-height: 1.6;
+      width: 100%;
     }
     .actions {
       display: flex;
       flex-direction: column;
       gap: 10px;
+      width: 100%;
     }
     .btn {
       display: inline-flex;
@@ -1990,10 +2028,12 @@ function renderLandingPage() {
       font-size: 12px;
       color: rgba(147, 160, 184, 0.75);
       line-height: 1.5;
+      width: 100%;
     }
     .gear {
       width: 18px;
       height: 18px;
+      flex-shrink: 0;
       animation: spin 4s linear infinite;
     }
     @keyframes spin {
@@ -2003,18 +2043,24 @@ function renderLandingPage() {
   </style>
 </head>
 <body>
+  <div class="landing-bg" aria-hidden="true">
+    <div class="landing-bg-strip">${landingBgTiles}</div>
+    <div class="landing-bg-overlay"></div>
+  </div>
   <main class="shell">
     <div class="card">
       <div class="logo-wrap">
         <img src="/brand/logo.jpg" alt="RollerBot" class="logo" width="88" height="88" />
       </div>
-      <div class="status-pill">
-        <span class="status-dot" aria-hidden="true"></span>
-        <svg class="gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-        Технические работы
+      <div class="status-pill-wrap">
+        <div class="status-pill">
+          <span class="status-dot" aria-hidden="true"></span>
+          <svg class="gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          <span>Технические работы</span>
+        </div>
       </div>
       <p class="brand"><span>RollerBot</span></p>
       <h1>Сайт скоро будет готов</h1>
