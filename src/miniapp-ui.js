@@ -14,27 +14,57 @@ function getMiniAppViewportMeta() {
 }
 
 function getTelegramPanelAuthRedirectScript(panelPath = "/panel") {
-  const pathJson = JSON.stringify(panelPath);
+  const enterPathJson = JSON.stringify(`${panelPath.replace(/\/$/, "")}/enter`);
   return `
 (function () {
   var tg = window.Telegram && window.Telegram.WebApp;
   if (!tg) return;
   tg.ready();
   tg.expand();
-  var panelPath = ${pathJson};
-  function redirect() {
-    if (!tg.initData) return false;
-    location.replace(panelPath + "?telegramInitData=" + encodeURIComponent(tg.initData));
+
+  function submitEnter() {
+    var data = tg.initData;
+    if (!data) return false;
+
+    var existing = document.getElementById("panelEnterForm");
+    if (existing) {
+      var input = document.getElementById("panelEnterInitData");
+      if (input) input.value = data;
+      existing.submit();
+      return true;
+    }
+
+    var form = document.createElement("form");
+    form.id = "panelEnterForm";
+    form.method = "POST";
+    form.action = ${enterPathJson};
+    form.style.display = "none";
+    var input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "initData";
+    input.value = data;
+    form.appendChild(input);
+    document.body.appendChild(form);
+    form.submit();
     return true;
   }
-  if (redirect()) return;
-  var tries = 0;
-  var timer = window.setInterval(function () {
-    tries += 1;
-    if (redirect() || tries >= 20) {
-      window.clearInterval(timer);
-    }
-  }, 100);
+
+  function boot() {
+    if (submitEnter()) return;
+    var tries = 0;
+    var timer = window.setInterval(function () {
+      tries += 1;
+      if (submitEnter() || tries >= 25) {
+        window.clearInterval(timer);
+      }
+    }, 100);
+  }
+
+  if (document.body) {
+    boot();
+  } else {
+    document.addEventListener("DOMContentLoaded", boot);
+  }
 })();
 `;
 }

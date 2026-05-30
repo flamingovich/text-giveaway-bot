@@ -97,6 +97,7 @@ function parseSessionToken(token, botToken) {
 
 function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
   const botLink = botUsername ? `https://t.me/${botUsername}?start=panel` : "https://t.me";
+  const enterPath = `${panelPath.replace(/\/$/, "")}/enter`;
   return `<!doctype html>
 <html lang="ru">
 <head>
@@ -137,13 +138,16 @@ function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
       border-radius: 14px;
       font-weight: 700;
     }
-    .loading { display: none; color: #65708a; font-size: 15px; }
-    .fallback { display: block; }
-    body.auth-pending .loading { display: block; }
-    body.auth-pending .fallback { display: none; }
+    .loading { display: block; color: #65708a; font-size: 15px; }
+    .fallback { display: none; }
+    body.show-fallback .loading { display: none; }
+    body.show-fallback .fallback { display: block; }
   </style>
 </head>
 <body>
+  <form id="panelEnterForm" method="POST" action="${enterPath}" style="display:none">
+    <input type="hidden" name="initData" id="panelEnterInitData" value="" />
+  </form>
   <div class="card">
     <h1>🎁 Панель розыгрышей</h1>
     <p class="loading">Загрузка…</p>
@@ -153,35 +157,9 @@ function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
     </div>
   </div>
   <script>
-    (function () {
-      const tg = window.Telegram?.WebApp;
-      if (!tg?.initData) return;
-      document.body.classList.add("auth-pending");
-      tg.ready();
-      tg.expand();
-      const panelPath = ${JSON.stringify(panelPath)};
-      fetch("/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ initData: tg.initData }),
-        credentials: "same-origin",
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.ok) {
-            location.replace(
-              panelPath + "?telegramInitData=" + encodeURIComponent(tg.initData),
-            );
-            return;
-          }
-          document.body.classList.remove("auth-pending");
-        })
-        .catch(function () {
-          location.replace(
-            panelPath + "?telegramInitData=" + encodeURIComponent(tg.initData),
-          );
-        });
-    })();
+    window.setTimeout(function () {
+      document.body.classList.add("show-fallback");
+    }, 5000);
   </script>
 </body>
 </html>`;
@@ -200,6 +178,7 @@ function createWebAuth({ botToken, disabled, cookieSecure, defaultUserId, botUse
 
     const initData =
       req.headers["x-telegram-init-data"] ||
+      req.body?.initData ||
       req.body?.telegramInitData ||
       req.query?.telegramInitData;
     const user = validateInitData(initData, botToken);
@@ -219,7 +198,7 @@ function createWebAuth({ botToken, disabled, cookieSecure, defaultUserId, botUse
     const user = resolveUser(req);
     if (!user?.id) {
       if (req.method === "GET") {
-        res.status(401).type("html").send(renderLoginPage(botUsername, publicUrl, panelPath));
+        res.status(200).type("html").send(renderLoginPage(botUsername, publicUrl, panelPath));
         return;
       }
       res.status(401).send("Unauthorized");
@@ -228,8 +207,9 @@ function createWebAuth({ botToken, disabled, cookieSecure, defaultUserId, botUse
 
     const initData =
       req.headers["x-telegram-init-data"] ||
-      req.query?.telegramInitData ||
-      req.body?.telegramInitData;
+      req.body?.initData ||
+      req.body?.telegramInitData ||
+      req.query?.telegramInitData;
     if (initData && validateInitData(initData, botToken)) {
       setSessionCookie(res, user.id);
     }

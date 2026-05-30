@@ -8,7 +8,7 @@ const multer = require("multer");
 const QRCode = require("qrcode");
 const { Telegraf, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
-const { createWebAuth, validateInitData } = require("./web-auth");
+const { createWebAuth, validateInitData, renderLoginPage } = require("./web-auth");
 const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta } = require("./miniapp-ui");
 
@@ -5118,6 +5118,19 @@ function renderWebPage(draws, message, webUser) {
       });
     }
 
+    function setupTelegramFormAuth() {
+      const tg = window.Telegram?.WebApp;
+      if (!tg?.initData) return;
+      document.querySelectorAll("form").forEach((form) => {
+        if (form.querySelector('input[name="telegramInitData"]')) return;
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "telegramInitData";
+        input.value = tg.initData;
+        form.appendChild(input);
+      });
+    }
+
     function setupPanelAutoRefresh() {
       const root = document.getElementById("panelLiveRoot");
       if (!root) return;
@@ -5221,6 +5234,7 @@ function renderWebPage(draws, message, webUser) {
     setupAdminPanels();
     setupPanelAutoRefresh();
     setupFlashMessages();
+    setupTelegramFormAuth();
   </script>
 </body>
 </html>`;
@@ -5329,7 +5343,35 @@ app.get("/", (_req, res) => {
   res.type("html").send(renderLandingPage());
 });
 
-panelRouter.get("/", webAuth.requireAuth, (req, res) => {
+function renderPanelForUser(res, webUser, message) {
+  if (!isOrganizer(webUser.id)) {
+    res.type("html").send(renderOrganizerGatePage(BOT_USERNAME));
+    return;
+  }
+  const draws = getOwnerDraws(webUser.id);
+  res.type("html").send(renderWebPage(draws, message, webUser));
+}
+
+function sendPanelAuthPage(res, message) {
+  res.status(200).type("html").send(renderLoginPage(BOT_USERNAME, WEB_PUBLIC_URL, PANEL_BASE));
+}
+
+panelRouter.get("/", (req, res) => {
+  const user = webAuth.resolveUser(req);
+  if (!user?.id) {
+    sendPanelAuthPage(res);
+    return;
+  }
+
+  const initData =
+    req.headers["x-telegram-init-data"] ||
+    req.body?.initData ||
+    req.body?.telegramInitData ||
+    req.query?.telegramInitData;
+  if (initData && validateInitData(initData, BOT_TOKEN)) {
+    webAuth.setSessionCookie(res, user.id);
+  }
+
   if (req.query.telegramInitData) {
     const params = new URLSearchParams();
     if (req.query.msg) {
@@ -5340,13 +5382,21 @@ panelRouter.get("/", webAuth.requireAuth, (req, res) => {
     return;
   }
 
-  if (!isOrganizer(req.webUser.id)) {
-    res.type("html").send(renderOrganizerGatePage(BOT_USERNAME));
+  req.webUser = user;
+  renderPanelForUser(res, user, req.query.msg);
+});
+
+panelRouter.post("/enter", (req, res) => {
+  const initData = req.body?.initData || req.body?.telegramInitData;
+  const tgUser = validateInitData(initData, BOT_TOKEN);
+  if (!tgUser?.id) {
+    sendPanelAuthPage(res);
     return;
   }
 
-  const draws = getOwnerDraws(req.webUser.id);
-  res.type("html").send(renderWebPage(draws, req.query.msg, req.webUser));
+  webAuth.setSessionCookie(res, tgUser.id);
+  req.webUser = { id: tgUser.id, user: tgUser };
+  renderPanelForUser(res, req.webUser, req.body?.msg || req.query?.msg);
 });
 
 panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, (req, res) => {
