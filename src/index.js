@@ -1014,10 +1014,8 @@ async function syncOrganizerPanelUi(userId) {
 
 function getKeyboard(drawId, count) {
   const text = `Участвовать (${count})`;
-  const joinUrl = getJoinWebAppUrl(drawId);
-  if (WEB_PUBLIC_URL.startsWith("https://")) {
-    return Markup.inlineKeyboard([Markup.button.webApp(text, joinUrl)]);
-  }
+  // Web App-кнопки в inline-клавиатуре канала запрещены (BUTTON_TYPE_INVALID).
+  // Ведём в бота по deep link; там уже открывается Mini App участия.
   if (BOT_USERNAME) {
     return Markup.inlineKeyboard([Markup.button.url(text, getJoinDeepLink(drawId))]);
   }
