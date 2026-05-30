@@ -1822,71 +1822,210 @@ function redirectWithMessage(res, message) {
 
 function renderLandingPage() {
   const botLink = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}` : "https://t.me";
-  const botLabel = BOT_USERNAME ? `@${BOT_USERNAME}` : "бота";
+  const botLabel = BOT_USERNAME ? `@${BOT_USERNAME}` : "Telegram-бот";
   return `<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>RollerBot — розыгрыши в Telegram</title>
+  <meta name="theme-color" content="#152238" />
+  <title>RollerBot — скоро запуск</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <style>
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: linear-gradient(180deg, #eef3ff 0%, #f8faff 100%);
-      color: #151a2d;
-      display: grid;
-      place-items: center;
-      padding: 24px;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #eef1f7;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      background-color: #152238;
+      position: relative;
+      overflow: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background-image: url("/brand/background-dark.png");
+      background-repeat: repeat-y;
+      background-position: center top;
+      background-size: min(100vw, 760px) auto;
+      opacity: 0.55;
+      pointer-events: none;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(91, 140, 255, 0.22) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 50% 110%, rgba(50, 95, 255, 0.14) 0%, transparent 55%),
+        linear-gradient(180deg, rgba(21, 34, 56, 0.35) 0%, rgba(21, 34, 56, 0.82) 100%);
+      pointer-events: none;
+    }
+    .shell {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 440px;
     }
     .card {
-      max-width: 420px;
-      width: 100%;
-      background: #fff;
-      border-radius: 24px;
-      padding: 32px 28px;
+      background: rgba(22, 32, 54, 0.82);
+      border: 1px solid rgba(147, 160, 184, 0.18);
+      border-radius: 28px;
+      padding: 36px 28px 30px;
       text-align: center;
-      box-shadow: 0 20px 48px rgba(27, 45, 94, 0.12);
-      border: 1px solid #dfe5f4;
+      box-shadow:
+        0 24px 64px rgba(0, 0, 0, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .logo-wrap {
+      position: relative;
+      display: inline-flex;
+      margin-bottom: 22px;
     }
     .logo {
       width: 88px;
       height: 88px;
-      border-radius: 20px;
+      border-radius: 22px;
       object-fit: contain;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+      border: 1px solid rgba(147, 160, 184, 0.16);
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
       margin-bottom: 18px;
-    }
-    h1 { margin: 0 0 10px; font-size: 28px; }
-    p { margin: 0 0 22px; color: #65708a; line-height: 1.55; }
-    a {
-      display: inline-block;
-      background: #325fff;
-      color: #fff;
-      text-decoration: none;
-      padding: 14px 22px;
-      border-radius: 14px;
+      padding: 7px 14px;
+      border-radius: 999px;
+      background: rgba(91, 140, 255, 0.12);
+      border: 1px solid rgba(91, 140, 255, 0.28);
+      color: #9bb8ff;
+      font-size: 12px;
       font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
     }
-    .panel-link {
-      display: block;
-      margin-top: 14px;
-      color: #325fff;
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #5b8cff;
+      box-shadow: 0 0 0 0 rgba(91, 140, 255, 0.55);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(91, 140, 255, 0.45); }
+      50% { box-shadow: 0 0 0 8px rgba(91, 140, 255, 0); }
+    }
+    .brand {
+      margin: 0 0 8px;
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+    }
+    .brand span {
+      background: linear-gradient(135deg, #ffffff 0%, #9bb8ff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.3;
+      color: #f4f6fb;
+    }
+    .lead {
+      margin: 0 0 26px;
+      color: #93a0b8;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 14px 18px;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 700;
       text-decoration: none;
-      font-size: 14px;
-      font-weight: 600;
+      transition: transform 0.18s ease, filter 0.18s ease;
+    }
+    .btn:hover { transform: translateY(-1px); filter: brightness(1.06); }
+    .btn-primary {
+      background: linear-gradient(135deg, #5b8cff 0%, #325fff 100%);
+      color: #fff;
+      box-shadow: 0 10px 28px rgba(50, 95, 255, 0.35);
+    }
+    .btn-ghost {
+      background: rgba(255, 255, 255, 0.04);
+      color: #b8c2d8;
+      border: 1px solid rgba(147, 160, 184, 0.2);
+    }
+    .footer-note {
+      margin-top: 18px;
+      font-size: 12px;
+      color: rgba(147, 160, 184, 0.75);
+      line-height: 1.5;
+    }
+    .gear {
+      width: 18px;
+      height: 18px;
+      animation: spin 4s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
   </style>
 </head>
 <body>
-  <div class="card">
-    <img src="/brand/logo.jpg" alt="" class="logo" width="88" height="88" />
-    <h1>RollerBot</h1>
-    <p>Розыгрыши в Telegram-каналах: создание, участие, выплаты победителям.</p>
-    <a href="${botLink}">Открыть ${botLabel}</a>
-    <a class="panel-link" href="${PANEL_BASE}">Панель организатора →</a>
-  </div>
+  <main class="shell">
+    <div class="card">
+      <div class="logo-wrap">
+        <img src="/brand/logo.jpg" alt="RollerBot" class="logo" width="88" height="88" />
+      </div>
+      <div class="status-pill">
+        <span class="status-dot" aria-hidden="true"></span>
+        <svg class="gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.604.852.997 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        Технические работы
+      </div>
+      <p class="brand"><span>RollerBot</span></p>
+      <h1>Сайт скоро будет готов</h1>
+      <p class="lead">Мы готовим полноценный лендинг. Пока что здесь ведутся технические работы — скоро появится новая версия.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="${botLink}">Открыть ${botLabel}</a>
+        <a class="btn btn-ghost" href="${PANEL_BASE}">Панель организатора</a>
+      </div>
+      <p class="footer-note">Розыгрыши в Telegram уже работают через бота и панель управления.</p>
+    </div>
+  </main>
 </body>
 </html>`;
 }
