@@ -974,12 +974,42 @@ function getJoinWebAppUrl(drawId) {
 }
 
 function getPanelUrl() {
-  const base = WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`;
+  const base = (WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`).replace(/\/$/, "");
   return `${base}${PANEL_BASE}`;
 }
 
-function getPanelKeyboard() {
-  return Markup.keyboard([[Markup.button.webApp("📱 Панель", getPanelUrl())]]).resize();
+function getPanelKeyboardForUser(userId) {
+  if (userId && isOrganizer(userId)) {
+    return Markup.keyboard([[Markup.button.webApp("📱 Панель", getPanelUrl())]]).resize();
+  }
+  return Markup.removeKeyboard();
+}
+
+async function syncOrganizerPanelUi(userId) {
+  if (!userId || !WEB_PUBLIC_URL.startsWith("https://") || WEB_ONLY) {
+    return;
+  }
+
+  try {
+    if (isOrganizer(userId)) {
+      await bot.telegram.setChatMenuButton({
+        chat_id: userId,
+        menu_button: {
+          type: "web_app",
+          text: "📱 Панель",
+          web_app: { url: getPanelUrl() },
+        },
+      });
+      return;
+    }
+
+    await bot.telegram.setChatMenuButton({
+      chat_id: userId,
+      menu_button: { type: "default" },
+    });
+  } catch (error) {
+    console.warn(`Не удалось обновить кнопку панели для ${userId}:`, error.message);
+  }
 }
 
 function getKeyboard(drawId, count) {
@@ -2071,6 +2101,25 @@ function renderLandingPage() {
       <p class="footer-note">Розыгрыши в Telegram уже работают через бота и панель управления.</p>
     </div>
   </main>
+  <script>
+    (function () {
+      const tg = window.Telegram?.WebApp;
+      if (!tg?.initData) return;
+      fetch("/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: tg.initData }),
+        credentials: "same-origin",
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          if (data.ok && data.organizer) {
+            location.replace("${PANEL_BASE}");
+          }
+        })
+        .catch(function () {});
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -5801,8 +5850,9 @@ bot.command("link_channel", async (ctx) => {
       "",
       "Канал появится в панели — вводить ID вручную не нужно.",
     ].join("\n"),
-    getPanelKeyboard(),
+    getPanelKeyboardForUser(ctx.from?.id),
   );
+  await syncOrganizerPanelUi(ctx.from?.id);
 });
 
 bot.on("message", async (ctx, next) => {
@@ -5813,7 +5863,8 @@ bot.on("message", async (ctx, next) => {
   }
 
   const result = await linkChannelForUser(ctx, forwardedChat);
-  await ctx.reply(result.message, getPanelKeyboard());
+  await ctx.reply(result.message, getPanelKeyboardForUser(ctx.from?.id));
+  await syncOrganizerPanelUi(ctx.from?.id);
 });
 
 bot.start(async (ctx) => {
@@ -5834,8 +5885,27 @@ bot.start(async (ctx) => {
         "",
         "Канал появится в панели: Настройки → Мои каналы.",
       ].join("\n"),
-      getPanelKeyboard(),
+      getPanelKeyboardForUser(ctx.from?.id),
     );
+    await syncOrganizerPanelUi(ctx.from?.id);
+    return;
+  }
+
+  const userId = ctx.from?.id;
+  if (isOrganizer(userId)) {
+    await ctx.reply(
+      [
+        "🎁 Roller Bot — розыгрыши в Telegram-каналах",
+        "",
+        "1. Добавьте бота админом в свой канал",
+        "2. Перешлите любой пост из канала боту (/link_channel)",
+        "3. Нажмите «Панель» и создайте розыгрыш",
+        "",
+        "Участникам: кнопка «Участвовать» в посте канала.",
+      ].join("\n"),
+      getPanelKeyboardForUser(userId),
+    );
+    await syncOrganizerPanelUi(userId);
     return;
   }
 
@@ -5843,13 +5913,9 @@ bot.start(async (ctx) => {
     [
       "🎁 Roller Bot — розыгрыши в Telegram-каналах",
       "",
-      "1. Добавьте бота админом в свой канал",
-      "2. Перешлите любой пост из канала боту (/link_channel)",
-      "3. Нажмите «Панель» и создайте розыгрыш",
-      "",
-      "Участникам: кнопка «Участвовать» в посте канала.",
+      "Участвуйте в розыгрышах через кнопку «Участвовать» в постах каналов.",
     ].join("\n"),
-    getPanelKeyboard(),
+    getPanelKeyboardForUser(userId),
   );
 });
 
@@ -5858,7 +5924,12 @@ bot.command("panel", async (ctx) => {
     await ctx.reply("Откройте личный чат с ботом и отправьте /panel");
     return;
   }
-  await ctx.reply("Нажмите кнопку «Панель» ниже 👇", getPanelKeyboard());
+  if (!isOrganizer(ctx.from?.id)) {
+    await ctx.reply("Панель доступна только организаторам розыгрышей.");
+    return;
+  }
+  await syncOrganizerPanelUi(ctx.from.id);
+  await ctx.reply("Нажмите кнопку «Панель» ниже 👇", getPanelKeyboardForUser(ctx.from.id));
 });
 
 bot.command("join", async (ctx) => {
