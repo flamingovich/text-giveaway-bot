@@ -2721,16 +2721,6 @@ function renderWebPage(draws, message, webUser) {
       box-shadow: none;
       color: var(--tg-theme-text-color, #eef1f7);
     }
-    body.app-theme-dark .quick-action:not(.quick-action-primary) {
-      background: var(--tg-theme-secondary-bg-color, #232f42);
-      color: var(--tg-theme-link-color, var(--tg-theme-button-color, #5b8cff));
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
-    }
-    body.app-theme-dark .quick-action:not(.quick-action-primary):hover,
-    body.app-theme-dark .quick-action:not(.quick-action-primary):focus-visible {
-      background: var(--tg-theme-secondary-bg-color, #232f42);
-      color: var(--tg-theme-link-color, var(--tg-theme-button-color, #5b8cff));
-    }
     body.app-theme-dark .history-time-row,
     body.app-theme-dark .history-chip,
     body.app-theme-dark .stat-card,
@@ -3457,7 +3447,7 @@ function renderWebPage(draws, message, webUser) {
       border: 1px solid #6f86d8;
       background: rgba(255, 255, 255, 0.96);
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn) {
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn) {
       background: var(--primary);
       color: #fff;
       border: none;
@@ -3465,7 +3455,10 @@ function renderWebPage(draws, message, webUser) {
       font-weight: 700;
       transition: all 0.18s ease;
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):hover { background: var(--primary-2); transform: translateY(-1px); }
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):hover {
+      background: var(--primary-2);
+      transform: translateY(-1px);
+    }
     button.theme-toggle-btn {
       width: 36px;
       min-width: 36px;
@@ -3634,6 +3627,13 @@ function renderWebPage(draws, message, webUser) {
       cursor: pointer;
       font-weight: 700;
       transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.15s ease, box-shadow 0.18s ease, filter 0.18s ease;
+    }
+    body.app-theme-dark .quick-action:not(.quick-action-primary),
+    body.app-theme-dark .quick-action:not(.quick-action-primary):hover,
+    body.app-theme-dark .quick-action:not(.quick-action-primary):focus-visible {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      color: var(--tg-theme-link-color, var(--tg-theme-button-color, #5b8cff));
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
     }
     .quick-action:hover,
     .quick-action:focus-visible {
