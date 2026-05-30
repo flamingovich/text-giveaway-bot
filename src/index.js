@@ -242,7 +242,7 @@ function channelAccessibleByOwner(channelId, ownerId) {
 
 function upsertKnownChannel(chat, ownerId = null) {
   if (!chat || chat.type !== "channel") {
-    return;
+    return { conflict: false };
   }
 
   const data = readKnownChannels();
@@ -257,7 +257,10 @@ function upsertKnownChannel(chat, ownerId = null) {
 
   if (existing) {
     Object.assign(existing, payload);
-    if (ownerId != null && existing.ownerId == null) {
+    if (ownerId != null) {
+      if (existing.ownerId != null && Number(existing.ownerId) !== Number(ownerId)) {
+        return { conflict: true, ownerId: existing.ownerId };
+      }
       existing.ownerId = Number(ownerId);
     }
   } else {
@@ -269,6 +272,76 @@ function upsertKnownChannel(chat, ownerId = null) {
   }
 
   writeKnownChannels(data);
+  return { conflict: false };
+}
+
+function isChannelAdminStatus(status) {
+  return status === "administrator" || status === "creator";
+}
+
+async function linkChannelForUser(ctx, chat) {
+  const userId = ctx.from?.id;
+  if (!userId) {
+    return { ok: false, message: "Не удалось определить ваш Telegram ID." };
+  }
+
+  let botId;
+  try {
+    botId = (await bot.telegram.getMe()).id;
+  } catch (error) {
+    return { ok: false, message: "Ошибка проверки бота. Попробуйте позже." };
+  }
+
+  try {
+    const botMember = await bot.telegram.getChatMember(chat.id, botId);
+    if (!isChannelAdminStatus(botMember.status)) {
+      return {
+        ok: false,
+        message: [
+          `Бот @${BOT_USERNAME} не является админом в этом канале.`,
+          "",
+          "Добавьте бота администратором с правами:",
+          "• публиковать сообщения",
+          "• редактировать сообщения",
+          "",
+          "После этого перешлите пост из канала ещё раз.",
+        ].join("\n"),
+      };
+    }
+
+    const userMember = await ctx.telegram.getChatMember(chat.id, userId);
+    if (!isChannelAdminStatus(userMember.status)) {
+      return {
+        ok: false,
+        message: "Вы не администратор этого канала. Пересылать пост может только админ канала.",
+      };
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        "Не удалось проверить канал. Убедитесь, что бот добавлен в канал администратором.",
+    };
+  }
+
+  const linkResult = upsertKnownChannel(chat, userId);
+  if (linkResult.conflict) {
+    return {
+      ok: false,
+      message: "Этот канал уже привязан к другому организатору.",
+    };
+  }
+
+  const handle = chat.username ? `@${chat.username}` : chat.id;
+  return {
+    ok: true,
+    message: [
+      `✅ Канал подключён: ${chat.title || handle}`,
+      "",
+      "Он появится в панели в списке «Канал из подключенных».",
+      "Обновите Mini App, если панель уже была открыта.",
+    ].join("\n"),
+  };
 }
 
 function saveClipboardImage(dataUrl, prefix) {
@@ -1726,12 +1799,14 @@ function renderWebPage(draws, message, webUser) {
               </label>
             </div>
             <details class="subtle-details">
-              <summary>Указать канал вручную</summary>
+              <summary>Указать канал вручную (если пересылка не работает)</summary>
               <label style="margin-top:8px;">@username или -100...
                 <input name="channelId" placeholder="@my_channel или -1001234567890" />
               </label>
             </details>
-            <p class="hint">Если список пустой — добавьте бота админом и опубликуйте пост в канале.</p>
+            <p class="hint">Нет канала в списке? Добавьте бота админом в канал и перешлите любой пост из канала боту @${escapeHtml(
+              BOT_USERNAME
+            )} (команда /link_channel).</p>
           </div>
 
           <div class="form-section-card">
@@ -2487,7 +2562,39 @@ bot.on("channel_post", async (ctx) => {
   if (ctx.chat?.type !== "channel") {
     return;
   }
-  upsertKnownChannel(ctx.chat);
+  const known = findKnownChannel(String(ctx.chat.id));
+  if (known) {
+    upsertKnownChannel(ctx.chat);
+  }
+});
+
+bot.command("link_channel", async (ctx) => {
+  if (ctx.chat?.type !== "private") {
+    await ctx.reply("Откройте личный чат с ботом и отправьте /link_channel");
+    return;
+  }
+
+  await ctx.reply(
+    [
+      "🔗 Подключение канала",
+      "",
+      "1. Добавьте бота админом в канал",
+      "2. Перешлите сюда любое сообщение из этого канала",
+      "",
+      "Канал появится в панели — вводить ID вручную не нужно.",
+    ].join("\n"),
+  );
+});
+
+bot.on("message", async (ctx, next) => {
+  const msg = ctx.message;
+  const forwardedChat = msg?.forward_from_chat;
+  if (ctx.chat?.type !== "private" || !forwardedChat || forwardedChat.type !== "channel") {
+    return next();
+  }
+
+  const result = await linkChannelForUser(ctx, forwardedChat);
+  await ctx.reply(result.message);
 });
 
 bot.start(async (ctx) => {
@@ -2504,7 +2611,8 @@ bot.start(async (ctx) => {
       "🎁 Roller Bot — розыгрыши в Telegram-каналах",
       "",
       "1. Добавьте бота админом в свой канал",
-      "2. Нажмите «Панель» и создайте розыгрыш",
+      "2. Перешлите любой пост из канала боту (/link_channel)",
+      "3. Нажмите «Панель» и создайте розыгрыш",
       "",
       "Участникам: кнопка «Участвовать» в посте канала.",
     ].join("\n"),
@@ -2555,10 +2663,13 @@ bot.command("channels", async (ctx) => {
   if (channels.length === 0) {
     await ctx.reply(
       [
-        "Пока нет известных каналов.",
-        "Добавьте бота админом в канал и опубликуйте любой пост в канале.",
-        "После этого канал появится автоматически.",
-      ].join("\n")
+        "Пока нет подключенных каналов.",
+        "",
+        "1. Добавьте бота админом в канал",
+        "2. Перешлите любой пост из канала сюда",
+        "",
+        "Или отправьте /link_channel для инструкции.",
+      ].join("\n"),
     );
     return;
   }
