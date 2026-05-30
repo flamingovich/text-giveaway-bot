@@ -15,6 +15,10 @@ const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .split(",")
   .map((id) => Number(id.trim()))
   .filter(Number.isFinite);
+const SUPER_ADMIN_IDS = (process.env.SUPER_ADMIN_IDS || process.env.ADMIN_IDS || "")
+  .split(",")
+  .map((id) => Number(id.trim()))
+  .filter(Number.isFinite);
 const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
@@ -57,6 +61,7 @@ const DRAWS_FILE = path.join(DATA_DIR, "draws.json");
 const KNOWN_CHANNELS_FILE = path.join(DATA_DIR, "known-channels.json");
 const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 const USER_PROJECT_PROFILES_FILE = path.join(DATA_DIR, "user-project-profiles.json");
+const DELEGATED_ADMINS_FILE = path.join(DATA_DIR, "delegated-admins.json");
 const ASSETS_DIR = path.join(__dirname, "..", "assets");
 
 const DRAW_STATUS = {
@@ -88,6 +93,9 @@ function ensureStorage() {
   }
   if (!fs.existsSync(USER_PROJECT_PROFILES_FILE)) {
     fs.writeFileSync(USER_PROJECT_PROFILES_FILE, JSON.stringify({ users: {} }, null, 2), "utf8");
+  }
+  if (!fs.existsSync(DELEGATED_ADMINS_FILE)) {
+    fs.writeFileSync(DELEGATED_ADMINS_FILE, JSON.stringify({ admins: [] }, null, 2), "utf8");
   }
 }
 
@@ -131,8 +139,66 @@ function writeUserProjectProfiles(data) {
   fs.writeFileSync(USER_PROJECT_PROFILES_FILE, JSON.stringify(data, null, 2), "utf8");
 }
 
+function readDelegatedAdmins() {
+  ensureStorage();
+  const content = fs.readFileSync(DELEGATED_ADMINS_FILE, "utf8");
+  return JSON.parse(content);
+}
+
+function writeDelegatedAdmins(data) {
+  fs.writeFileSync(DELEGATED_ADMINS_FILE, JSON.stringify(data, null, 2), "utf8");
+}
+
+function getDelegatedAdminIds() {
+  return (readDelegatedAdmins().admins || []).map((entry) => Number(entry.userId)).filter(Number.isFinite);
+}
+
+function addDelegatedAdmin(userId, label, addedBy) {
+  const id = Number(userId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return { ok: false, error: "Укажите корректный Telegram ID." };
+  }
+  if (isSuperAdmin(id) || ADMIN_IDS.includes(id)) {
+    return { ok: false, error: "Этот пользователь уже суперадмин (.env)." };
+  }
+  const data = readDelegatedAdmins();
+  if ((data.admins || []).some((entry) => Number(entry.userId) === id)) {
+    return { ok: false, error: "Этот ID уже в списке админов." };
+  }
+  data.admins = data.admins || [];
+  data.admins.push({
+    userId: id,
+    label: String(label || "").trim(),
+    addedAt: new Date().toISOString(),
+    addedBy: Number(addedBy) || null,
+  });
+  writeDelegatedAdmins(data);
+  return { ok: true };
+}
+
+function removeDelegatedAdmin(userId) {
+  const id = Number(userId);
+  const data = readDelegatedAdmins();
+  const before = (data.admins || []).length;
+  data.admins = (data.admins || []).filter((entry) => Number(entry.userId) !== id);
+  if (data.admins.length === before) {
+    return { ok: false, error: "Админ с таким ID не найден." };
+  }
+  writeDelegatedAdmins(data);
+  return { ok: true };
+}
+
+function isSuperAdmin(userId) {
+  return SUPER_ADMIN_IDS.includes(Number(userId));
+}
+
+function isPlatformAdmin(userId) {
+  const id = Number(userId);
+  return SUPER_ADMIN_IDS.includes(id) || ADMIN_IDS.includes(id) || getDelegatedAdminIds().includes(id);
+}
+
 function getDefaultOwnerId() {
-  return ADMIN_IDS[0];
+  return SUPER_ADMIN_IDS[0] || ADMIN_IDS[0];
 }
 
 function itemBelongsToOwner(item, ownerId) {
@@ -404,7 +470,7 @@ function formatDateTimeForInput(isoString) {
 }
 
 function isAdmin(ctx) {
-  return ADMIN_IDS.includes(ctx.from?.id);
+  return isPlatformAdmin(ctx.from?.id);
 }
 
 function parseStartPayload(ctx) {
@@ -660,7 +726,7 @@ function removeSession(userId) {
 
 function isOrganizer(userId) {
   const id = Number(userId);
-  if (ADMIN_IDS.includes(id)) {
+  if (isPlatformAdmin(id)) {
     return true;
   }
   if (filterByOwner(readKnownChannels().channels || [], id).length > 0) {
@@ -1392,6 +1458,28 @@ function redirectWithMessage(res, message) {
 
 function renderWebPage(draws, message, webUser) {
   const ownerId = webUser?.id ?? getDefaultOwnerId();
+  const showAccessPanel = isSuperAdmin(ownerId);
+  const delegatedAdmins = showAccessPanel ? readDelegatedAdmins().admins || [] : [];
+  const superAdminLabels = SUPER_ADMIN_IDS.map(
+    (id) => `<div class="access-item access-item-super"><strong>${escapeHtml(String(id))}</strong> <span class="access-badge">суперадмин</span></div>`,
+  ).join("");
+  const delegatedAdminRows = delegatedAdmins
+    .map((entry) => {
+      const note = entry.label ? ` — ${escapeHtml(entry.label)}` : "";
+      const added = entry.addedAt ? `<div class="access-meta">Добавлен: ${escapeHtml(formatDateTime(entry.addedAt))}</div>` : "";
+      return `
+        <div class="access-item">
+          <div class="access-item-head">
+            <strong>${escapeHtml(String(entry.userId))}</strong>${note}
+          </div>
+          ${added}
+          <form method="post" action="/admin/access/${encodeURIComponent(String(entry.userId))}/remove" class="access-remove-form">
+            <button type="submit" class="btn-danger">Удалить</button>
+          </form>
+        </div>
+      `;
+    })
+    .join("");
   const projects = filterByOwner(readProjects().projects || [], ownerId);
   const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
   const userProfiles = readUserProjectProfiles();
@@ -1758,9 +1846,36 @@ function renderWebPage(draws, message, webUser) {
       color: #7682a0;
       font-weight: 800;
     }
-    .admin-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    .admin-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; }
     .btn-secondary { background: #ffffff; color: #2c3f86; border: 1px solid #cad6ff; }
     .btn-secondary:hover { background: #f5f8ff; }
+    .btn-danger { background: #fff5f5; color: #b42318; border: 1px solid #fecdca; }
+    .btn-danger:hover { background: #fee4e2; }
+    .access-item {
+      border: 1px solid #dce4fb;
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #fff;
+      margin-bottom: 8px;
+    }
+    .access-item-super { background: #f5f8ff; }
+    .access-item-head { margin-bottom: 4px; }
+    .access-meta { color: #5d6c8f; font-size: 12px; margin-bottom: 8px; }
+    .access-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #2e4db9;
+      background: #e8efff;
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin-left: 6px;
+    }
+    .access-remove-form { margin: 0; }
+    .access-remove-form button { margin-top: 4px; padding: 8px 12px; font-size: 13px; }
+    .access-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid #e2e8fb; }
     .panel-hidden { display: none; }
     .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 10px 0 2px; }
     .stat-card { background: #fff; border: 1px solid #dde5fb; border-radius: 12px; padding: 10px 12px; }
@@ -1813,6 +1928,7 @@ function renderWebPage(draws, message, webUser) {
       <div class="admin-actions">
         <button id="toggleCreateDrawBtn" type="button">Создать розыгрыш</button>
         <button id="toggleProjectsBtn" type="button" class="btn-secondary">Управление проектами</button>
+        ${showAccessPanel ? `<button id="toggleAccessBtn" type="button" class="btn-secondary">Управление доступом</button>` : ""}
       </div>
 
       <section id="createDrawPanel" class="card card-dark create-panel panel-hidden">
@@ -1968,6 +2084,35 @@ function renderWebPage(draws, message, webUser) {
           </div>
         </div>
       </section>
+
+      ${
+        showAccessPanel
+          ? `
+      <section id="accessPanel" class="card panel-hidden">
+        <h2>Управление доступом</h2>
+        <div class="subtitle">Добавляйте Telegram ID пользователей с доступом к панели и админ-командам бота (/create_draw и др.). Только вы (суперадмин) можете менять этот список.</div>
+        <div class="section-title">Суперадмины (.env)</div>
+        ${superAdminLabels || `<p class="hint">SUPER_ADMIN_IDS не задан.</p>`}
+        <div class="section-title">Делегированные админы</div>
+        ${
+          delegatedAdminRows ||
+          `<p class="hint">Пока нет делегированных админов. Добавьте Telegram ID ниже (узнать ID: @userinfobot).</p>`
+        }
+        <form method="post" action="/admin/access" class="access-form">
+          <div class="compact-grid-2">
+            <label>Telegram ID
+              <input name="userId" type="number" min="1" step="1" required placeholder="123456789" />
+            </label>
+            <label>Заметка (необязательно)
+              <input name="label" placeholder="Имя или роль" />
+            </label>
+          </div>
+          <button type="submit">Добавить админа</button>
+        </form>
+      </section>
+      `
+          : ""
+      }
 
       <section class="card">
         <h2 class="draw-history-title">История розыгрышей</h2>
@@ -2133,17 +2278,33 @@ function renderWebPage(draws, message, webUser) {
     function setupAdminPanels() {
       const createBtn = document.getElementById("toggleCreateDrawBtn");
       const projectsBtn = document.getElementById("toggleProjectsBtn");
+      const accessBtn = document.getElementById("toggleAccessBtn");
       const createPanel = document.getElementById("createDrawPanel");
       const projectsPanel = document.getElementById("projectsPanel");
+      const accessPanel = document.getElementById("accessPanel");
       if (!createBtn || !projectsBtn || !createPanel || !projectsPanel) return;
+
+      function closeOtherPanels(exceptPanel) {
+        const panels = [
+          { panel: createPanel, btn: createBtn, open: "Скрыть создание розыгрыша", closed: "Создать розыгрыш" },
+          { panel: projectsPanel, btn: projectsBtn, open: "Скрыть управление проектами", closed: "Управление проектами" },
+        ];
+        if (accessPanel && accessBtn) {
+          panels.push({ panel: accessPanel, btn: accessBtn, open: "Скрыть управление доступом", closed: "Управление доступом" });
+        }
+        for (const item of panels) {
+          if (item.panel === exceptPanel) continue;
+          item.panel.classList.add("panel-hidden");
+          item.btn.textContent = item.closed;
+        }
+      }
 
       createBtn.addEventListener("click", () => {
         const willOpen = createPanel.classList.contains("panel-hidden");
         createPanel.classList.toggle("panel-hidden");
         if (willOpen) {
-          projectsPanel.classList.add("panel-hidden");
+          closeOtherPanels(createPanel);
           createBtn.textContent = "Скрыть создание розыгрыша";
-          projectsBtn.textContent = "Управление проектами";
         } else {
           createBtn.textContent = "Создать розыгрыш";
         }
@@ -2153,13 +2314,25 @@ function renderWebPage(draws, message, webUser) {
         const willOpen = projectsPanel.classList.contains("panel-hidden");
         projectsPanel.classList.toggle("panel-hidden");
         if (willOpen) {
-          createPanel.classList.add("panel-hidden");
+          closeOtherPanels(projectsPanel);
           projectsBtn.textContent = "Скрыть управление проектами";
-          createBtn.textContent = "Создать розыгрыш";
         } else {
           projectsBtn.textContent = "Управление проектами";
         }
       });
+
+      if (accessPanel && accessBtn) {
+        accessBtn.addEventListener("click", () => {
+          const willOpen = accessPanel.classList.contains("panel-hidden");
+          accessPanel.classList.toggle("panel-hidden");
+          if (willOpen) {
+            closeOtherPanels(accessPanel);
+            accessBtn.textContent = "Скрыть управление доступом";
+          } else {
+            accessBtn.textContent = "Управление доступом";
+          }
+        });
+      }
     }
 
     setupPasteImage("draw-paste-target", "draw-clipboard-data", "draw-paste-preview");
@@ -2181,6 +2354,14 @@ function requireOrganizer(req, res, next) {
       return;
     }
     redirectWithMessage(res, "Доступ только для организаторов каналов.");
+    return;
+  }
+  next();
+}
+
+function requireSuperAdmin(req, res, next) {
+  if (!req.webUser?.id || !isSuperAdmin(req.webUser.id)) {
+    redirectWithMessage(res, "Доступ только для суперадмина.");
     return;
   }
   next();
@@ -2215,7 +2396,13 @@ app.post("/auth/session", (req, res) => {
     return;
   }
   webAuth.setSessionCookie(res, user.id);
-  res.json({ ok: true, userId: user.id, organizer: isOrganizer(user.id) });
+  res.json({
+    ok: true,
+    userId: user.id,
+    organizer: isOrganizer(user.id),
+    platformAdmin: isPlatformAdmin(user.id),
+    superAdmin: isSuperAdmin(user.id),
+  });
 });
 
 registerJoinMiniApp(app, {
@@ -2246,6 +2433,30 @@ app.get("/", webAuth.requireAuth, (req, res) => {
   );
   res.type("html").send(renderWebPage(draws, req.query.msg, req.webUser));
 });
+
+app.post("/admin/access", webAuth.requireAuth, requireOrganizer, requireSuperAdmin, (req, res) => {
+  const result = addDelegatedAdmin(req.body?.userId, req.body?.label, req.webUser.id);
+  if (!result.ok) {
+    redirectWithMessage(res, result.error);
+    return;
+  }
+  redirectWithMessage(res, `Админ ${req.body.userId} добавлен.`);
+});
+
+app.post(
+  "/admin/access/:userId/remove",
+  webAuth.requireAuth,
+  requireOrganizer,
+  requireSuperAdmin,
+  (req, res) => {
+    const result = removeDelegatedAdmin(req.params.userId);
+    if (!result.ok) {
+      redirectWithMessage(res, result.error);
+      return;
+    }
+    redirectWithMessage(res, `Админ ${req.params.userId} удалён из списка.`);
+  },
+);
 
 app.get("/qr", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const text = String(req.query.text || "").trim();
