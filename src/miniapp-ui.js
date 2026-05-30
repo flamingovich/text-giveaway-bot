@@ -20,6 +20,8 @@ function getMiniAppStyles() {
       --tg-theme-button-color: #325fff;
       --tg-theme-button-text-color: #ffffff;
       --tg-theme-secondary-bg-color: #ffffff;
+      --bg-dark: #152238;
+      --app-bg-image-dark: url("/brand/background-dark.jpg");
     }
 
     html {
@@ -46,12 +48,22 @@ function getMiniAppStyles() {
       position: fixed;
       inset: 0;
       z-index: -1;
-      background-color: var(--bg, #dbe8f8);
-      background-image: var(--app-bg-image, url("/brand/background.jpg"));
+      background-color: var(--bg-active, var(--bg, #dbe8f8));
+      background-image: var(--app-bg-active, var(--app-bg-image, url("/brand/background.jpg")));
       background-repeat: repeat-y;
       background-position: center top;
       background-size: min(100vw, 760px) auto;
       pointer-events: none;
+    }
+
+    body.mini-app-shell.app-theme-dark {
+      --bg-active: var(--bg-dark);
+      --app-bg-active: var(--app-bg-image-dark);
+    }
+
+    body.mini-app-shell.app-theme-light {
+      --bg-active: var(--bg, #dbe8f8);
+      --app-bg-active: var(--app-bg-image, url("/brand/background.jpg"));
     }
 
     body.mini-app-shell .site-header {
@@ -154,6 +166,66 @@ function getMiniAppStyles() {
       min-width: 0;
       min-height: 56px;
       padding: 9px 4px;
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 22%, transparent);
+    }
+
+    body.mini-app-shell.app-theme-dark .quick-action:not(.quick-action-primary) {
+      background: var(--tg-theme-secondary-bg-color);
+      color: var(--tg-theme-link-color, var(--tg-theme-button-color));
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 30%, transparent);
+    }
+
+    body.mini-app-shell.app-theme-dark .draw-input,
+    body.mini-app-shell.app-theme-dark .draw-file-btn,
+    body.mini-app-shell.app-theme-dark .draw-paste-btn {
+      background: color-mix(in srgb, var(--tg-theme-bg-color) 88%, #000);
+      color: var(--tg-theme-text-color);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 28%, transparent);
+    }
+
+    body.mini-app-shell .draw-file-btn,
+    body.mini-app-shell .draw-paste-btn {
+      height: 38px;
+      min-height: 38px;
+      max-height: 38px;
+      padding: 0 8px;
+      line-height: 1;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    body.mini-app-shell.app-theme-dark .history-time-row,
+    body.mini-app-shell.app-theme-dark .history-chip,
+    body.mini-app-shell.app-theme-dark .stat-card,
+    body.mini-app-shell.app-theme-dark .draw-block,
+    body.mini-app-shell.app-theme-dark .history-details {
+      background: color-mix(in srgb, var(--tg-theme-bg-color) 92%, #000);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 24%, transparent);
+    }
+
+    body.mini-app-shell.app-theme-dark .winner-card {
+      background: var(--tg-theme-secondary-bg-color);
+    }
+
+    body.mini-app-shell.app-theme-dark .history-card,
+    body.mini-app-shell.app-theme-dark .project-card,
+    body.mini-app-shell.app-theme-dark .access-card {
+      background: var(--tg-theme-secondary-bg-color);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 24%, transparent);
+    }
+
+    body.mini-app-shell.app-theme-dark .history-card.history-card-active {
+      border: 2px solid #5b8cff;
+    }
+
+    body.mini-app-shell.app-theme-light .history-card.history-card-active {
+      border: 2px solid #325fff;
+    }
+
+    body.mini-app-shell.app-theme-dark .msg {
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color) 90%, #000);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color) 22%, transparent);
+      color: var(--tg-theme-text-color);
     }
 
     body.mini-app-shell .quick-actions {
@@ -193,13 +265,17 @@ function getMiniAppStyles() {
     body.mini-app-shell img,
     body.mini-app-shell input,
     body.mini-app-shell select,
-    body.mini-app-shell button,
+    body.mini-app-shell button:not(.theme-toggle-btn):not(.settings-action-btn),
     body.mini-app-shell .history-list,
     body.mini-app-shell .history-card {
       max-width: 100%;
       min-width: 0;
       overflow: hidden;
       box-sizing: border-box;
+    }
+    body.mini-app-shell .theme-toggle-btn {
+      overflow: visible;
+      max-width: 36px;
     }
 
     body.mini-app-shell .stats-row {
@@ -240,6 +316,9 @@ function getMiniAppStyles() {
 
     body.mini-app-shell .history-card {
       padding: 10px;
+    }
+    body.mini-app-shell .history-card-active {
+      overflow: visible;
     }
 
     body.mini-app-shell .history-cover-side {
@@ -337,7 +416,7 @@ function getMiniAppStyles() {
 
     body.mini-app-shell input,
     body.mini-app-shell select,
-    body.mini-app-shell button {
+    body.mini-app-shell button:not(.settings-action-btn) {
       font-size: 14px;
     }
 
@@ -435,6 +514,7 @@ function getMiniAppInitScript(options = {}) {
   return `
 (function () {
   const tg = window.Telegram?.WebApp;
+  const THEME_KEY = "rollerbot-theme";
   const themeKeys = {
     bg_color: "--tg-theme-bg-color",
     text_color: "--tg-theme-text-color",
@@ -444,15 +524,112 @@ function getMiniAppInitScript(options = {}) {
     button_text_color: "--tg-theme-button-text-color",
     secondary_bg_color: "--tg-theme-secondary-bg-color",
   };
+  const manualLightTheme = {
+    bg_color: "#eef3ff",
+    text_color: "#151a2d",
+    hint_color: "#65708a",
+    link_color: "#325fff",
+    button_color: "#325fff",
+    button_text_color: "#ffffff",
+    secondary_bg_color: "#ffffff",
+  };
+  const manualDarkTheme = {
+    bg_color: "#1c2536",
+    text_color: "#eef1f7",
+    hint_color: "#93a0b8",
+    link_color: "#6b9aff",
+    button_color: "#5b8cff",
+    button_text_color: "#ffffff",
+    secondary_bg_color: "#232f42",
+  };
+  let themeMode;
 
-  function applyTheme() {
-    if (!tg?.themeParams) return;
+  function getInitialThemeMode() {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+    const mode = getTelegramDark() ? "dark" : "light";
+    localStorage.setItem(THEME_KEY, mode);
+    return mode;
+  }
+
+  function parseHexColor(value) {
+    const raw = String(value || "").trim();
+    if (!raw.startsWith("#")) return null;
+    const hex = raw.slice(1);
+    if (hex.length === 3) {
+      return [
+        parseInt(hex[0] + hex[0], 16),
+        parseInt(hex[1] + hex[1], 16),
+        parseInt(hex[2] + hex[2], 16),
+      ];
+    }
+    if (hex.length === 6) {
+      return [
+        parseInt(hex.slice(0, 2), 16),
+        parseInt(hex.slice(2, 4), 16),
+        parseInt(hex.slice(4, 6), 16),
+      ];
+    }
+    return null;
+  }
+
+  function isColorDark(value) {
+    const rgb = parseHexColor(value);
+    if (!rgb) return false;
+    const luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
+    return luminance < 0.5;
+  }
+
+  function applyThemeParams(params) {
+    if (!params) return;
     const root = document.documentElement;
     for (const [key, cssVar] of Object.entries(themeKeys)) {
-      if (tg.themeParams[key]) {
-        root.style.setProperty(cssVar, tg.themeParams[key]);
+      if (params[key]) {
+        root.style.setProperty(cssVar, params[key]);
       }
     }
+  }
+
+  function getTelegramDark() {
+    if (tg?.colorScheme === "dark") return true;
+    if (tg?.colorScheme === "light") return false;
+    if (tg?.themeParams?.bg_color) {
+      return isColorDark(tg.themeParams.bg_color);
+    }
+    return false;
+  }
+
+  function resolveDark() {
+    return themeMode === "dark";
+  }
+
+  function updateToggleUi(isDark) {
+    const btn = document.getElementById("themeToggleBtn");
+    if (!btn) return;
+    btn.title = isDark ? "Тема: тёмная" : "Тема: светлая";
+    btn.setAttribute("aria-label", btn.title);
+    btn.classList.toggle("is-dark-active", isDark);
+  }
+
+  function applyAppearance() {
+    const isDark = resolveDark();
+    document.body.classList.toggle("app-theme-dark", isDark);
+    document.body.classList.toggle("app-theme-light", !isDark);
+    applyThemeParams(isDark ? manualDarkTheme : manualLightTheme);
+    updateToggleUi(isDark);
+  }
+
+  function cycleTheme() {
+    themeMode = themeMode === "dark" ? "light" : "dark";
+    localStorage.setItem(THEME_KEY, themeMode);
+    applyAppearance();
+  }
+
+  function setupThemeToggle() {
+    const btn = document.getElementById("themeToggleBtn");
+    if (!btn || btn.dataset.bound === "1") return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", cycleTheme);
   }
 
   function bindViewport() {
@@ -478,13 +655,14 @@ function getMiniAppInitScript(options = {}) {
     tg.onEvent("viewportChanged", sync);
     tg.onEvent("safeAreaChanged", sync);
     tg.onEvent("contentSafeAreaChanged", sync);
-    tg.onEvent("themeChanged", applyTheme);
   }
 
   function enableShell() {
+    themeMode = getInitialThemeMode();
     document.body.classList.add("mini-app-shell");
-    applyTheme();
+    applyAppearance();
     bindViewport();
+    setupThemeToggle();
   }
 
   if (tg) {
@@ -500,8 +678,13 @@ function getMiniAppInitScript(options = {}) {
         credentials: "same-origin",
       }).catch(function () {});
     }` : ""}
-  } else if (${previewShell ? "true" : "false"}) {
-    enableShell();
+  } else {
+    themeMode = getInitialThemeMode();
+    setupThemeToggle();
+    applyAppearance();
+    if (${previewShell ? "true" : "false"}) {
+      enableShell();
+    }
   }
 })();
 `;

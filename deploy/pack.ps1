@@ -8,6 +8,7 @@ $items = @(
     "deploy",
     "data",
     "background.jpg",
+    "background_dark.jpg",
     "rollerbot_logo.jpg",
     "package.json",
     "package-lock.json",

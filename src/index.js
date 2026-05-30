@@ -24,6 +24,7 @@ const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
+const PANEL_BASE = "/panel";
 const WEB_ONLY = process.env.WEB_ONLY === "true";
 const WEB_AUTH_DISABLED = process.env.WEB_AUTH_DISABLED === "true" || WEB_ONLY;
 let BOT_USERNAME = (process.env.BOT_USERNAME || "").replace("@", "");
@@ -55,6 +56,7 @@ const webAuth = createWebAuth({
   defaultUserId: ADMIN_IDS[0],
   botUsername: BOT_USERNAME,
   publicUrl: WEB_PUBLIC_URL,
+  panelPath: PANEL_BASE,
 });
 const app = express();
 const DATA_DIR = path.join(__dirname, "..", "data");
@@ -67,6 +69,7 @@ const DELEGATED_ADMINS_FILE = path.join(DATA_DIR, "delegated-admins.json");
 const ASSETS_DIR = path.join(__dirname, "..", "assets");
 const BRAND_LOGO_FILE = path.join(__dirname, "..", "rollerbot_logo.jpg");
 const BRAND_BACKGROUND_FILE = path.join(__dirname, "..", "background.jpg");
+const BRAND_BACKGROUND_DARK_FILE = path.join(__dirname, "..", "background_dark.jpg");
 
 const DRAW_STATUS = {
   DRAFT: "draft",
@@ -333,6 +336,7 @@ function upsertKnownChannel(chat, ownerId = null) {
     id,
     title: chat.title || "",
     username: chat.username || "",
+    photoFileId: chat.photoFileId || "",
     updatedAt: new Date().toISOString(),
   };
 
@@ -354,6 +358,48 @@ function upsertKnownChannel(chat, ownerId = null) {
 
   writeKnownChannels(data);
   return { conflict: false };
+}
+
+function findOwnedKnownChannel(channelId, ownerId) {
+  const channel = findKnownChannel(channelId);
+  if (!channel) {
+    return null;
+  }
+  if (channel.ownerId != null && Number(channel.ownerId) !== Number(ownerId)) {
+    return null;
+  }
+  return channel;
+}
+
+function removeKnownChannel(channelId, ownerId) {
+  const channel = findOwnedKnownChannel(channelId, ownerId);
+  if (!channel) {
+    return { ok: false, error: "Канал не найден." };
+  }
+
+  const draws = filterByOwner(readData().draws || [], ownerId);
+  const channelRef = channel.username ? `@${channel.username}` : channel.id;
+  const blocked = draws.some(
+    (draw) =>
+      (draw.status === DRAW_STATUS.ACTIVE || draw.status === DRAW_STATUS.SCHEDULED) &&
+      (normalizeChannelRef(draw.channelId) === normalizeChannelRef(channelRef) ||
+        normalizeChannelRef(draw.channelId) === normalizeChannelRef(channel.id)),
+  );
+  if (blocked) {
+    return { ok: false, error: "Нельзя удалить канал с активным или запланированным розыгрышем." };
+  }
+
+  const data = readKnownChannels();
+  data.channels = data.channels.filter((item) => item.id !== channel.id);
+  writeKnownChannels(data);
+  return { ok: true, channel };
+}
+
+function getBotLinkChannelUrl() {
+  if (!BOT_USERNAME) {
+    return "https://t.me";
+  }
+  return `https://t.me/${BOT_USERNAME}?start=link_channel`;
 }
 
 function isChannelAdminStatus(status) {
@@ -413,13 +459,27 @@ async function linkChannelForUser(ctx, chat) {
     };
   }
 
+  try {
+    const fullChat = await bot.telegram.getChat(chat.id);
+    if (fullChat.photo?.small_file_id) {
+      const data = readKnownChannels();
+      const stored = data.channels.find((item) => item.id === String(chat.id));
+      if (stored) {
+        stored.photoFileId = fullChat.photo.small_file_id;
+        writeKnownChannels(data);
+      }
+    }
+  } catch {
+    // optional avatar
+  }
+
   const handle = chat.username ? `@${chat.username}` : chat.id;
   return {
     ok: true,
     message: [
       `✅ Канал подключён: ${chat.title || handle}`,
       "",
-      "Он появится в панели в списке «Канал из подключенных».",
+      "Он появится в панели: Настройки → Мои каналы.",
       "Обновите Mini App, если панель уже была открыта.",
     ].join("\n"),
   };
@@ -911,6 +971,15 @@ function getJoinWebAppUrl(drawId) {
   return `${WEB_PUBLIC_URL}/join/${encodeURIComponent(drawId)}`;
 }
 
+function getPanelUrl() {
+  const base = WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`;
+  return `${base}${PANEL_BASE}`;
+}
+
+function getPanelKeyboard() {
+  return Markup.keyboard([[Markup.button.webApp("📱 Панель", getPanelUrl())]]).resize();
+}
+
 function getKeyboard(drawId, count) {
   const text = `Участвовать (${count})`;
   const joinUrl = getJoinWebAppUrl(drawId);
@@ -1394,12 +1463,12 @@ function renderAccessPersonCard(userId, userProfiles, options = {}) {
   const usernameLine = person.username ? `@${person.username}` : "без username";
   const initial = (fullName || person.username || String(userId)).charAt(0).toUpperCase();
   const avatar = person.avatarFileId
-    ? `<img src="/avatar/${encodeURIComponent(String(userId))}" alt="" class="access-avatar" />`
+    ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(userId))}" alt="" class="access-avatar" />`
     : `<div class="access-avatar access-avatar-fallback">${escapeHtml(initial)}</div>`;
   const badgeHtml = badge ? `<span class="access-badge">${escapeHtml(badge)}</span>` : "";
   const deleteAction = removable
     ? `<div class="access-card-actions">
-          <form method="post" action="/admin/access/${encodeURIComponent(String(userId))}/remove" class="project-delete-form">
+          <form method="post" action="${PANEL_BASE}/admin/access/${encodeURIComponent(String(userId))}/remove" class="project-delete-form">
             <button
               type="submit"
               class="project-icon-btn project-delete-btn access-delete-btn"
@@ -1746,7 +1815,78 @@ async function schedulerTick() {
 }
 
 function redirectWithMessage(res, message) {
-  res.redirect(`/?msg=${encodeURIComponent(message)}`);
+  res.redirect(`${PANEL_BASE}?msg=${encodeURIComponent(message)}`);
+}
+
+function renderLandingPage() {
+  const botLink = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}` : "https://t.me";
+  const botLabel = BOT_USERNAME ? `@${BOT_USERNAME}` : "бота";
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>RollerBot — розыгрыши в Telegram</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #eef3ff 0%, #f8faff 100%);
+      color: #151a2d;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      max-width: 420px;
+      width: 100%;
+      background: #fff;
+      border-radius: 24px;
+      padding: 32px 28px;
+      text-align: center;
+      box-shadow: 0 20px 48px rgba(27, 45, 94, 0.12);
+      border: 1px solid #dfe5f4;
+    }
+    .logo {
+      width: 88px;
+      height: 88px;
+      border-radius: 20px;
+      object-fit: contain;
+      margin-bottom: 18px;
+    }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    p { margin: 0 0 22px; color: #65708a; line-height: 1.55; }
+    a {
+      display: inline-block;
+      background: #325fff;
+      color: #fff;
+      text-decoration: none;
+      padding: 14px 22px;
+      border-radius: 14px;
+      font-weight: 700;
+    }
+    .panel-link {
+      display: block;
+      margin-top: 14px;
+      color: #325fff;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="/brand/logo.jpg" alt="" class="logo" width="88" height="88" />
+    <h1>RollerBot</h1>
+    <p>Розыгрыши в Telegram-каналах: создание, участие, выплаты победителям.</p>
+    <a href="${botLink}">Открыть ${botLabel}</a>
+    <a class="panel-link" href="${PANEL_BASE}">Панель организатора →</a>
+  </div>
+</body>
+</html>`;
 }
 
 function renderDesignBanner() {
@@ -1755,7 +1895,7 @@ function renderDesignBanner() {
 
 function renderFormIcon(type) {
   const icons = {
-    gift: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 7h-2.18C17.84 4.36 15.39 3 12.75 3S7.66 4.36 6.18 7H4c-1.1 0-2 .9-2 2v2c0 1.1.9 2 2 2h1v8c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-8h1c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2zm-7 12H9v-8h4v8zm2-13.5c.83 0 1.5.67 1.5 1.5H11c0-.83.67-1.5 1.5-1.5zM20 9h-5V7.5C15 6.12 13.88 5 12.5 5S10 6.12 10 7.5V9H4V9h16z"/></svg>',
+    gift: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18 11h-1V7c0-1.1-.9-2-2-2h-1V4c0-1.66-1.34-3-3-3S8 2.34 8 4v1H7c-1.1 0-2 .9-2 2v4H4c-1.1 0-2 .9-2 2v6c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-6c0-1.1-.9-2-2-2zM10 4c0-.55.45-1 1-1s1 .45 1 1v2h-2V4zm4 0c0-.55.45-1 1-1s1 .45 1 1v2h-2V4zM4 13h16v6H4v-6z"/></svg>',
     project: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>',
     channel: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18 8A6 6 0 1 0 6 8c0 7-3 9-3 9h18s-3-2-3-9zm-5 11v2H11v-2H8l4-4 4 4h-3z"/></svg>',
     prize: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.65 1.87 1.96 0 2.4-.98 2.4-1.59 0-.83-.44-1.61-2.67-2.14-2.48-.6-4.18-1.62-4.18-3.67 0-1.72 1.39-2.84 3.11-3.21V4h2.67v1.95c1.86.45 2.79 1.86 2.85 3.39H14.3c-.05-1.11-.64-1.87-2.22-1.87-1.5 0-2.4.68-2.4 1.64 0 .84.65 1.39 2.67 1.91s4.18 1.39 4.18 3.91c-.01 1.83-1.38 2.83-3.12 3.16z"/></svg>',
@@ -1764,6 +1904,7 @@ function renderFormIcon(type) {
     start: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>',
     finish: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm4.2 14.2L11 13V7h1.5v5.2l4.5 2.7-.8 1.3z"/></svg>',
     confirm: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>',
+    settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94a7.43 7.43 0 0 0 .05-.94 7.43 7.43 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.49-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.03.31-.05.63-.05.94s.02.63.05.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.84a.5.5 0 0 0 .49-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>',
     link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>',
     edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>',
     delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
@@ -1783,6 +1924,9 @@ function renderQuickActionIcon(type) {
   if (type === "projects") {
     return renderFormIcon("project");
   }
+  if (type === "settings") {
+    return renderFormIcon("settings");
+  }
   if (type === "access") {
     return renderFormIcon("confirm");
   }
@@ -1793,20 +1937,11 @@ function drawLabel(iconType, text) {
   return `<label class="draw-label"><span class="draw-ico">${renderFormIcon(iconType)}</span><span class="draw-label-text">${escapeHtml(text)}</span></label>`;
 }
 
-function renderProjectLogo(project) {
-  if (project.logoPath) {
-    const src = `/uploads/${encodeURIComponent(path.basename(project.logoPath))}`;
-    return `<img src="${src}" alt="" class="project-card-logo" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex');" /><span class="project-card-logo-fallback" style="display:none">${renderFormIcon("photo")}</span>`;
-  }
-  return `<span class="project-card-logo-fallback">${renderFormIcon("photo")}</span>`;
-}
-
 function renderProjectCard(project) {
   const refLink = project.refLink || "";
   return `
     <article class="project-card">
       <div class="project-card-head">
-        <div class="project-card-logo-wrap">${renderProjectLogo(project)}</div>
         <div class="project-card-body">
           <h3 class="project-card-name">${escapeHtml(project.name)}</h3>
           ${
@@ -1827,7 +1962,7 @@ function renderProjectCard(project) {
             data-project-name="${escapeHtml(project.name)}"
             data-project-ref="${escapeHtml(refLink)}"
           >${renderFormIcon("edit")}</button>
-          <form method="post" action="/projects/${encodeURIComponent(project.id)}/delete" class="project-delete-form">
+          <form method="post" action="${PANEL_BASE}/projects/${encodeURIComponent(project.id)}/delete" class="project-delete-form">
             <button
               type="submit"
               class="project-icon-btn project-delete-btn"
@@ -1841,20 +1976,54 @@ function renderProjectCard(project) {
   `;
 }
 
-function renderHistoryProjectLogo(project) {
-  if (project?.logoPath) {
-    const src = `/uploads/${encodeURIComponent(path.basename(project.logoPath))}`;
-    return `<img src="${src}" alt="" class="history-project-logo" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex');" /><span class="history-project-logo-fallback" style="display:none">${renderFormIcon("project")}</span>`;
-  }
-  return `<span class="history-project-logo-fallback">${renderFormIcon("project")}</span>`;
+function renderChannelAvatar(channel) {
+  return `<img src="${PANEL_BASE}/channel-photo/${encodeURIComponent(String(channel.id))}" alt="" class="project-card-logo channel-card-avatar" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex');" /><span class="project-card-logo-fallback" style="display:none">${renderFormIcon("channel")}</span>`;
+}
+
+function renderChannelCard(channel) {
+  const handle = channel.username ? `@${channel.username}` : channel.id;
+  const title = channel.title || handle;
+  return `
+    <article class="project-card channel-card">
+      <div class="project-card-head">
+        <div class="project-card-logo-wrap channel-card-logo-wrap">${renderChannelAvatar(channel)}</div>
+        <div class="project-card-body">
+          <h3 class="project-card-name">${escapeHtml(title)}</h3>
+          <div class="channel-card-meta">${escapeHtml(handle)}</div>
+        </div>
+        <div class="project-card-actions">
+          <form method="post" action="${PANEL_BASE}/channels/${encodeURIComponent(String(channel.id))}/delete" class="project-delete-form">
+            <button
+              type="submit"
+              class="project-icon-btn project-delete-btn channel-delete-btn"
+              title="Удалить"
+              data-channel-title="${escapeHtml(title)}"
+            >${renderFormIcon("delete")}</button>
+          </form>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderHistoryGiftIcon() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="10" width="18" height="11" rx="1.5"/><path d="M12 10v11"/><path d="M3 14h18"/><path d="M12 10c0-2.5-1.5-4.5-3.5-4.5S5 7.5 5.5 9.5C6 11.5 8 12 12 10z"/><path d="M12 10c0-2.5 1.5-4.5 3.5-4.5S19 7.5 18.5 9.5C18 11.5 16 12 12 10z"/></svg>`;
 }
 
 function renderHistoryCoverSide(imagePath) {
   if (!imagePath) {
     return "";
   }
-  const src = `/uploads/${encodeURIComponent(path.basename(imagePath))}`;
+  const src = `${PANEL_BASE}/uploads/${encodeURIComponent(path.basename(imagePath))}`;
   return `<div class="history-cover-side"><img src="${src}" alt="" class="history-thumb" loading="lazy" /></div>`;
+}
+
+function getTelegramUserProfileUrl(userId, username) {
+  const cleanUsername = String(username || "").replace(/^@/, "").trim();
+  if (cleanUsername) {
+    return `https://t.me/${encodeURIComponent(cleanUsername)}`;
+  }
+  return `tg://user?id=${userId}`;
 }
 
 function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
@@ -1869,7 +2038,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
       : "";
   const initial = (fullName || meta.username || String(winnerId)).charAt(0).toUpperCase() || "?";
   const avatar = meta.avatarFileId
-    ? `<img src="/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="winner-card-avatar" />`
+    ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="winner-card-avatar" />`
     : `<div class="winner-card-avatar winner-card-avatar-fallback">${escapeHtml(initial)}</div>`;
   const trcAddress = projectData.trc20Address || "Не указан";
   const notifyInfo = winnerNotifications[String(winnerId)];
@@ -1890,28 +2059,29 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
         : notifySent
         ? `<span class="winner-badge">Уведомлён</span>`
         : `<span class="winner-badge">Ожидает</span>`;
-  const copyBtn =
-    trcAddress !== "Не указан"
-      ? `<button type="button" class="project-icon-btn winner-copy-btn" title="Копировать" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
-      : "";
   const qrBlock =
     trcAddress !== "Не указан"
-      ? `<img src="/qr?text=${encodeURIComponent(trcAddress)}" alt="" class="winner-card-qr" />`
+      ? `<img src="${PANEL_BASE}/qr?text=${encodeURIComponent(trcAddress)}" alt="" class="winner-card-qr" />`
       : "";
   const payButton = isPaid || isExpired
     ? ""
     : `<div class="winner-card-actions">
-        <form method="post" action="/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
+        <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
           <button type="submit" class="winner-action-btn">Оплатил</button>
         </form>
       </div>`;
+  const profileUrl = getTelegramUserProfileUrl(winnerId, meta.username);
+  const profileBtn = `<a href="${escapeHtml(profileUrl)}" class="winner-profile-btn" title="Перейти в профиль" aria-label="Перейти в профиль">${renderFormIcon("user")}</a>`;
 
   return `
     <article class="winner-card">
       <div class="winner-card-head">
         ${avatar}
         <div class="winner-card-body">
-          <div class="winner-card-name">${escapeHtml(displayName)}</div>
+          <div class="winner-card-name-row">
+            <div class="winner-card-name">${escapeHtml(displayName)}</div>
+            ${profileBtn}
+          </div>
           ${usernameMetaHtml}
           <div class="winner-card-badges">${refBadge}${statusBadge}</div>
         </div>
@@ -1923,8 +2093,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
       </div>
       <div class="winner-card-row winner-card-address-row">
         <span class="draw-ico">${renderFormIcon("link")}</span>
-        <span class="winner-address-text">${escapeHtml(trcAddress)}</span>
-        ${copyBtn}
+        <div class="winner-address-wrap">
+          <span class="winner-address-text">${escapeHtml(trcAddress)}</span>
+        </div>
       </div>
       ${payButton}
     </article>
@@ -1974,29 +2145,30 @@ function renderWebPage(draws, message, webUser) {
       const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED;
       const canFinishNow = draw.status === DRAW_STATUS.ACTIVE;
       const winnerNotifications = draw.winnerNotifications || {};
-      const projectLogo = renderHistoryProjectLogo(project);
       const coverPreview = renderHistoryCoverSide(draw.imagePath);
       const winnerRows = (draw.winnerIds || [])
         .map((winnerId) => renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications))
         .join("");
 
       return `
-        <article class="history-card">
+        <article class="history-card${draw.status === DRAW_STATUS.ACTIVE ? " history-card-active" : ""}">
           <div class="history-card-head">
-            <div class="history-project">
-              <span class="history-project-logo-wrap">${projectLogo}</span>
-              <span class="history-project-name">${escapeHtml(project?.name || "Проект не указан")}</span>
+            <div class="history-head-top">
+              <div class="history-title-row">
+                <span class="history-title-icon">${renderHistoryGiftIcon()}</span>
+                <div class="history-title-text">
+                  <div class="history-title">Розыгрыш ${escapeHtml(draw.prize)}</div>
+                  <div class="history-subtitle">Проект: ${escapeHtml(project?.name || "не указан")}</div>
+                </div>
+              </div>
+              <span class="history-status status-${escapeHtml(draw.status)}">${escapeHtml(statusLabel)}</span>
             </div>
-            <span class="history-status status-${escapeHtml(draw.status)}">${escapeHtml(statusLabel)}</span>
+            <div class="history-head-divider" aria-hidden="true"></div>
           </div>
 
           <div class="history-body${coverPreview ? "" : " history-body-no-cover"}">
             <div class="history-body-main">
-              <div class="history-prize-row">
-                <span class="draw-ico">${renderFormIcon("prize")}</span>
-                <span class="history-prize">${escapeHtml(draw.prize)}</span>
-              </div>
-
+              <div class="history-info-stack">
               <div class="history-times">
                 <div class="history-time-row">
                   <span class="draw-ico">${renderFormIcon("start")}</span>
@@ -2016,9 +2188,10 @@ function renderWebPage(draws, message, webUser) {
                 </span>
                 <span class="history-chip">
                   <span class="draw-ico">${renderFormIcon("trophy")}</span>
-                  <span class="history-chip-label">Призовых мест</span>
+                  <span class="history-chip-label">Приз. мест</span>
                   <span class="history-chip-value">${draw.winnersCount}</span>
                 </span>
+              </div>
               </div>
             </div>
             ${coverPreview}
@@ -2056,12 +2229,12 @@ function renderWebPage(draws, message, webUser) {
           <div class="history-actions">
             ${
               canPublishNow
-                ? `<form method="post" action="/draws/${encodeURIComponent(draw.id)}/publish-now"><button type="submit" class="history-action-btn">Опубликовать сейчас</button></form>`
+                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/publish-now"><button type="submit" class="history-action-btn">Опубликовать сейчас</button></form>`
                 : ""
             }
             ${
               canFinishNow
-                ? `<form method="post" action="/draws/${encodeURIComponent(draw.id)}/finish-now"><button type="submit" class="history-action-btn history-action-danger">Завершить сейчас</button></form>`
+                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/finish-now"><button type="submit" class="history-action-btn history-action-danger">Завершить сейчас</button></form>`
                 : ""
             }
           </div>
@@ -2071,6 +2244,8 @@ function renderWebPage(draws, message, webUser) {
     .join("");
 
   const projectsBlocks = projects.map((project) => renderProjectCard(project)).join("");
+  const channelBlocks = knownChannels.map((channel) => renderChannelCard(channel)).join("");
+  const botLinkChannelUrl = getBotLinkChannelUrl();
 
   return `
 <!doctype html>
@@ -2084,7 +2259,9 @@ function renderWebPage(draws, message, webUser) {
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     :root {
       --bg: #dbe8f8;
+      --bg-dark: #152238;
       --app-bg-image: url("/brand/background.jpg");
+      --app-bg-image-dark: url("/brand/background-dark.jpg");
       --card: #ffffff;
       --text: #151a2d;
       --sub: #65708a;
@@ -2119,12 +2296,21 @@ function renderWebPage(draws, message, webUser) {
       position: fixed;
       inset: 0;
       z-index: -1;
-      background-color: var(--bg);
-      background-image: var(--app-bg-image);
+      background-color: var(--bg-active, var(--bg));
+      background-image: var(--app-bg-active, var(--app-bg-image));
       background-repeat: repeat-y;
       background-position: center top;
       background-size: min(100vw, 760px) auto;
       pointer-events: none;
+    }
+    body.app-theme-dark {
+      --bg-active: var(--bg-dark);
+      --app-bg-active: var(--app-bg-image-dark);
+      color: var(--text-active, var(--tg-theme-text-color, #eef1f7));
+    }
+    body.app-theme-light {
+      --bg-active: var(--bg);
+      --app-bg-active: var(--app-bg-image);
     }
     .site-header {
       background: #fff;
@@ -2147,6 +2333,70 @@ function renderWebPage(draws, message, webUser) {
       min-height: 52px;
       min-width: 0;
       box-sizing: border-box;
+    }
+    .page-title {
+      flex: 1;
+      min-width: 0;
+    }
+    .theme-toggle-btn {
+      flex-shrink: 0;
+      width: 36px;
+      min-width: 36px;
+      max-width: 36px;
+      height: 36px;
+      padding: 0;
+      margin-left: auto;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--primary);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+      transform: none;
+      font-weight: 400;
+    }
+    .theme-toggle-btn:hover,
+    .theme-toggle-btn:focus-visible {
+      background: #f5f8ff;
+      transform: none;
+    }
+    .theme-toggle-btn svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+    }
+    .theme-toggle-btn .theme-icon-dark {
+      display: none;
+    }
+    body.app-theme-dark .theme-toggle-btn {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 28%, transparent);
+      color: var(--tg-theme-button-color, #5b8cff);
+    }
+    body.app-theme-dark .theme-toggle-btn:hover,
+    body.app-theme-dark .theme-toggle-btn:focus-visible {
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #232f42) 82%, #000);
+      transform: none;
+    }
+    body.app-theme-dark .theme-toggle-btn .theme-icon-light {
+      display: none;
+    }
+    body.app-theme-dark .theme-toggle-btn .theme-icon-dark {
+      display: block;
+    }
+    body.app-theme-dark .site-header {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      border-bottom-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+    }
+    body.app-theme-dark .page-title-brand {
+      color: var(--tg-theme-text-color, #eef1f7);
+    }
+    body.app-theme-dark .page-title-sub {
+      color: var(--tg-theme-hint-color, #93a0b8);
     }
     .container {
       max-width: 100%;
@@ -2316,6 +2566,7 @@ function renderWebPage(draws, message, webUser) {
       padding: 8px 10px;
     }
     .projects-list,
+    .channels-list,
     .access-list {
       display: flex;
       flex-direction: column;
@@ -2325,6 +2576,53 @@ function renderWebPage(draws, message, webUser) {
       min-width: 0;
       max-width: 100%;
       box-sizing: border-box;
+    }
+    .settings-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .settings-action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 10px 6px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 28%, transparent);
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 10%, transparent);
+      color: var(--tg-theme-button-color, var(--primary));
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      cursor: pointer;
+      text-decoration: none;
+      box-sizing: border-box;
+    }
+    .settings-action-btn:hover,
+    .settings-action-btn:focus-visible,
+    .settings-action-btn.settings-action-active {
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 18%, transparent);
+    }
+    .settings-collapse {
+      margin-bottom: 2px;
+    }
+    .channel-card-meta {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--tg-theme-hint-color, var(--sub));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .channel-card-avatar {
+      object-fit: cover;
+    }
+    .channel-card-logo-wrap {
+      border-radius: 50%;
     }
     .projects-list-title,
     .access-list-title {
@@ -2363,6 +2661,9 @@ function renderWebPage(draws, message, webUser) {
       width: 100%;
       min-width: 0;
       max-width: 100%;
+    }
+    .project-card:not(.channel-card) .project-card-head {
+      grid-template-columns: minmax(0, 1fr) auto;
     }
     .project-card-logo-wrap {
       width: 44px;
@@ -2408,6 +2709,10 @@ function renderWebPage(draws, message, webUser) {
       text-overflow: ellipsis;
       white-space: nowrap;
       max-width: 100%;
+    }
+    .channel-card .project-card-name {
+      font-size: 13px;
+      font-weight: 700;
     }
     .project-card-link {
       display: flex;
@@ -2626,6 +2931,7 @@ function renderWebPage(draws, message, webUser) {
       gap: 6px;
       width: 100%;
       max-width: 100%;
+      align-items: stretch;
     }
     .draw-paste-btn {
       width: 100%;
@@ -2638,16 +2944,20 @@ function renderWebPage(draws, message, webUser) {
       font-family: inherit;
       font-size: 13px;
       font-weight: 600;
-      padding: 9px 8px;
+      line-height: 1;
+      padding: 0 8px;
       border-radius: 10px;
       border: 1px dashed color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 38%, transparent);
       background: var(--tg-theme-secondary-bg-color, #fff);
       color: var(--tg-theme-button-color, var(--primary));
       cursor: pointer;
+      height: 38px;
       min-height: 38px;
+      max-height: 38px;
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
+      -webkit-user-modify: read-write-plaintext-only;
     }
     .draw-file-btn {
       width: 100%;
@@ -2660,13 +2970,16 @@ function renderWebPage(draws, message, webUser) {
       font-family: inherit;
       font-size: 13px;
       font-weight: 600;
-      padding: 9px 8px;
+      line-height: 1;
+      padding: 0 8px;
       border-radius: 10px;
       border: 1px dashed color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 38%, transparent);
       background: var(--tg-theme-secondary-bg-color, #fff);
       color: var(--tg-theme-button-color, var(--primary));
       cursor: pointer;
+      height: 38px;
       min-height: 38px;
+      max-height: 38px;
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
@@ -2768,7 +3081,7 @@ function renderWebPage(draws, message, webUser) {
       background: #fff;
     }
     input, select,
-    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn) {
+    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn) {
       width: 100%;
     }
     .card-dark input,
@@ -2776,7 +3089,7 @@ function renderWebPage(draws, message, webUser) {
       border: 1px solid #6f86d8;
       background: rgba(255, 255, 255, 0.96);
     }
-    button {
+    button:not(.theme-toggle-btn):not(.settings-action-btn) {
       background: var(--primary);
       color: #fff;
       border: none;
@@ -2784,7 +3097,42 @@ function renderWebPage(draws, message, webUser) {
       font-weight: 700;
       transition: all 0.18s ease;
     }
-    button:hover { background: var(--primary-2); transform: translateY(-1px); }
+    button:not(.theme-toggle-btn):not(.settings-action-btn):hover { background: var(--primary-2); transform: translateY(-1px); }
+    button.theme-toggle-btn {
+      width: 36px;
+      min-width: 36px;
+      max-width: 36px;
+      height: 36px;
+      padding: 0;
+      flex-shrink: 0;
+      margin-left: auto;
+      background: #fff;
+      color: var(--primary);
+      border: 1px solid var(--line);
+      font-weight: 400;
+      transform: none;
+    }
+    button.theme-toggle-btn:hover,
+    button.theme-toggle-btn:focus-visible {
+      background: #f5f8ff;
+      transform: none;
+    }
+    button.theme-toggle-btn svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+      flex-shrink: 0;
+    }
+    body.app-theme-dark button.theme-toggle-btn {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 28%, transparent);
+      color: var(--tg-theme-button-color, #5b8cff);
+    }
+    body.app-theme-dark button.theme-toggle-btn:hover,
+    body.app-theme-dark button.theme-toggle-btn:focus-visible {
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #232f42) 82%, #000);
+      transform: none;
+    }
     .danger { background: #d73a49; }
     .danger:hover { background: #b82b38; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -2981,6 +3329,7 @@ function renderWebPage(draws, message, webUser) {
       font-size: 17px;
       line-height: 1;
       min-width: 0;
+      flex: 1;
     }
     .page-title-brand {
       font-weight: 800;
@@ -3084,60 +3433,93 @@ function renderWebPage(draws, message, webUser) {
       min-width: 0;
       box-sizing: border-box;
     }
+    .history-card.history-card-active {
+      border: 2px solid var(--tg-theme-button-color, var(--primary));
+    }
+    body.app-theme-dark .history-card.history-card-active,
+    body.mini-app-shell.app-theme-dark .history-card.history-card-active {
+      border: 2px solid #5b8cff;
+    }
+    body.app-theme-light .history-card.history-card-active,
+    body.mini-app-shell.app-theme-light .history-card.history-card-active {
+      border: 2px solid #325fff;
+    }
     .history-card-head {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      flex-direction: column;
+      gap: 0;
       min-width: 0;
       margin-bottom: 8px;
     }
-    .history-project {
+    .history-head-top {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+    .history-title-block {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .history-title-row {
+      display: flex;
+      align-items: flex-start;
       gap: 8px;
       min-width: 0;
       flex: 1 1 auto;
     }
-    .history-project-logo-wrap {
+    .history-title-text {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .history-head-divider {
+      margin-top: 8px;
+      border-top: 1px dashed color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 24%, transparent);
+    }
+    body.app-theme-dark .history-head-divider {
+      border-top-color: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 32%, transparent);
+    }
+    .history-title-icon {
       width: 28px;
       height: 28px;
-      flex: 0 0 28px;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border-radius: 8px;
-      overflow: hidden;
-      background: var(--tg-theme-bg-color, #f5f8ff);
-      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .history-project-logo {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      display: block;
-    }
-    .history-project-logo-fallback {
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 12%, transparent);
       color: var(--tg-theme-button-color, var(--primary));
     }
-    .history-project-logo-fallback svg {
-      width: 16px;
-      height: 16px;
+    .history-title-icon svg {
+      width: 17px;
+      height: 17px;
+      display: block;
     }
-    .history-project-name {
-      font-size: 13px;
-      font-weight: 700;
+    .history-title-text .history-title {
+      font-size: 15px;
+      font-weight: 800;
+      line-height: 1.2;
       color: var(--tg-theme-text-color, var(--text));
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       min-width: 0;
     }
+    .history-subtitle {
+      margin-top: 2px;
+      padding-left: 0;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.25;
+      color: var(--tg-theme-hint-color, var(--sub));
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .history-status {
       flex-shrink: 0;
+      margin-top: 1px;
       font-size: 11px;
       font-weight: 700;
       padding: 4px 8px;
@@ -3145,10 +3527,10 @@ function renderWebPage(draws, message, webUser) {
       border: 1px solid transparent;
     }
     .history-cover-side {
-      flex-shrink: 0;
-      width: 104px;
+      flex: 0 0 92px;
+      width: 92px;
       align-self: stretch;
-      min-height: 104px;
+      min-height: 0;
       border-radius: 10px;
       background: var(--tg-theme-bg-color, #f5f8ff);
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
@@ -3160,15 +3542,28 @@ function renderWebPage(draws, message, webUser) {
       box-sizing: border-box;
     }
     .history-body {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: stretch;
-      gap: 10px;
-      margin-bottom: 8px;
+      gap: 8px;
+      margin-bottom: 4px;
       min-width: 0;
     }
     .history-body-main {
-      flex: 1;
       min-width: 0;
+      display: flex;
+      align-items: stretch;
+    }
+    .history-info-stack {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+    }
+    .history-body-no-cover {
+      grid-template-columns: 1fr;
     }
     .history-body-no-cover .history-body-main {
       width: 100%;
@@ -3182,37 +3577,11 @@ function renderWebPage(draws, message, webUser) {
       display: block;
       border-radius: 6px;
     }
-    .history-prize-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 6px;
-      min-width: 0;
-    }
-    .history-prize-row .draw-ico {
-      width: 16px;
-      height: 16px;
-      flex-shrink: 0;
-    }
-    .history-prize-row .draw-ico svg {
-      width: 16px;
-      height: 16px;
-    }
-    .history-prize {
-      font-size: 18px;
-      font-weight: 800;
-      line-height: 1.2;
-      color: var(--tg-theme-text-color, var(--text));
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      min-width: 0;
-    }
     .history-times {
       display: grid;
       grid-template-columns: 1fr;
       gap: 6px;
-      margin-bottom: 8px;
+      margin-bottom: 0;
     }
     .history-time-row {
       display: flex;
@@ -3250,29 +3619,35 @@ function renderWebPage(draws, message, webUser) {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 6px;
-      margin-bottom: 8px;
+      margin-bottom: 0;
     }
     .history-chip {
-      display: inline-flex;
+      display: flex;
       align-items: center;
       gap: 4px;
-      padding: 5px 9px;
-      border-radius: 999px;
+      padding: 6px 8px;
+      border-radius: 8px;
       background: var(--tg-theme-bg-color, #f5f8ff);
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
       font-size: 11px;
       font-weight: 600;
       color: var(--tg-theme-hint-color, var(--sub));
       min-width: 0;
-      justify-content: center;
+      justify-content: flex-start;
     }
     .history-chip-label {
       white-space: nowrap;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .history-chip-value {
       font-size: 12px;
       font-weight: 800;
       color: var(--tg-theme-text-color, var(--text));
+      flex-shrink: 0;
+      margin-left: auto;
     }
     .history-chip .draw-ico {
       width: 14px;
@@ -3284,7 +3659,7 @@ function renderWebPage(draws, message, webUser) {
       height: 14px;
     }
     .history-details {
-      margin-top: 6px;
+      margin-top: 4px;
       border-radius: 10px;
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
       background: var(--tg-theme-bg-color, #f5f8ff);
@@ -3382,6 +3757,44 @@ function renderWebPage(draws, message, webUser) {
       flex: 1;
       min-width: 0;
     }
+    .winner-card-name-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 100%;
+      min-width: 0;
+    }
+    .winner-card-name-row .winner-card-name {
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+    .winner-profile-btn {
+      width: 22px;
+      height: 22px;
+      min-width: 22px;
+      max-width: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 10%, transparent);
+      color: var(--tg-theme-button-color, var(--primary));
+      text-decoration: none;
+      flex-shrink: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    .winner-profile-btn:hover,
+    .winner-profile-btn:focus-visible {
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 18%, transparent);
+      transform: none;
+    }
+    .winner-profile-btn svg {
+      width: 13px;
+      height: 13px;
+      display: block;
+    }
     .winner-card-name {
       font-size: 14px;
       font-weight: 800;
@@ -3472,18 +3885,33 @@ function renderWebPage(draws, message, webUser) {
     .winner-card-address-row {
       align-items: center;
     }
+    .winner-address-wrap {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      padding: 5px 8px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      box-sizing: border-box;
+    }
     .winner-address-text {
       flex: 1;
       min-width: 0;
       font-size: 11px;
       font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: 0.01em;
       color: var(--tg-theme-hint-color, var(--sub));
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      line-height: 1.3;
     }
-    .winner-copy-btn {
-      flex-shrink: 0;
+    body.app-theme-dark .winner-address-wrap {
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 10%, transparent);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 18%, transparent);
     }
     .winner-card-actions {
       display: flex;
@@ -3565,6 +3993,50 @@ function renderWebPage(draws, message, webUser) {
     .status-active { background: #eaffef; color: #21754a; border-color: #b7edc9; }
     .status-scheduled { background: #eef3ff; color: #2d56cc; border-color: #d4dfff; }
     .status-finished { background: #f3f4f8; color: #555f76; border-color: #dde1ea; }
+    body.app-theme-dark .status-active {
+      background: color-mix(in srgb, #3dd68c 18%, transparent);
+      color: #7ee2a8;
+      border-color: color-mix(in srgb, #3dd68c 34%, transparent);
+    }
+    body.app-theme-dark .status-scheduled {
+      background: color-mix(in srgb, #5b8cff 18%, transparent);
+      color: #9bb8ff;
+      border-color: color-mix(in srgb, #5b8cff 34%, transparent);
+    }
+    body.app-theme-dark .status-finished {
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 16%, transparent);
+      color: #b8c2d8;
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 30%, transparent);
+    }
+    body.app-theme-dark .winner-badge {
+      color: var(--tg-theme-hint-color, #93a0b8);
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 12%, transparent);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 24%, transparent);
+    }
+    body.app-theme-dark .winner-badge-ok,
+    body.app-theme-dark .winner-badge-paid {
+      color: #7ee2a8;
+      background: color-mix(in srgb, #3dd68c 16%, transparent);
+      border-color: color-mix(in srgb, #3dd68c 30%, transparent);
+    }
+    body.app-theme-dark .winner-badge-warn {
+      color: #f0c14d;
+      background: color-mix(in srgb, #f0c14d 14%, transparent);
+      border-color: color-mix(in srgb, #f0c14d 28%, transparent);
+    }
+    body.app-theme-dark .winner-badge-danger {
+      color: #ff9a9a;
+      background: color-mix(in srgb, #ff6b6b 14%, transparent);
+      border-color: color-mix(in srgb, #ff6b6b 28%, transparent);
+    }
+    body.app-theme-dark .winner-profile-btn {
+      background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 14%, transparent);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 28%, transparent);
+    }
+    body.app-theme-dark .winner-profile-btn:hover,
+    body.app-theme-dark .winner-profile-btn:focus-visible {
+      background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 24%, transparent);
+    }
     .project-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .compact-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .compact-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
@@ -3592,6 +4064,10 @@ function renderWebPage(draws, message, webUser) {
     <div class="site-header-inner">
       <img src="/brand/logo.jpg" alt="" class="page-logo" width="36" height="36" loading="eager" />
       <h1 class="page-title"><span class="page-title-brand">RollerBot</span><span class="page-title-sub">Панель розыгрышей</span></h1>
+      <button type="button" class="theme-toggle-btn" id="themeToggleBtn" title="Переключить тему" aria-label="Переключить тему">
+        <span class="theme-icon theme-icon-light" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span>
+        <span class="theme-icon theme-icon-dark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span>
+      </button>
     </div>
   </header>
   <div class="container">
@@ -3602,9 +4078,9 @@ function renderWebPage(draws, message, webUser) {
           <span class="qa-icon">${renderQuickActionIcon("create")}</span>
           <span class="qa-label">Создать</span>
         </button>
-        <button id="toggleProjectsBtn" type="button" class="quick-action">
-          <span class="qa-icon">${renderQuickActionIcon("projects")}</span>
-          <span class="qa-label">Проекты</span>
+        <button id="toggleSettingsBtn" type="button" class="quick-action">
+          <span class="qa-icon">${renderQuickActionIcon("settings")}</span>
+          <span class="qa-label">Настройки</span>
         </button>
         ${
           showAccessPanel
@@ -3622,7 +4098,7 @@ function renderWebPage(draws, message, webUser) {
           <span class="create-title-icon">${renderFormIcon("gift")}</span>
           Новый розыгрыш
         </h2>
-        <form id="create-draw-form" method="post" action="/draws" enctype="multipart/form-data" class="draw-form">
+        <form id="create-draw-form" method="post" action="${PANEL_BASE}/draws" enctype="multipart/form-data" class="draw-form">
           <div class="draw-block">
             <div class="draw-row-2">
               <div class="draw-field">
@@ -3634,16 +4110,12 @@ function renderWebPage(draws, message, webUser) {
               </div>
               <div class="draw-field">
                 ${drawLabel("channel", "Канал")}
-                <select class="draw-input" name="knownChannelId">
+                <select class="draw-input" name="knownChannelId" required>
                   <option value="">Выберите</option>
                   ${channelOptions}
                 </select>
               </div>
             </div>
-            <div id="manualChannelWrap" class="draw-field anim-collapse">
-              <input class="draw-input" name="channelId" placeholder="@channel" />
-            </div>
-            <button type="button" id="toggleManualChannel" class="draw-link-btn">Другой канал</button>
           </div>
 
           <div class="draw-block">
@@ -3722,7 +4194,7 @@ function renderWebPage(draws, message, webUser) {
 
           <div class="draw-block draw-block-confirm">
             <div class="draw-field">
-              ${drawLabel("confirm", "Подтверждение")}
+              ${drawLabel("confirm", "Время на подтверждение")}
               <div class="draw-inline-full">
                 <input class="draw-input draw-input-num" name="winnerConfirmValue" type="number" min="1" step="1" value="30" />
                 <select class="draw-input draw-input-unit" name="winnerConfirmUnit">
@@ -3740,12 +4212,25 @@ function renderWebPage(draws, message, webUser) {
         </form>
       </section>
 
-      <section id="projectsPanel" class="card create-panel panel-hidden">
+      <section id="settingsPanel" class="card create-panel panel-hidden">
         <h2 class="create-title">
-          <span class="create-title-icon">${renderFormIcon("project")}</span>
-          Проекты
+          <span class="create-title-icon">${renderFormIcon("settings")}</span>
+          Настройки
         </h2>
-        <form id="create-project-form" method="post" action="/projects" enctype="multipart/form-data" class="draw-form">
+
+        <div class="settings-actions">
+          <button type="button" id="toggleAddProjectBtn" class="settings-action-btn">
+            <span class="draw-ico">${renderFormIcon("project")}</span>
+            Добавить проект
+          </button>
+          <a href="${escapeHtml(botLinkChannelUrl)}" id="addChannelBtn" class="settings-action-btn settings-action-link">
+            <span class="draw-ico">${renderFormIcon("channel")}</span>
+            Добавить канал
+          </a>
+        </div>
+
+        <div id="addProjectWrap" class="settings-collapse panel-hidden">
+        <form id="create-project-form" method="post" action="${PANEL_BASE}/projects" enctype="multipart/form-data" class="draw-form">
           <div class="draw-block">
             <div class="draw-field">
               ${drawLabel("project", "Название")}
@@ -3778,6 +4263,7 @@ function renderWebPage(draws, message, webUser) {
             </button>
           </div>
         </form>
+        </div>
 
         <div class="projects-list-title">
           <span class="draw-ico">${renderFormIcon("project")}</span>
@@ -3788,7 +4274,21 @@ function renderWebPage(draws, message, webUser) {
             projectsBlocks ||
             `<div class="projects-empty">
               <span class="draw-ico">${renderFormIcon("project")}</span>
-              <span>Проектов пока нет — добавьте первый выше</span>
+              <span>Проектов пока нет — нажмите «Добавить проект»</span>
+            </div>`
+          }
+        </div>
+
+        <div class="projects-list-title">
+          <span class="draw-ico">${renderFormIcon("channel")}</span>
+          Мои каналы
+        </div>
+        <div class="channels-list">
+          ${
+            channelBlocks ||
+            `<div class="projects-empty">
+              <span class="draw-ico">${renderFormIcon("channel")}</span>
+              <span>Каналов пока нет — нажмите «Добавить канал»</span>
             </div>`
           }
         </div>
@@ -3831,7 +4331,7 @@ function renderWebPage(draws, message, webUser) {
           }
         </div>
 
-        <form method="post" action="/admin/access" class="draw-form access-form">
+        <form method="post" action="${PANEL_BASE}/admin/access" class="draw-form access-form">
           <div class="draw-block">
             <div class="draw-field">
               ${drawLabel("user", "Telegram")}
@@ -4007,25 +4507,16 @@ function renderWebPage(draws, message, webUser) {
       );
     }
 
-    function setupCopyButtons() {
-      document.querySelectorAll(".winner-copy-btn").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const text = btn.getAttribute("data-copy") || "";
-          if (!text) return;
-          try {
-            await navigator.clipboard.writeText(text);
-            btn.title = "Скопировано";
-            setTimeout(() => {
-              btn.title = "Копировать";
-            }, 1500);
-          } catch (error) {
-            const area = document.createElement("textarea");
-            area.value = text;
-            document.body.appendChild(area);
-            area.select();
-            document.execCommand("copy");
-            area.remove();
-          }
+    function setupProfileLinks() {
+      document.querySelectorAll(".winner-profile-btn").forEach((link) => {
+        if (link.dataset.bound === "1") return;
+        link.dataset.bound = "1";
+        link.addEventListener("click", (event) => {
+          const tg = window.Telegram?.WebApp;
+          const href = link.getAttribute("href");
+          if (!href || !tg?.openTelegramLink) return;
+          event.preventDefault();
+          tg.openTelegramLink(href);
         });
       });
     }
@@ -4051,28 +4542,58 @@ function renderWebPage(draws, message, webUser) {
       syncEnd();
     }
 
-    function setupManualChannelToggle() {
-      const btn = document.getElementById("toggleManualChannel");
-      const wrap = document.getElementById("manualChannelWrap");
-      if (!btn || !wrap) return;
-      btn.addEventListener("click", () => {
-        const willOpen = !wrap.classList.contains("anim-collapse-open");
-        wrap.classList.toggle("anim-collapse-open", willOpen);
-        btn.textContent = willOpen ? "Скрыть" : "Другой канал";
+    function setupSettingsPanel() {
+      const addProjectBtn = document.getElementById("toggleAddProjectBtn");
+      const addProjectWrap = document.getElementById("addProjectWrap");
+      const addChannelBtn = document.getElementById("addChannelBtn");
+      if (addProjectBtn && addProjectWrap) {
+        addProjectBtn.addEventListener("click", () => {
+          const willOpen = addProjectWrap.classList.contains("panel-hidden");
+          addProjectWrap.classList.toggle("panel-hidden");
+          addProjectBtn.classList.toggle("settings-action-active", willOpen);
+          if (willOpen) {
+            const nameInput = document.querySelector("#create-project-form [name='name']");
+            if (nameInput) nameInput.focus();
+          }
+        });
+      }
+      if (addChannelBtn) {
+        addChannelBtn.addEventListener("click", (event) => {
+          const tg = window.Telegram?.WebApp;
+          const href = addChannelBtn.getAttribute("href");
+          if (!href || !tg?.openTelegramLink) return;
+          event.preventDefault();
+          tg.openTelegramLink(href);
+        });
+      }
+      document.querySelectorAll(".channel-delete-btn").forEach((btn) => {
+        btn.addEventListener("click", (event) => {
+          const title = btn.dataset.channelTitle || "канал";
+          if (!confirm("Удалить канал «" + title + "»?")) {
+            event.preventDefault();
+          }
+        });
       });
+    }
+
+    function openProjectForm() {
+      const addProjectWrap = document.getElementById("addProjectWrap");
+      const addProjectBtn = document.getElementById("toggleAddProjectBtn");
+      if (addProjectWrap) addProjectWrap.classList.remove("panel-hidden");
+      if (addProjectBtn) addProjectBtn.classList.add("settings-action-active");
     }
 
     function setupAdminPanels() {
       const createBtn = document.getElementById("toggleCreateDrawBtn");
-      const projectsBtn = document.getElementById("toggleProjectsBtn");
+      const settingsBtn = document.getElementById("toggleSettingsBtn");
       const accessBtn = document.getElementById("toggleAccessBtn");
       const createPanel = document.getElementById("createDrawPanel");
-      const projectsPanel = document.getElementById("projectsPanel");
+      const settingsPanel = document.getElementById("settingsPanel");
       const accessPanel = document.getElementById("accessPanel");
-      if (!createBtn || !projectsBtn || !createPanel || !projectsPanel) return;
+      if (!createBtn || !settingsBtn || !createPanel || !settingsPanel) return;
 
       function getTabButtons() {
-        return [createBtn, projectsBtn, accessBtn].filter(Boolean);
+        return [createBtn, settingsBtn, accessBtn].filter(Boolean);
       }
 
       function setActiveTab(btn) {
@@ -4087,7 +4608,7 @@ function renderWebPage(draws, message, webUser) {
       function closeOtherPanels(exceptPanel) {
         const panels = [
           { panel: createPanel, btn: createBtn },
-          { panel: projectsPanel, btn: projectsBtn },
+          { panel: settingsPanel, btn: settingsBtn },
         ];
         if (accessPanel && accessBtn) {
           panels.push({ panel: accessPanel, btn: accessBtn });
@@ -4110,7 +4631,7 @@ function renderWebPage(draws, message, webUser) {
       }
 
       createBtn.addEventListener("click", () => togglePanel(createPanel, createBtn));
-      projectsBtn.addEventListener("click", () => togglePanel(projectsPanel, projectsBtn));
+      settingsBtn.addEventListener("click", () => togglePanel(settingsPanel, settingsBtn));
       if (accessPanel && accessBtn) {
         accessBtn.addEventListener("click", () => togglePanel(accessPanel, accessBtn));
       }
@@ -4129,7 +4650,7 @@ function renderWebPage(draws, message, webUser) {
       if (!form || !cancelBtn || !submitLabel || !nameInput || !refInput) return;
 
       function resetProjectForm() {
-        form.action = "/projects";
+        form.action = "${PANEL_BASE}/projects";
         nameInput.value = "";
         refInput.value = "";
         if (logoInput) logoInput.value = "";
@@ -4152,7 +4673,7 @@ function renderWebPage(draws, message, webUser) {
         btn.addEventListener("click", () => {
           const projectId = btn.dataset.projectId || "";
           if (!projectId) return;
-          form.action = "/projects/" + encodeURIComponent(projectId) + "/update";
+          form.action = "${PANEL_BASE}/projects/" + encodeURIComponent(projectId) + "/update";
           nameInput.value = btn.dataset.projectName || "";
           refInput.value = btn.dataset.projectRef || "";
           if (logoInput) logoInput.value = "";
@@ -4169,6 +4690,7 @@ function renderWebPage(draws, message, webUser) {
           if (submitBtn) {
             submitBtn.querySelector(".draw-ico").innerHTML = ${JSON.stringify(renderFormIcon("edit"))};
           }
+          openProjectForm();
           form.scrollIntoView({ behavior: "smooth", block: "start" });
           nameInput.focus();
         });
@@ -4205,9 +4727,9 @@ function renderWebPage(draws, message, webUser) {
     setupAccessDeleteButtons();
     setupPrizeTypeToggle();
     setupPreventNumberWheel();
-    setupCopyButtons();
+    setupProfileLinks();
     setupPublishEndToggles();
-    setupManualChannelToggle();
+    setupSettingsPanel();
     setupAdminPanels();
   </script>
 </body>
@@ -4268,7 +4790,16 @@ app.get("/brand/background.jpg", (req, res) => {
   }
   res.sendFile(BRAND_BACKGROUND_FILE);
 });
-app.use("/uploads", webAuth.requireAuth, requireOrganizer, express.static(UPLOADS_DIR));
+app.get("/brand/background-dark.jpg", (req, res) => {
+  if (!fs.existsSync(BRAND_BACKGROUND_DARK_FILE)) {
+    res.status(404).end();
+    return;
+  }
+  res.sendFile(BRAND_BACKGROUND_DARK_FILE);
+});
+const panelRouter = express.Router();
+
+panelRouter.use("/uploads", webAuth.requireAuth, requireOrganizer, express.static(UPLOADS_DIR));
 
 app.post("/auth/session", (req, res) => {
   const user = validateInitData(req.body?.initData, BOT_TOKEN);
@@ -4304,7 +4835,11 @@ registerJoinMiniApp(app, {
   designPreview: WEB_ONLY,
 });
 
-app.get("/", webAuth.requireAuth, (req, res) => {
+app.get("/", (_req, res) => {
+  res.type("html").send(renderLandingPage());
+});
+
+panelRouter.get("/", webAuth.requireAuth, (req, res) => {
   if (!isOrganizer(req.webUser.id)) {
     res.type("html").send(renderOrganizerGatePage(BOT_USERNAME));
     return;
@@ -4317,7 +4852,7 @@ app.get("/", webAuth.requireAuth, (req, res) => {
   res.type("html").send(renderWebPage(draws, req.query.msg, req.webUser));
 });
 
-app.post("/admin/access", webAuth.requireAuth, requireOrganizer, requireSuperAdmin, async (req, res) => {
+panelRouter.post("/admin/access", webAuth.requireAuth, requireOrganizer, requireSuperAdmin, async (req, res) => {
   const resolved = await resolveTelegramUser(req.body?.userRef || req.body?.userId);
   if (!resolved.ok) {
     redirectWithMessage(res, resolved.error);
@@ -4337,7 +4872,7 @@ app.post("/admin/access", webAuth.requireAuth, requireOrganizer, requireSuperAdm
   redirectWithMessage(res, `Админ ${display} добавлен.`);
 });
 
-app.post(
+panelRouter.post(
   "/admin/access/:userId/remove",
   webAuth.requireAuth,
   requireOrganizer,
@@ -4352,7 +4887,7 @@ app.post(
   },
 );
 
-app.get("/qr", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+panelRouter.get("/qr", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const text = String(req.query.text || "").trim();
   if (!text) {
     res.status(400).send("text is required");
@@ -4371,7 +4906,7 @@ app.get("/qr", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   }
 });
 
-app.get("/avatar/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+panelRouter.get("/avatar/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const userId = req.params.userId;
   const userProfiles = readUserProjectProfiles();
   const fileId = userProfiles.users?.[String(userId)]?.meta?.avatarFileId;
@@ -4385,6 +4920,45 @@ app.get("/avatar/:userId", webAuth.requireAuth, requireOrganizer, async (req, re
     res.redirect(String(url));
   } catch (error) {
     res.status(404).send("Avatar unavailable");
+  }
+});
+
+panelRouter.get("/channel-photo/:channelId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+  const channel = findOwnedKnownChannel(req.params.channelId, req.webUser.id);
+  if (!channel) {
+    res.status(404).end();
+    return;
+  }
+
+  let fileId = channel.photoFileId || "";
+  if (!fileId) {
+    try {
+      const chat = await bot.telegram.getChat(channel.username ? `@${channel.username}` : channel.id);
+      fileId = chat.photo?.small_file_id || "";
+      if (fileId) {
+        const data = readKnownChannels();
+        const stored = data.channels.find((item) => item.id === channel.id);
+        if (stored) {
+          stored.photoFileId = fileId;
+          writeKnownChannels(data);
+        }
+      }
+    } catch {
+      res.status(404).end();
+      return;
+    }
+  }
+
+  if (!fileId) {
+    res.status(404).end();
+    return;
+  }
+
+  try {
+    const url = await bot.telegram.getFileLink(fileId);
+    res.redirect(String(url));
+  } catch {
+    res.status(404).end();
   }
 });
 
@@ -4419,7 +4993,7 @@ function resolveProjectLogoUpload(req, logoClipboardData, previousLogoPath = "")
   return logoPath || previousLogoPath;
 }
 
-app.post("/projects", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
+panelRouter.post("/projects", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
   const ownerId = req.webUser.id;
   const { name, refLink, logoClipboardData } = parseProjectFormBody(req);
 
@@ -4444,7 +5018,7 @@ app.post("/projects", webAuth.requireAuth, requireOrganizer, upload.single("logo
   redirectWithMessage(res, "Проект добавлен.");
 });
 
-app.post("/projects/:projectId/update", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
+panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
   const ownerId = req.webUser.id;
   const projectId = (req.params.projectId || "").trim();
   const project = getProjectById(projectId, ownerId);
@@ -4477,7 +5051,7 @@ app.post("/projects/:projectId/update", webAuth.requireAuth, requireOrganizer, u
   redirectWithMessage(res, "Проект обновлён.");
 });
 
-app.post("/projects/:projectId/delete", webAuth.requireAuth, requireOrganizer, (req, res) => {
+panelRouter.post("/projects/:projectId/delete", webAuth.requireAuth, requireOrganizer, (req, res) => {
   const ownerId = req.webUser.id;
   const projectId = (req.params.projectId || "").trim();
   const project = getProjectById(projectId, ownerId);
@@ -4493,13 +5067,22 @@ app.post("/projects/:projectId/delete", webAuth.requireAuth, requireOrganizer, (
   redirectWithMessage(res, "Проект удалён.");
 });
 
-app.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image"), async (req, res) => {
+panelRouter.post("/channels/:channelId/delete", webAuth.requireAuth, requireOrganizer, (req, res) => {
+  const result = removeKnownChannel(req.params.channelId, req.webUser.id);
+  if (!result.ok) {
+    redirectWithMessage(res, result.error);
+    return;
+  }
+  const title = result.channel?.title || result.channel?.username || "Канал";
+  redirectWithMessage(res, `Канал «${title}» удалён.`);
+});
+
+panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image"), async (req, res) => {
   try {
     const ownerId = req.webUser.id;
     const body = req.body || {};
-    const manualChannelId = (body.channelId || "").trim();
     const selectedChannelId = (body.knownChannelId || "").trim();
-    const channelId = selectedChannelId || manualChannelId;
+    const channelId = selectedChannelId;
     const projectId = (body.projectId || "").trim();
     const prizeTypeRaw = body.prizeType || "money_rub";
     const prizeType =
@@ -4542,17 +5125,17 @@ app.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image")
     }
 
     if (!channelId || !projectId) {
-      redirectWithMessage(res, "Выберите проект, канал (или введите вручную) и укажите приз.");
+      redirectWithMessage(res, "Выберите проект и канал. Каналы добавляются в Настройках.");
+      return;
+    }
+
+    if (!findOwnedKnownChannel(channelId, ownerId)) {
+      redirectWithMessage(res, "Выберите канал из списка «Мои каналы» или добавьте его в Настройках.");
       return;
     }
 
     if (!getProjectById(projectId, ownerId)) {
       redirectWithMessage(res, "Выбранный проект не найден.");
-      return;
-    }
-
-    if (!channelAccessibleByOwner(channelId, ownerId)) {
-      redirectWithMessage(res, "Этот канал привязан к другому организатору.");
       return;
     }
 
@@ -4660,7 +5243,7 @@ app.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image")
   }
 });
 
-app.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const data = readData();
   const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
 
@@ -4684,7 +5267,7 @@ app.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer, async 
   }
 });
 
-app.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+panelRouter.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const data = readData();
   const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
 
@@ -4708,7 +5291,7 @@ app.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer, async (
   }
 });
 
-app.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
   const ownerId = req.webUser.id;
@@ -4747,7 +5330,7 @@ app.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrganizer, asy
   redirectWithMessage(res, `Уведомление отправлено пользователю ${userId}.`);
 });
 
-app.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
   const ownerId = req.webUser.id;
@@ -4791,6 +5374,8 @@ app.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer, async 
 
   redirectWithMessage(res, `Победителю ${userId} отмечена выплата.`);
 });
+
+app.use(PANEL_BASE, panelRouter);
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError || err?.name === "MulterError") {
@@ -4841,6 +5426,7 @@ bot.command("link_channel", async (ctx) => {
       "",
       "Канал появится в панели — вводить ID вручную не нужно.",
     ].join("\n"),
+    getPanelKeyboard(),
   );
 });
 
@@ -4852,7 +5438,7 @@ bot.on("message", async (ctx, next) => {
   }
 
   const result = await linkChannelForUser(ctx, forwardedChat);
-  await ctx.reply(result.message);
+  await ctx.reply(result.message, getPanelKeyboard());
 });
 
 bot.start(async (ctx) => {
@@ -4863,7 +5449,21 @@ bot.start(async (ctx) => {
     return;
   }
 
-  const panelUrl = WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`;
+  if (payload === "link_channel") {
+    await ctx.reply(
+      [
+        "🔗 Подключение канала",
+        "",
+        "1. Добавьте бота админом в канал",
+        "2. Перешлите сюда любое сообщение из этого канала",
+        "",
+        "Канал появится в панели: Настройки → Мои каналы.",
+      ].join("\n"),
+      getPanelKeyboard(),
+    );
+    return;
+  }
+
   await ctx.reply(
     [
       "🎁 Roller Bot — розыгрыши в Telegram-каналах",
@@ -4874,8 +5474,16 @@ bot.start(async (ctx) => {
       "",
       "Участникам: кнопка «Участвовать» в посте канала.",
     ].join("\n"),
-    Markup.keyboard([[Markup.button.webApp("📱 Панель", panelUrl)]]).resize(),
+    getPanelKeyboard(),
   );
+});
+
+bot.command("panel", async (ctx) => {
+  if (ctx.chat?.type !== "private") {
+    await ctx.reply("Откройте личный чат с ботом и отправьте /panel");
+    return;
+  }
+  await ctx.reply("Нажмите кнопку «Панель» ниже 👇", getPanelKeyboard());
 });
 
 bot.command("join", async (ctx) => {
@@ -5359,7 +5967,8 @@ function printDesignPreviewUrls() {
   const base = `http://localhost:${WEB_PORT}`;
   console.log("");
   console.log("Режим WEB_ONLY — только веб для дизайна (бот не запущен).");
-  console.log(`  Панель:        ${base}/`);
+  console.log(`  Сайт:          ${base}/`);
+  console.log(`  Панель:        ${base}${PANEL_BASE}`);
   console.log(`  Join Mini App: ${base}/dev/preview/join`);
   console.log(`  Gate:          ${base}/dev/preview/gate`);
   console.log("");
@@ -5377,18 +5986,11 @@ async function bootstrap() {
     return;
   }
 
-  const panelUrl = WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`;
   if (WEB_PUBLIC_URL.startsWith("https://")) {
     try {
-      await bot.telegram.setChatMenuButton({
-        menu_button: {
-          type: "web_app",
-          text: "Панель",
-          web_app: { url: panelUrl },
-        },
-      });
+      await bot.telegram.setChatMenuButton({ menu_button: { type: "default" } });
     } catch (error) {
-      console.warn("Не удалось установить Menu Button:", error.message);
+      console.warn("Не удалось сбросить Menu Button:", error.message);
     }
   }
 

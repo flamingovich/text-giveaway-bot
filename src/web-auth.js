@@ -94,7 +94,7 @@ function parseSessionToken(token, botToken) {
   return Number.isFinite(id) ? { id } : null;
 }
 
-function renderLoginPage(botUsername, publicUrl) {
+function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
   const botLink = botUsername ? `https://t.me/${botUsername}` : "https://t.me";
   return `<!doctype html>
 <html lang="ru">
@@ -135,18 +135,28 @@ function renderLoginPage(botUsername, publicUrl) {
       border-radius: 14px;
       font-weight: 700;
     }
+    .loading { display: none; color: #65708a; font-size: 15px; }
+    .fallback { display: block; }
+    body.auth-pending .loading { display: block; }
+    body.auth-pending .fallback { display: none; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>🎁 Панель розыгрышей</h1>
-    <p>Откройте бота в Telegram и нажмите кнопку «Панель».</p>
-    <a href="${botLink}">Открыть @${botUsername || "bot"}</a>
+    <p class="loading">Загрузка…</p>
+    <div class="fallback">
+      <p>Откройте бота в Telegram и нажмите кнопку «📱 Панель» под полем ввода.</p>
+      <a href="${botLink}">Открыть @${botUsername || "bot"}</a>
+    </div>
   </div>
   <script>
     (function () {
       const tg = window.Telegram?.WebApp;
       if (!tg?.initData) return;
+      document.body.classList.add("auth-pending");
+      tg.ready();
+      tg.expand();
       fetch("/auth/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -155,16 +165,22 @@ function renderLoginPage(botUsername, publicUrl) {
       })
         .then((r) => r.json())
         .then((data) => {
-          if (data.ok) location.reload();
+          if (data.ok) {
+            location.replace("${panelPath}");
+            return;
+          }
+          document.body.classList.remove("auth-pending");
         })
-        .catch(() => {});
+        .catch(function () {
+          document.body.classList.remove("auth-pending");
+        });
     })();
   </script>
 </body>
 </html>`;
 }
 
-function createWebAuth({ botToken, disabled, cookieSecure, defaultUserId, botUsername, publicUrl }) {
+function createWebAuth({ botToken, disabled, cookieSecure, defaultUserId, botUsername, publicUrl, panelPath = "/panel" }) {
   function resolveUser(req) {
     if (disabled) {
       return { id: defaultUserId, dev: true };
@@ -196,7 +212,7 @@ function createWebAuth({ botToken, disabled, cookieSecure, defaultUserId, botUse
     const user = resolveUser(req);
     if (!user?.id) {
       if (req.method === "GET") {
-        res.status(401).type("html").send(renderLoginPage(botUsername, publicUrl));
+        res.status(401).type("html").send(renderLoginPage(botUsername, publicUrl, panelPath));
         return;
       }
       res.status(401).send("Unauthorized");
