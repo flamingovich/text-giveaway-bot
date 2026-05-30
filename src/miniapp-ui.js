@@ -6,6 +6,39 @@
  * @see https://core.telegram.org/bots/webapps
  */
 
+const MINIAPP_VIEWPORT =
+  "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+
+function getMiniAppViewportMeta() {
+  return `<meta name="viewport" content="${MINIAPP_VIEWPORT}" />`;
+}
+
+function getTelegramPanelAuthRedirectScript(panelPath = "/panel") {
+  const pathJson = JSON.stringify(panelPath);
+  return `
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (!tg) return;
+  tg.ready();
+  tg.expand();
+  var panelPath = ${pathJson};
+  function redirect() {
+    if (!tg.initData) return false;
+    location.replace(panelPath + "?telegramInitData=" + encodeURIComponent(tg.initData));
+    return true;
+  }
+  if (redirect()) return;
+  var tries = 0;
+  var timer = window.setInterval(function () {
+    tries += 1;
+    if (redirect() || tries >= 20) {
+      window.clearInterval(timer);
+    }
+  }, 100);
+})();
+`;
+}
+
 const THEME_STORAGE_KEY = "rollerbot-theme";
 const THEME_CSS_KEYS = {
   bg_color: "--tg-theme-bg-color",
@@ -105,6 +138,20 @@ function getMiniAppStyles() {
       overflow-x: hidden;
       max-width: 100%;
       overscroll-behavior-x: none;
+      touch-action: manipulation;
+      -ms-touch-action: manipulation;
+    }
+
+    body.mini-app-shell {
+      touch-action: manipulation;
+      -ms-touch-action: manipulation;
+    }
+
+    body.mini-app-shell input,
+    body.mini-app-shell select,
+    body.mini-app-shell textarea,
+    body.mini-app-shell .draw-input {
+      font-size: 16px !important;
     }
 
     body.mini-app-shell {
@@ -697,6 +744,9 @@ module.exports = {
   getMiniAppStyles,
   getMiniAppInitScript,
   getMiniAppHeadScript,
+  getMiniAppViewportMeta,
+  getTelegramPanelAuthRedirectScript,
+  MINIAPP_VIEWPORT,
   MANUAL_DARK_THEME,
   MANUAL_LIGHT_THEME,
 };

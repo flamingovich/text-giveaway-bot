@@ -10,7 +10,7 @@ const { Telegraf, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
 const { createWebAuth, validateInitData } = require("./web-auth");
 const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp");
-const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript } = require("./miniapp-ui");
+const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta } = require("./miniapp-ui");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -1861,7 +1861,7 @@ function renderLandingPage() {
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  ${getMiniAppViewportMeta()}
   <meta name="theme-color" content="#152238" />
   <meta name="description" content="RollerBot — сервис розыгрышей в Telegram. Сайт скоро будет готов." />
   <title>RollerBot — розыгрыши в Telegram</title>
@@ -2568,7 +2568,7 @@ function renderWebPage(draws, message, webUser) {
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  ${getMiniAppViewportMeta()}
   <title>Управление розыгрышами</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>${getMiniAppHeadScript()}</script>
@@ -2595,6 +2595,8 @@ function renderWebPage(draws, message, webUser) {
       overflow-x: hidden;
       max-width: 100%;
       overscroll-behavior-x: none;
+      touch-action: manipulation;
+      -ms-touch-action: manipulation;
     }
     body {
       font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -2607,6 +2609,8 @@ function renderWebPage(draws, message, webUser) {
       overflow-x: hidden;
       overscroll-behavior-x: none;
       position: relative;
+      touch-action: manipulation;
+      -ms-touch-action: manipulation;
     }
     body::before {
       content: "";
@@ -2871,7 +2875,7 @@ function renderWebPage(draws, message, webUser) {
     .draw-input {
       width: 100%;
       font-family: inherit;
-      font-size: 14px;
+      font-size: 16px;
       font-weight: 500;
       border-radius: 10px;
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
@@ -3434,7 +3438,7 @@ function renderWebPage(draws, message, webUser) {
       border-radius: 12px;
       border: 1px solid #cfd8ef;
       padding: 9px 11px;
-      font-size: 13px;
+      font-size: 16px;
       box-sizing: border-box;
       background: #fff;
     }
@@ -5368,6 +5372,21 @@ panelRouter.post("/admin/access", webAuth.requireAuth, requireOrganizer, require
     return;
   }
   await enrichUserAvatar(resolved.user.id);
+  await syncOrganizerPanelUi(resolved.user.id);
+  try {
+    await bot.telegram.sendMessage(
+      resolved.user.id,
+      [
+        "✅ Вам открыли доступ к панели RollerBot.",
+        "",
+        "Нажмите «📱 Панель» под полем ввода или отправьте /panel.",
+        "Открывать нужно именно из Telegram — не через браузер.",
+      ].join("\n"),
+      getPanelKeyboardForUser(resolved.user.id),
+    );
+  } catch (error) {
+    console.warn(`Не удалось уведомить нового админа ${resolved.user.id}:`, error.message);
+  }
   const display =
     resolved.user.username
       ? `@${resolved.user.username}`
@@ -5387,6 +5406,7 @@ panelRouter.post(
       redirectWithMessage(res, result.error);
       return;
     }
+    syncOrganizerPanelUi(Number(req.params.userId)).catch(() => {});
     redirectWithMessage(res, `Админ ${req.params.userId} удалён из списка.`);
   },
 );
@@ -5959,6 +5979,16 @@ bot.start(async (ctx) => {
   if (payload.startsWith("join_")) {
     const drawId = payload.replace(/^join_/, "");
     await startJoinFlow(ctx, drawId);
+    return;
+  }
+
+  if (payload === "panel") {
+    if (!isOrganizer(ctx.from?.id)) {
+      await ctx.reply("Панель доступна только организаторам розыгрышей.");
+      return;
+    }
+    await syncOrganizerPanelUi(ctx.from.id);
+    await ctx.reply("Нажмите кнопку «📱 Панель» ниже 👇", getPanelKeyboardForUser(ctx.from.id));
     return;
   }
 

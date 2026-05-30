@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { getMiniAppViewportMeta, getTelegramPanelAuthRedirectScript } = require("./miniapp-ui");
 
 const AUTH_MAX_AGE_SEC = 86400 * 7;
 const COOKIE_NAME = "tg_sess";
@@ -95,27 +96,15 @@ function parseSessionToken(token, botToken) {
 }
 
 function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
-  const botLink = botUsername ? `https://t.me/${botUsername}` : "https://t.me";
+  const botLink = botUsername ? `https://t.me/${botUsername}?start=panel` : "https://t.me";
   return `<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  ${getMiniAppViewportMeta()}
   <title>Roller Bot — вход</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script>
-    (function () {
-      var tg = window.Telegram && window.Telegram.WebApp;
-      if (!tg || !tg.initData) return;
-      tg.ready();
-      tg.expand();
-      location.replace(
-        ${JSON.stringify(panelPath)} +
-          "?telegramInitData=" +
-          encodeURIComponent(tg.initData),
-      );
-    })();
-  </script>
+  <script>${getTelegramPanelAuthRedirectScript(panelPath)}</script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -159,7 +148,7 @@ function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
     <h1>🎁 Панель розыгрышей</h1>
     <p class="loading">Загрузка…</p>
     <div class="fallback">
-      <p>Откройте бота в Telegram и нажмите кнопку «📱 Панель» под полем ввода.</p>
+      <p>Откройте бота в Telegram и нажмите кнопку «📱 Панель» под полем ввода или отправьте /panel.</p>
       <a href="${botLink}">Открыть @${botUsername || "bot"}</a>
     </div>
   </div>

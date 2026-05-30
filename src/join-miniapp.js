@@ -1,5 +1,5 @@
 const express = require("express");
-const { getMiniAppStyles, getMiniAppInitScript } = require("./miniapp-ui");
+const { getMiniAppStyles, getMiniAppInitScript, getMiniAppViewportMeta } = require("./miniapp-ui");
 
 function escapeHtml(value) {
   return String(value || "")
@@ -35,7 +35,7 @@ function renderOrganizerGatePage(botUsername) {
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  ${getMiniAppViewportMeta()}
   <title>Панель организатора</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
@@ -102,7 +102,7 @@ function renderJoinPage(drawId, draw, project) {
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  ${getMiniAppViewportMeta()}
   <title>Участие в розыgрыше</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
