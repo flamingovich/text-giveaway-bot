@@ -8,6 +8,7 @@ const QRCode = require("qrcode");
 const { Telegraf, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
 const { createWebAuth, validateInitData } = require("./web-auth");
+const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -56,6 +57,7 @@ const DRAWS_FILE = path.join(DATA_DIR, "draws.json");
 const KNOWN_CHANNELS_FILE = path.join(DATA_DIR, "known-channels.json");
 const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 const USER_PROJECT_PROFILES_FILE = path.join(DATA_DIR, "user-project-profiles.json");
+const ASSETS_DIR = path.join(__dirname, "..", "assets");
 
 const DRAW_STATUS = {
   DRAFT: "draft",
@@ -656,11 +658,38 @@ function removeSession(userId) {
   sessions.delete(userId);
 }
 
+function isOrganizer(userId) {
+  const id = Number(userId);
+  if (ADMIN_IDS.includes(id)) {
+    return true;
+  }
+  if (filterByOwner(readKnownChannels().channels || [], id).length > 0) {
+    return true;
+  }
+  if (filterByOwner(readProjects().projects || [], id).length > 0) {
+    return true;
+  }
+  if (filterByOwner(readData().draws || [], id).length > 0) {
+    return true;
+  }
+  return false;
+}
+
+function getJoinWebAppUrl(drawId) {
+  if (!WEB_PUBLIC_URL) {
+    return getJoinDeepLink(drawId);
+  }
+  return `${WEB_PUBLIC_URL}/join/${encodeURIComponent(drawId)}`;
+}
+
 function getKeyboard(drawId, count) {
   const text = `Участвовать (${count})`;
+  const joinUrl = getJoinWebAppUrl(drawId);
+  if (WEB_PUBLIC_URL.startsWith("https://")) {
+    return Markup.inlineKeyboard([Markup.button.webApp(text, joinUrl)]);
+  }
   if (BOT_USERNAME) {
-    const deepLink = getJoinDeepLink(drawId);
-    return Markup.inlineKeyboard([Markup.button.url(text, deepLink)]);
+    return Markup.inlineKeyboard([Markup.button.url(text, getJoinDeepLink(drawId))]);
   }
   return Markup.inlineKeyboard([Markup.button.callback(text, `join:${drawId}`)]);
 }
@@ -1261,6 +1290,14 @@ async function startJoinFlow(ctx, drawId) {
 
   if (draw.participantIds.includes(ctx.from.id)) {
     await ctx.reply("Вы уже участвуете ✅");
+    return;
+  }
+
+  if (WEB_PUBLIC_URL.startsWith("https://")) {
+    await ctx.reply(
+      "Нажмите кнопку ниже, чтобы пройти участие.",
+      Markup.inlineKeyboard([Markup.button.webApp("🎁 Участвовать", getJoinWebAppUrl(drawId))]),
+    );
     return;
   }
 
@@ -2137,6 +2174,18 @@ function renderWebPage(draws, message, webUser) {
 </html>`;
 }
 
+function requireOrganizer(req, res, next) {
+  if (!req.webUser?.id || !isOrganizer(req.webUser.id)) {
+    if (req.method === "GET") {
+      res.status(403).type("html").send(renderOrganizerGatePage(BOT_USERNAME));
+      return;
+    }
+    redirectWithMessage(res, "Доступ только для организаторов каналов.");
+    return;
+  }
+  next();
+}
+
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 const upload = multer({
@@ -2157,7 +2206,7 @@ const upload = multer({
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(webAuth.attachUser);
-app.use("/uploads", webAuth.requireAuth, express.static(UPLOADS_DIR));
+app.use("/uploads", webAuth.requireAuth, requireOrganizer, express.static(UPLOADS_DIR));
 
 app.post("/auth/session", (req, res) => {
   const user = validateInitData(req.body?.initData, BOT_TOKEN);
@@ -2166,10 +2215,31 @@ app.post("/auth/session", (req, res) => {
     return;
   }
   webAuth.setSessionCookie(res, user.id);
-  res.json({ ok: true, userId: user.id });
+  res.json({ ok: true, userId: user.id, organizer: isOrganizer(user.id) });
+});
+
+registerJoinMiniApp(app, {
+  validateInitData,
+  BOT_TOKEN,
+  readData,
+  readProjects,
+  getProjectById,
+  DRAW_STATUS,
+  buildCaptchaTask,
+  joinSessions,
+  getUserProjectProfile,
+  setUserProjectProfile,
+  upsertUserMeta,
+  addUserToDraw,
+  ASSETS_DIR,
 });
 
 app.get("/", webAuth.requireAuth, (req, res) => {
+  if (!isOrganizer(req.webUser.id)) {
+    res.type("html").send(renderOrganizerGatePage(BOT_USERNAME));
+    return;
+  }
+
   const data = readData();
   const draws = filterByOwner(data.draws, req.webUser.id).sort(
     (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
@@ -2177,7 +2247,7 @@ app.get("/", webAuth.requireAuth, (req, res) => {
   res.type("html").send(renderWebPage(draws, req.query.msg, req.webUser));
 });
 
-app.get("/qr", webAuth.requireAuth, async (req, res) => {
+app.get("/qr", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const text = String(req.query.text || "").trim();
   if (!text) {
     res.status(400).send("text is required");
@@ -2196,7 +2266,7 @@ app.get("/qr", webAuth.requireAuth, async (req, res) => {
   }
 });
 
-app.get("/avatar/:userId", webAuth.requireAuth, async (req, res) => {
+app.get("/avatar/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const userId = req.params.userId;
   const userProfiles = readUserProjectProfiles();
   const fileId = userProfiles.users?.[String(userId)]?.meta?.avatarFileId;
@@ -2213,7 +2283,7 @@ app.get("/avatar/:userId", webAuth.requireAuth, async (req, res) => {
   }
 });
 
-app.post("/projects", webAuth.requireAuth, upload.single("logo"), (req, res) => {
+app.post("/projects", webAuth.requireAuth, requireOrganizer, upload.single("logo"), (req, res) => {
   const ownerId = req.webUser.id;
   const body = req.body || {};
   const name = (body.name || "").trim();
@@ -2244,7 +2314,7 @@ app.post("/projects", webAuth.requireAuth, upload.single("logo"), (req, res) => 
   redirectWithMessage(res, "Проект добавлен.");
 });
 
-app.post("/draws", webAuth.requireAuth, upload.single("image"), async (req, res) => {
+app.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image"), async (req, res) => {
   try {
     const ownerId = req.webUser.id;
     const body = req.body || {};
@@ -2402,7 +2472,7 @@ app.post("/draws", webAuth.requireAuth, upload.single("image"), async (req, res)
   }
 });
 
-app.post("/draws/:id/publish-now", webAuth.requireAuth, async (req, res) => {
+app.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const data = readData();
   const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
 
@@ -2426,7 +2496,7 @@ app.post("/draws/:id/publish-now", webAuth.requireAuth, async (req, res) => {
   }
 });
 
-app.post("/draws/:id/finish-now", webAuth.requireAuth, async (req, res) => {
+app.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const data = readData();
   const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
 
@@ -2450,7 +2520,7 @@ app.post("/draws/:id/finish-now", webAuth.requireAuth, async (req, res) => {
   }
 });
 
-app.post("/draws/:id/notify/:userId", webAuth.requireAuth, async (req, res) => {
+app.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
   const ownerId = req.webUser.id;
@@ -2489,7 +2559,7 @@ app.post("/draws/:id/notify/:userId", webAuth.requireAuth, async (req, res) => {
   redirectWithMessage(res, `Уведомление отправлено пользователю ${userId}.`);
 });
 
-app.post("/draws/:id/pay/:userId", webAuth.requireAuth, async (req, res) => {
+app.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
   const ownerId = req.webUser.id;
