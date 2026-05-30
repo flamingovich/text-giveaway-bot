@@ -1,0 +1,9 @@
+node_modules
+.env
+giveaway-bot-deploy.zip
+data/draws.json
+data/projects.json
+data/known-channels.json
+data/user-project-profiles.json
+data/uploads/*
+!data/uploads/.gitkeep
