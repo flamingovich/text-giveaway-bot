@@ -382,6 +382,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <button type="button" class="join-paste-btn" id="trc20PasteBtn" title="Вставить" aria-label="Вставить">${JOIN_BTN_PASTE}</button>
           </div>
         </div>
+        <button type="button" class="join-btn join-btn-primary join-trc20-submit" id="trc20SubmitBtn">Участвовать</button>
         <p class="join-guide-heading">Инструкция</p>
         <div class="join-guide">
           <p class="join-guide-step"><span class="join-guide-step-num">1</span> Откройте депозит на проекте</p>
@@ -390,8 +391,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           <div class="join-guide-img-wrap"><img class="join-guide-img" src="/assets/trc20-guide/step-2.png" alt="Шаг 2" /></div>
           <p class="join-guide-step"><span class="join-guide-step-num">3</span> Скопируйте адрес</p>
           <div class="join-guide-img-wrap"><img class="join-guide-img" src="/assets/trc20-guide/step-3.png" alt="Шаг 3" /></div>
-        </div>
-        <button type="button" class="join-btn join-btn-primary" id="trc20SubmitBtn">Участвовать</button>`,
+        </div>`,
       )}
 
       ${renderJoinStepCard(

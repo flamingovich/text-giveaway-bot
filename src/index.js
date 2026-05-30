@@ -654,6 +654,14 @@ function formatMoneyAmount(value, prizeType) {
   return formatRubAmount(value);
 }
 
+function getPrizeSplitCount(draw) {
+  const actualWinners = Array.isArray(draw.winnerIds) ? draw.winnerIds.length : 0;
+  if (draw.status === DRAW_STATUS.FINISHED) {
+    return Math.max(1, actualWinners);
+  }
+  return Math.max(1, Number(draw.winnersCount) || 1);
+}
+
 function getWinnerPayoutAmount(draw, projectData) {
   if (!isMoneyPrizeType(draw.prizeType)) {
     return 0;
@@ -662,8 +670,7 @@ function getWinnerPayoutAmount(draw, projectData) {
   if (!Number.isFinite(total) || total <= 0) {
     return 0;
   }
-  const winnerCount = Math.max(1, (draw.winnerIds || []).length || Number(draw.winnersCount) || 1);
-  let perWinner = Math.floor(total / winnerCount);
+  let perWinner = Math.floor(total / getPrizeSplitCount(draw));
   if (projectData?.selfReportedNonReferral) {
     perWinner = Math.floor(perWinner / 2);
   }
@@ -732,8 +739,7 @@ function getPerWinnerPrizeText(draw) {
     return draw.prize;
   }
 
-  const winnerCount = Math.max(1, (draw.winnerIds || []).length || Number(draw.winnersCount) || 1);
-  const perWinner = Math.floor(total / winnerCount);
+  const perWinner = Math.floor(total / getPrizeSplitCount(draw));
   return formatMoneyAmount(perWinner, draw.prizeType);
 }
 
@@ -5462,7 +5468,7 @@ registerWinnersMiniApp(app, {
   readUserProjectProfiles,
   getUserProfileBundle,
   getWinnerDisplayName,
-  getWinnerPayoutText,
+  getPerWinnerPrizeText,
   getTelegramUserProfileUrl,
   bot: WEB_ONLY ? null : bot,
   designPreview: WEB_ONLY,

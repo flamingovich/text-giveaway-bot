@@ -47,13 +47,13 @@ function formatParticipantsLabel(count) {
 
 function buildWinnerViewModel(winnerId, draw, deps) {
   const userProfiles = deps.readUserProjectProfiles();
-  const { meta, projectData } = deps.getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+  const { meta } = deps.getUserProfileBundle(userProfiles, winnerId, draw.projectId);
   const displayName = deps.getWinnerDisplayName(meta, winnerId);
   const username = meta.username ? `@${meta.username}` : "";
   const initial = (displayName.replace(/^@/, "") || String(winnerId)).charAt(0).toUpperCase() || "?";
   const avatarUrl = meta.avatarFileId ? `/winners/avatar/${encodeURIComponent(String(winnerId))}` : "";
   const profileUrl = deps.getTelegramUserProfileUrl(winnerId, meta.username);
-  const prize = deps.getWinnerPayoutText(draw, projectData);
+  const prize = deps.getPerWinnerPrizeText(draw);
 
   return {
     id: String(winnerId),
@@ -241,7 +241,7 @@ function registerWinnersMiniApp(app, deps) {
     readUserProjectProfiles,
     getUserProfileBundle,
     getWinnerDisplayName,
-    getWinnerPayoutText,
+    getPerWinnerPrizeText,
     getTelegramUserProfileUrl,
     bot,
     designPreview,
@@ -262,7 +262,7 @@ function registerWinnersMiniApp(app, deps) {
         readUserProjectProfiles,
         getUserProfileBundle,
         getWinnerDisplayName,
-        getWinnerPayoutText,
+        getPerWinnerPrizeText,
         getTelegramUserProfileUrl,
       }),
     );

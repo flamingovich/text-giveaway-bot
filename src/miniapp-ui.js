@@ -1244,7 +1244,12 @@ function getJoinFlowStyles() {
     }
 
     body.join-flow .join-trc20-field {
-      margin-bottom: 16px;
+      margin-bottom: 12px;
+    }
+
+    body.join-flow .join-trc20-submit {
+      width: 100%;
+      margin: 0 0 16px;
     }
 
     body.join-flow .join-field-label {
