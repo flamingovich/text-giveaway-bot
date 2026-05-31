@@ -13,16 +13,17 @@ const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "https://rollerbot.pro").r
 const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const SUPPORT_HOURS_START = Number(process.env.SUPPORT_HOURS_START || 9);
 const SUPPORT_HOURS_END = Number(process.env.SUPPORT_HOURS_END || 21);
-const SUPPORT_OPERATOR_SEARCH_MIN_MS = Number(process.env.SUPPORT_OPERATOR_SEARCH_MIN_MS || 10_000);
-const SUPPORT_OPERATOR_SEARCH_MAX_MS = Number(process.env.SUPPORT_OPERATOR_SEARCH_MAX_MS || 60_000);
-const SUPPORT_WRITING_NOTICE_MIN_MS = Number(process.env.SUPPORT_WRITING_NOTICE_MIN_MS || 5_000);
-const SUPPORT_WRITING_NOTICE_MAX_MS = Number(process.env.SUPPORT_WRITING_NOTICE_MAX_MS || 10_000);
-const SUPPORT_REPLY_DELAY_MIN_MS = Number(process.env.SUPPORT_REPLY_DELAY_MIN_MS || 60_000);
-const SUPPORT_REPLY_DELAY_MAX_MS = Number(process.env.SUPPORT_REPLY_DELAY_MAX_MS || 120_000);
-const SUPPORT_TYPING_MIN_MS = Number(process.env.SUPPORT_TYPING_MIN_MS || 900);
-const SUPPORT_TYPING_MAX_MS = Number(process.env.SUPPORT_TYPING_MAX_MS || 9000);
-const SUPPORT_TYPING_MS_PER_CHAR_MIN = Number(process.env.SUPPORT_TYPING_MS_PER_CHAR_MIN || 28);
-const SUPPORT_TYPING_MS_PER_CHAR_MAX = Number(process.env.SUPPORT_TYPING_MS_PER_CHAR_MAX || 46);
+const SUPPORT_OPERATOR_SEARCH_MIN_MS = Number(process.env.SUPPORT_OPERATOR_SEARCH_MIN_MS || 5_000);
+const SUPPORT_OPERATOR_SEARCH_MAX_MS = Number(process.env.SUPPORT_OPERATOR_SEARCH_MAX_MS || 20_000);
+const SUPPORT_TYPING_START_MIN_MS = Number(process.env.SUPPORT_TYPING_START_MIN_MS || 2_000);
+const SUPPORT_TYPING_START_MAX_MS = Number(process.env.SUPPORT_TYPING_START_MAX_MS || 4_000);
+const SUPPORT_REPLY_DELAY_MIN_MS = Number(process.env.SUPPORT_REPLY_DELAY_MIN_MS || 15_000);
+const SUPPORT_REPLY_DELAY_MAX_MS = Number(process.env.SUPPORT_REPLY_DELAY_MAX_MS || 35_000);
+const SUPPORT_TYPING_MIN_MS = Number(process.env.SUPPORT_TYPING_MIN_MS || 500);
+const SUPPORT_TYPING_MAX_MS = Number(process.env.SUPPORT_TYPING_MAX_MS || 5_000);
+const SUPPORT_TYPING_MS_PER_CHAR_MIN = Number(process.env.SUPPORT_TYPING_MS_PER_CHAR_MIN || 16);
+const SUPPORT_TYPING_MS_PER_CHAR_MAX = Number(process.env.SUPPORT_TYPING_MS_PER_CHAR_MAX || 28);
+const TYPING_ACTION_INTERVAL_MS = 4_500;
 const SUPPORT_HISTORY_LIMIT = Number(process.env.SUPPORT_HISTORY_LIMIT || 16);
 const SUPPORT_ADMIN_IDS = (process.env.SUPPORT_ADMIN_IDS || process.env.ADMIN_IDS || "")
   .split(",")
@@ -55,17 +56,14 @@ const chats = new Map();
 /** @type {Map<string, NodeJS.Timeout>} */
 const pendingTimers = new Map();
 /** @type {Map<string, NodeJS.Timeout>} */
-const writingNoticeTimers = new Map();
+const typingStartTimers = new Map();
+/** @type {Map<string, NodeJS.Timeout>} */
+const typingActionTimers = new Map();
 /** @type {Map<string, NodeJS.Timeout>} */
 const statusAnimTimers = new Map();
 
 const STATUS_DOT_FRAMES = ["", ".", "..", "..."];
 const STATUS_ANIM_MS = 480;
-
-function buildWritingStatusText(agentName, dotFrame = 0) {
-  const dots = STATUS_DOT_FRAMES[dotFrame % STATUS_DOT_FRAMES.length];
-  return `${agentName} пишет сообщение${dots}`;
-}
 
 function buildSearchingOperatorText(dotFrame = 0) {
   const dots = STATUS_DOT_FRAMES[dotFrame % STATUS_DOT_FRAMES.length];
@@ -164,12 +162,38 @@ async function deleteMessageSafe(bot, chatId, messageId) {
   }
 }
 
-function clearWritingNoticeTimer(chatKey) {
-  const timer = writingNoticeTimers.get(chatKey);
+function clearTypingStartTimer(chatKey) {
+  const timer = typingStartTimers.get(chatKey);
   if (timer) {
     clearTimeout(timer);
-    writingNoticeTimers.delete(chatKey);
+    typingStartTimers.delete(chatKey);
   }
+}
+
+function stopTypingAction(chatKey) {
+  const timer = typingActionTimers.get(chatKey);
+  if (timer) {
+    clearInterval(timer);
+    typingActionTimers.delete(chatKey);
+  }
+}
+
+async function sendTypingActionSafe(bot, chatId) {
+  try {
+    await bot.telegram.sendChatAction(chatId, "typing");
+  } catch {
+    // ignore
+  }
+}
+
+function startTypingActionLoop(bot, chatId) {
+  const chatKey = String(chatId);
+  stopTypingAction(chatKey);
+  sendTypingActionSafe(bot, chatId);
+  const timer = setInterval(() => {
+    sendTypingActionSafe(bot, chatId);
+  }, TYPING_ACTION_INTERVAL_MS);
+  typingActionTimers.set(chatKey, timer);
 }
 
 function clearPendingReplyTimer(chatKey) {
@@ -211,22 +235,20 @@ function buildMediaDeclineReply() {
 
 function estimateTypingDurationMs(text) {
   const len = String(text || "").length;
-  const thinkMs = randomBetween(350, 1100);
+  const thinkMs = randomBetween(200, 700);
   const msPerChar = randomBetween(SUPPORT_TYPING_MS_PER_CHAR_MIN, SUPPORT_TYPING_MS_PER_CHAR_MAX);
   const raw = thinkMs + len * msPerChar;
   return Math.max(SUPPORT_TYPING_MIN_MS, Math.min(raw, SUPPORT_TYPING_MAX_MS));
 }
 
 async function simulateTyping(bot, chatId, text) {
+  const chatKey = String(chatId);
+  stopTypingAction(chatKey);
   const duration = estimateTypingDurationMs(text);
   const started = Date.now();
   while (Date.now() - started < duration) {
-    try {
-      await bot.telegram.sendChatAction(chatId, "typing");
-    } catch {
-      break;
-    }
-    await sleep(Math.min(4000, duration - (Date.now() - started)));
+    await sendTypingActionSafe(bot, chatId);
+    await sleep(Math.min(TYPING_ACTION_INTERVAL_MS, duration - (Date.now() - started)));
   }
 }
 
@@ -275,6 +297,7 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
     );
 
     await simulateTyping(bot, chatId, reply);
+    stopTypingAction(String(chatId));
 
     state.history.push({ role: "user", content: combinedText });
     state.history.push({ role: "assistant", content: reply });
@@ -285,6 +308,7 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
     await bot.telegram.sendMessage(chatId, reply);
   } catch (error) {
     console.error("[support-bot] OpenRouter error:", error.message);
+    stopTypingAction(String(chatId));
     await clearStatusMessage(bot, chatId, state);
     await bot.telegram.sendMessage(
       chatId,
@@ -294,50 +318,33 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
   }
 }
 
-function scheduleWritingNotice(bot, chatId) {
+function scheduleTypingStart(bot, chatId) {
   const key = String(chatId);
-  clearWritingNoticeTimer(key);
+  clearTypingStartTimer(key);
 
-  const delay = randomBetween(SUPPORT_WRITING_NOTICE_MIN_MS, SUPPORT_WRITING_NOTICE_MAX_MS);
-  const timer = setTimeout(async () => {
-    writingNoticeTimers.delete(key);
+  const delay = randomBetween(SUPPORT_TYPING_START_MIN_MS, SUPPORT_TYPING_START_MAX_MS);
+  const timer = setTimeout(() => {
+    typingStartTimers.delete(key);
     const state = getChatState(key);
     if (!state.pendingTexts?.length || state.escalated) {
       return;
     }
-    if (state.statusMessageId) {
-      return;
-    }
-    try {
-      const message = await bot.telegram.sendMessage(chatId, buildWritingStatusText(state.agentName, 0));
-      state.statusMessageId = message.message_id;
-      saveChats();
-      startStatusAnimation(
-        bot,
-        key,
-        chatId,
-        message.message_id,
-        (frame) => buildWritingStatusText(state.agentName, frame),
-      );
-    } catch {
-      // ignore
-    }
+    startTypingActionLoop(bot, chatId);
   }, delay);
 
-  writingNoticeTimers.set(key, timer);
+  typingStartTimers.set(key, timer);
 }
 
 function scheduleReply(bot, chatId, from) {
   const key = String(chatId);
-  const state = getChatState(key);
 
   clearPendingReplyTimer(key);
-  scheduleWritingNotice(bot, chatId);
+  scheduleTypingStart(bot, chatId);
 
   const delay = randomBetween(SUPPORT_REPLY_DELAY_MIN_MS, SUPPORT_REPLY_DELAY_MAX_MS);
   const timer = setTimeout(async () => {
     pendingTimers.delete(key);
-    clearWritingNoticeTimer(key);
+    clearTypingStartTimer(key);
     const current = getChatState(key);
     const batch = (current.pendingTexts || []).join("\n\n").trim();
     current.pendingTexts = [];
@@ -375,7 +382,7 @@ bot.start(async (ctx) => {
 
   state.greeted = true;
   saveChats();
-  await ctx.reply(`Привет! На связи ${state.agentName} из поддержки RollerBot. Чем помочь?`);
+  await ctx.reply(`Привет, на связи ${state.agentName} из поддержки RollerBot, чем помочь?`);
 });
 
 bot.command("human", async (ctx) => {
@@ -383,7 +390,8 @@ bot.command("human", async (ctx) => {
   const state = getChatState(ctx.chat.id);
   state.escalated = true;
   clearPendingReplyTimer(String(ctx.chat.id));
-  clearWritingNoticeTimer(String(ctx.chat.id));
+  clearTypingStartTimer(String(ctx.chat.id));
+  stopTypingAction(String(ctx.chat.id));
   stopStatusAnimation(String(ctx.chat.id));
   await clearStatusMessage(bot, ctx.chat.id, state);
   saveChats();
@@ -439,7 +447,8 @@ bot.on(["photo", "document", "video", "voice", "video_note", "audio", "sticker",
   const state = getChatState(chatId);
 
   clearPendingReplyTimer(String(chatId));
-  clearWritingNoticeTimer(String(chatId));
+  clearTypingStartTimer(String(chatId));
+  stopTypingAction(String(chatId));
   stopStatusAnimation(String(chatId));
   await clearStatusMessage(bot, chatId, state);
   state.pendingTexts = [];
