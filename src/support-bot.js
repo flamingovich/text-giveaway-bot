@@ -4,7 +4,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const fs = require("fs");
 const { Telegraf } = require("telegraf");
 const { DateTime } = require("luxon");
-const { callOpenRouter, verifyOpenRouterKey, humanizeSupportReply } = require("./support-ai");
+const { callOpenRouter, verifyOpenRouterKey, humanizeSupportReply, replyRequestsMedia } = require("./support-ai");
 
 const SUPPORT_BOT_TOKEN = process.env.SUPPORT_BOT_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -284,17 +284,21 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
   }
 
   try {
-    const reply = humanizeSupportReply(
-      await callOpenRouter({
-        apiKey: OPENROUTER_API_KEY,
-        model: OPENROUTER_MODEL,
-        referer: WEB_PUBLIC_URL,
-        userId: from?.id,
-        agentName: state.agentName,
-        history: state.history,
-        userMessage: combinedText,
-      }),
-    );
+    const rawReply = await callOpenRouter({
+      apiKey: OPENROUTER_API_KEY,
+      model: OPENROUTER_MODEL,
+      referer: WEB_PUBLIC_URL,
+      userId: from?.id,
+      agentName: state.agentName,
+      history: state.history,
+      userMessage: combinedText,
+    });
+
+    if (replyRequestsMedia(rawReply)) {
+      console.warn("[support-bot] AI запросил медиа — ответ заменён:", rawReply.slice(0, 160));
+    }
+
+    const reply = humanizeSupportReply(rawReply);
 
     await simulateTyping(bot, chatId, reply);
     stopTypingAction(String(chatId));
