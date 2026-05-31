@@ -754,11 +754,11 @@ function getPerWinnerPrizeText(draw) {
 function getWinnerPayoutText(draw, projectData) {
   const base = getPerWinnerPrizeText(draw);
   if (!projectData?.selfReportedNonReferral || !isMoneyPrizeType(draw.prizeType)) {
-    return base;
+    return base || draw.prize || "—";
   }
 
   const amount = getWinnerPayoutAmount(draw, projectData);
-  return formatMoneyAmount(amount, draw.prizeType);
+  return formatMoneyAmount(amount, draw.prizeType) || base || draw.prize || "—";
 }
 
 function getWinnerPayoutPanelHtml(draw, projectData) {
@@ -858,16 +858,26 @@ function formatWinnerConfirmWindowAfterResults(draw) {
   return `${value} ${word}`;
 }
 
+function resolveWinnerPrizeLabel(draw, payoutPrize) {
+  const direct = String(payoutPrize ?? "").trim();
+  if (direct) return direct;
+  const fromDraw = String(draw?.prize ?? "").trim();
+  if (fromDraw) return fromDraw;
+  if (draw) {
+    const computed = String(getPerWinnerPrizeText(draw) ?? "").trim();
+    if (computed) return computed;
+  }
+  return "—";
+}
+
 function buildWinnerWinMessageHtml(draw, payoutPrize) {
   const postLink = buildDrawPostLink(draw);
   const giveawayWord = postLink
     ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
     : "розыгрыше";
+  const prizeLabel = escapeHtml(resolveWinnerPrizeLabel(draw, payoutPrize));
 
-  return [
-    `<b>🎉 Вы выиграли в ${giveawayWord}.</b>`,
-    `🏆 Приз: <b>${escapeHtml(payoutPrize)}</b>`,
-  ].join("\n");
+  return [`🎉 Вы выиграли в ${giveawayWord}.`, `🏆 Приз: ${prizeLabel}`].join("\n");
 }
 
 function buildWinnerExpiredText(draw) {
@@ -1331,7 +1341,7 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy) {
   const message = await bot.telegram.sendMessage(
     userId,
     [
-      buildWinnerWinMessageHtml(payoutPrize),
+      buildWinnerWinMessageHtml(draw, payoutPrize),
       "",
       "Пройди проверку для подтверждения и получения приза 👇",
       `${task.a} + ${task.b} = ?`,
@@ -1419,7 +1429,7 @@ async function markWinnerNotificationExpired(draw, userId) {
         userId,
         notify.lastMessageId,
         undefined,
-        buildWinnerWinMessageHtml(payoutPrize),
+        buildWinnerWinMessageHtml(draw, payoutPrize),
         {
           parse_mode: "HTML",
           reply_markup: { inline_keyboard: [] },
