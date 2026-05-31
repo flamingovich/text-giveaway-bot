@@ -33,6 +33,7 @@ const WEB_ONLY = process.env.WEB_ONLY === "true";
 const WEB_AUTH_DISABLED = process.env.WEB_AUTH_DISABLED === "true" || WEB_ONLY;
 const RECAPTCHA_SITE_KEY = process.env.RECAPTCHA_SITE_KEY || "";
 const RECAPTCHA_SECRET_KEY = process.env.RECAPTCHA_SECRET_KEY || "";
+const JOIN_MINI_APP_SHORT_NAME = (process.env.JOIN_MINI_APP_SHORT_NAME || "join").replace(/^\/+/, "");
 let BOT_USERNAME = (process.env.BOT_USERNAME || "").replace("@", "");
 const TRC20_GUIDE_IMAGES = [
   path.join(__dirname, "..", "assets", "trc20-guide", "step-1.png"),
@@ -999,6 +1000,31 @@ function getJoinWebAppUrl(drawId) {
   return `${WEB_PUBLIC_URL}/join/${encodeURIComponent(drawId)}`;
 }
 
+function getJoinMiniAppBaseUrl() {
+  if (!WEB_PUBLIC_URL.startsWith("https://")) {
+    return "";
+  }
+  return `${WEB_PUBLIC_URL}/join/app`;
+}
+
+function getJoinDirectLink(drawId) {
+  if (!BOT_USERNAME || !JOIN_MINI_APP_SHORT_NAME || !WEB_PUBLIC_URL.startsWith("https://")) {
+    return "";
+  }
+  return `https://t.me/${BOT_USERNAME}/${JOIN_MINI_APP_SHORT_NAME}?startapp=${encodeURIComponent(drawId)}`;
+}
+
+function getJoinParticipateUrl(drawId) {
+  const directLink = getJoinDirectLink(drawId);
+  if (directLink) {
+    return directLink;
+  }
+  if (WEB_PUBLIC_URL.startsWith("https://")) {
+    return getJoinWebAppUrl(drawId);
+  }
+  return getJoinDeepLink(drawId);
+}
+
 function getWinnersWebAppUrl(drawId) {
   const base = (WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`).replace(/\/$/, "");
   return `${base}/winners/${encodeURIComponent(drawId)}`;
@@ -1023,10 +1049,11 @@ function getPanelUrl() {
   return `${base}${PANEL_BASE}`;
 }
 
-function getPanelKeyboardForUser(userId) {
-  if (userId && isOrganizer(userId)) {
-    return Markup.keyboard([[Markup.button.webApp("📱 Панель", getPanelUrl())]]).resize();
-  }
+function getPanelMenuHint() {
+  return "кнопку «📱 Панель» слева от поля ввода";
+}
+
+function getPanelKeyboardForUser(_userId) {
   return Markup.removeKeyboard();
 }
 
@@ -1057,12 +1084,42 @@ async function syncOrganizerPanelUi(userId) {
   }
 }
 
+function collectOrganizerUserIds() {
+  const ids = new Set([...ADMIN_IDS, ...SUPER_ADMIN_IDS]);
+  for (const channel of readKnownChannels().channels || []) {
+    if (channel.ownerId) {
+      ids.add(Number(channel.ownerId));
+    }
+  }
+  for (const project of readProjects().projects || []) {
+    if (project.ownerId) {
+      ids.add(Number(project.ownerId));
+    }
+  }
+  for (const draw of readData().draws || []) {
+    if (draw.ownerId) {
+      ids.add(Number(draw.ownerId));
+    }
+  }
+  return [...ids].filter((id) => Number.isFinite(id) && id > 0);
+}
+
+async function syncAllOrganizerPanelMenus() {
+  if (!WEB_PUBLIC_URL.startsWith("https://") || WEB_ONLY) {
+    return;
+  }
+  for (const userId of collectOrganizerUserIds()) {
+    await syncOrganizerPanelUi(userId);
+  }
+}
+
 function getKeyboard(drawId, count) {
   const text = `Участвовать (${count})`;
   // Web App-кнопки в inline-клавиатуре канала запрещены (BUTTON_TYPE_INVALID).
-  // Ведём в бота по deep link; там уже открывается Mini App участия.
-  if (BOT_USERNAME) {
-    return Markup.inlineKeyboard([Markup.button.url(text, getJoinDeepLink(drawId))]);
+  // Direct Link Mini App: t.me/bot/shortname?startapp=drawId
+  const participateUrl = getJoinParticipateUrl(drawId);
+  if (participateUrl) {
+    return Markup.inlineKeyboard([Markup.button.url(text, participateUrl)]);
   }
   return Markup.inlineKeyboard([Markup.button.callback(text, `join:${drawId}`)]);
 }
@@ -1597,42 +1654,6 @@ function buildCaptchaTask() {
   return { a, b, correct, options: unique };
 }
 
-function setJoinSession(userId, session) {
-  joinSessions.set(String(userId), session);
-}
-
-function getJoinSession(userId) {
-  return joinSessions.get(String(userId));
-}
-
-function clearJoinSession(userId) {
-  joinSessions.delete(String(userId));
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function trackJoinBotMessage(session, message) {
-  if (!session || !message?.message_id) {
-    return;
-  }
-  if (!Array.isArray(session.botMessageIds)) {
-    session.botMessageIds = [];
-  }
-  session.botMessageIds.push(message.message_id);
-}
-
-function trackJoinBotMessageIds(session, messageIds) {
-  if (!session || !Array.isArray(messageIds)) {
-    return;
-  }
-  if (!Array.isArray(session.botMessageIds)) {
-    session.botMessageIds = [];
-  }
-  session.botMessageIds.push(...messageIds.filter(Boolean));
-}
-
 async function safeDeleteMessage(chatId, messageId) {
   if (!chatId || !messageId) {
     return;
@@ -1642,22 +1663,6 @@ async function safeDeleteMessage(chatId, messageId) {
   } catch (error) {
     // Пропускаем ошибки удаления (старое сообщение/нет прав/уже удалено).
   }
-}
-
-async function cleanupJoinStage(ctx, session, extraMessageIds = []) {
-  if (!session || !ctx.chat?.id) {
-    return;
-  }
-  const ids = [...(session.botMessageIds || []), ...extraMessageIds]
-    .filter(Boolean)
-    .filter((value, index, array) => array.indexOf(value) === index);
-
-  for (const messageId of ids) {
-    await safeDeleteMessage(ctx.chat.id, messageId);
-  }
-
-  session.botMessageIds = [];
-  setJoinSession(ctx.from.id, session);
 }
 
 async function addUserToDraw(drawId, userId) {
@@ -1735,28 +1740,6 @@ async function tryAutoJoinDraw(draw, userId) {
   return { joined: false };
 }
 
-async function sendCaptchaStep(ctx, session) {
-  const task = buildCaptchaTask();
-  session.step = "captcha";
-  session.captchaCorrect = task.correct;
-  setJoinSession(ctx.from.id, session);
-
-  const message = await ctx.reply(
-    [
-      "<b>Этап 1/4 · Проверка на робота</b>",
-      "",
-      `Решите пример: <b>${task.a} + ${task.b}</b>`,
-    ].join("\n"),
-    {
-      parse_mode: "HTML",
-      ...Markup.inlineKeyboard(
-        task.options.map((value) => Markup.button.callback(String(value), `jp:cap:${value}`))
-      ),
-    }
-  );
-  trackJoinBotMessage(session, message);
-}
-
 async function sendTrc20Guide(ctx) {
   const stepTexts = [
     "Шаг 1/3: откройте проект и нажмите кнопку депозита.",
@@ -1785,46 +1768,6 @@ async function sendTrc20Guide(ctx) {
   sentMessageIds.push(noteMessage.message_id);
 
   return sentMessageIds;
-}
-
-async function sendRegistrationStep(ctx, session) {
-  const message = await ctx.reply(
-    [
-      "<b>Этап 2/4 · Регистрация на проекте</b>",
-      "",
-      "Нажмите «Перейти на проект».",
-    ].join("\n"),
-    {
-      parse_mode: "HTML",
-      ...Markup.inlineKeyboard([[Markup.button.callback("Перейти на проект", "jp:reg:open")]]),
-    }
-  );
-  session.step = "registration";
-  session.registrationOpened = false;
-  session.registrationPromptMessageId = message.message_id;
-  trackJoinBotMessage(session, message);
-  setJoinSession(ctx.from.id, session);
-}
-
-async function sendTrc20Step(ctx, session) {
-  const projectLink = buildProjectLinkHtml(session.projectId);
-  session.step = "await_trc20";
-  setJoinSession(ctx.from.id, session);
-
-  const introMessage = await ctx.reply(
-    [
-      "<b>Этап 4/4 · Адрес TRC-20</b>",
-      "",
-      `Отправьте TRC-20 адрес с ${projectLink} одним сообщением.`,
-      "Если не знаете, где его взять — инструкция ниже.",
-    ].join("\n"),
-    { parse_mode: "HTML" }
-  );
-  trackJoinBotMessage(session, introMessage);
-
-  const guideMessageIds = await sendTrc20Guide(ctx);
-  trackJoinBotMessageIds(session, guideMessageIds);
-  setJoinSession(ctx.from.id, session);
 }
 
 async function startWinnersFlow(ctx, drawId) {
@@ -1876,38 +1819,15 @@ async function startJoinFlow(ctx, drawId) {
     return;
   }
 
-  if (WEB_PUBLIC_URL.startsWith("https://")) {
+  const participateUrl = getJoinParticipateUrl(drawId);
+  if (participateUrl.startsWith("https://")) {
     await ctx.reply(
-      "Нажмите кнопку ниже, чтобы пройти участие.",
-      Markup.inlineKeyboard([Markup.button.webApp("🎁 Участвовать", getJoinWebAppUrl(drawId))]),
+      Markup.inlineKeyboard([[Markup.button.url("🎁 Участвовать", participateUrl)]]),
     );
     return;
   }
 
-  const session = {
-    userId: ctx.from.id,
-    drawId,
-    projectId: draw.projectId,
-    step: "captcha",
-    captchaCorrect: null,
-    registrationOpened: false,
-    registrationPromptMessageId: null,
-    botMessageIds: [],
-  };
-  setJoinSession(ctx.from.id, session);
-
-  const intro = await ctx.reply(
-    [
-      "<b>Старт участия в розыгрыше</b>",
-      "",
-      "Нужно пройти 4 шага.",
-      "Если выиграете, бот отправит уведомление в личные сообщения.",
-    ].join("\n"),
-    { parse_mode: "HTML" }
-  );
-  trackJoinBotMessage(session, intro);
-  setJoinSession(ctx.from.id, session);
-  await sendCaptchaStep(ctx, session);
+  await ctx.reply("Участие временно недоступно. Попробуйте позже.");
 }
 
 async function schedulerTick() {
@@ -5740,7 +5660,7 @@ panelRouter.post("/admin/access", webAuth.requireAuth, requireOrganizer, require
       [
         "✅ Вам открыли доступ к панели RollerBot.",
         "",
-        "Нажмите «📱 Панель» под полем ввода или отправьте /panel.",
+        `Нажмите ${getPanelMenuHint()} или отправьте /panel.`,
         "Открывать нужно именно из Telegram — не через браузер.",
       ].join("\n"),
       getPanelKeyboardForUser(resolved.user.id),
@@ -6389,7 +6309,7 @@ bot.start(async (ctx) => {
       return;
     }
     await syncOrganizerPanelUi(ctx.from.id);
-    await ctx.reply("Нажмите кнопку «📱 Панель» ниже 👇", getPanelKeyboardForUser(ctx.from.id));
+    await ctx.reply(`Нажмите ${getPanelMenuHint()} 👈`, getPanelKeyboardForUser(ctx.from.id));
     return;
   }
 
@@ -6417,7 +6337,7 @@ bot.start(async (ctx) => {
         "",
         "1. Добавьте бота админом в свой канал",
         "2. Перешлите любой пост из канала боту (/link_channel)",
-        "3. Нажмите «Панель» и создайте розыгрыш",
+        "3. Откройте панель кнопкой слева от поля ввода и создайте розыгрыш",
         "",
         "Участникам: кнопка «Участвовать» в посте канала.",
       ].join("\n"),
@@ -6435,6 +6355,7 @@ bot.start(async (ctx) => {
     ].join("\n"),
     getPanelKeyboardForUser(userId),
   );
+  await syncOrganizerPanelUi(userId);
 });
 
 bot.command("panel", async (ctx) => {
@@ -6447,7 +6368,7 @@ bot.command("panel", async (ctx) => {
     return;
   }
   await syncOrganizerPanelUi(ctx.from.id);
-  await ctx.reply("Нажмите кнопку «Панель» ниже 👇", getPanelKeyboardForUser(ctx.from.id));
+  await ctx.reply(`Нажмите ${getPanelMenuHint()} 👈`, getPanelKeyboardForUser(ctx.from.id));
 });
 
 bot.command("join", async (ctx) => {
@@ -6538,78 +6459,6 @@ bot.command("my_draws", async (ctx) => {
 
 bot.on("text", async (ctx) => {
   upsertUserMeta(ctx.from);
-
-  if (ctx.chat?.type === "private") {
-    const joinSession = getJoinSession(ctx.from.id);
-    if (joinSession && joinSession.step === "await_ref_nickname") {
-      const projectLink = buildProjectLinkHtml(joinSession.projectId);
-      const nickname = ctx.message.text.trim();
-      if (nickname.length < 3) {
-        const failMessage = await ctx.reply(
-          `Никнейм слишком короткий. Введите никнейм с ${projectLink} (минимум 3 символа).`,
-          { parse_mode: "HTML" }
-        );
-        trackJoinBotMessage(joinSession, failMessage);
-        setJoinSession(ctx.from.id, joinSession);
-        return;
-      }
-
-      await cleanupJoinStage(ctx, joinSession, [ctx.message.message_id]);
-      const checkingMessage = await ctx.reply(
-        [
-          "<b>Этап 3/4 · Проверка реферала</b>",
-          "",
-          `Проверяю никнейм <b>${escapeHtml(nickname)}</b> в базе проекта...`,
-        ].join("\n"),
-        { parse_mode: "HTML" }
-      );
-
-      const delayMs = (Math.floor(Math.random() * 8) + 8) * 1000;
-      await sleep(delayMs);
-
-      await safeDeleteMessage(ctx.chat.id, checkingMessage.message_id);
-      setUserProjectProfile(ctx.from.id, joinSession.projectId, {
-        referralVerified: true,
-        selfReportedNonReferral: false,
-        referralNickname: nickname,
-        referralCheckedAt: new Date().toISOString(),
-      });
-
-      await sendTrc20Step(ctx, joinSession);
-      return;
-    }
-
-    if (joinSession && joinSession.step === "await_trc20") {
-      const projectLink = buildProjectLinkHtml(joinSession.projectId);
-      const address = ctx.message.text.trim();
-      if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) {
-        const invalidMessage = await ctx.reply(
-          `Неверный формат TRC-20 адреса. Отправьте адрес с ${projectLink}.\nПример: T... (34 символа).\nЕсли нужна инструкция: /trc20_help`,
-          { parse_mode: "HTML" }
-        );
-        trackJoinBotMessage(joinSession, invalidMessage);
-        setJoinSession(ctx.from.id, joinSession);
-        return;
-      }
-
-      await cleanupJoinStage(ctx, joinSession, [ctx.message.message_id]);
-      setUserProjectProfile(ctx.from.id, joinSession.projectId, {
-        referralVerified: joinSession.skipReferralCheck ? false : true,
-        selfReportedNonReferral: Boolean(joinSession.skipReferralCheck),
-        trc20Address: address,
-        verifiedBy: "manual_confirmation",
-      });
-      clearJoinSession(ctx.from.id);
-
-      const result = await addUserToDraw(joinSession.drawId, ctx.from.id);
-      if (result.messageHtml) {
-        await ctx.reply(result.messageHtml, getParticipationReplyOptions());
-      } else {
-        await ctx.reply(result.cbMessage || "Вы участвуете ✅");
-      }
-      return;
-    }
-  }
 
   if (!isAdmin(ctx)) {
     return;
@@ -6719,33 +6568,13 @@ bot.action(/^join:(.+)$/, async (ctx) => {
     return;
   }
 
-  if (!BOT_USERNAME) {
-    try {
-      await ensureBotUsername();
-    } catch (error) {
-      console.error("Ошибка получения BOT_USERNAME:", error.message);
-    }
-  }
-
-  const deepLink = getJoinDeepLink(drawId);
-  const text = deepLink
-    ? "Нужно пройти проверку. Откройте личку с ботом по кнопке «Перейти к проверке»."
-    : "Нужно пройти проверку. Откройте бота в личке и нажмите /start.";
-  await ctx.answerCbQuery(text, { show_alert: true });
-
-  if (!deepLink) {
+  const participateUrl = getJoinParticipateUrl(drawId);
+  if (participateUrl.startsWith("https://")) {
+    await ctx.answerCbQuery({ url: participateUrl });
     return;
   }
 
-  try {
-    await ctx.telegram.sendMessage(
-      ctx.from.id,
-      "Чтобы завершить участие, пройдите 4 шага проверки в боте:",
-      Markup.inlineKeyboard([[Markup.button.url("Перейти к проверке", deepLink)]])
-    );
-  } catch (error) {
-    console.error("Не удалось отправить deep-link в личку:", error.message);
-  }
+  await ctx.answerCbQuery("Участие временно недоступно.", { show_alert: true });
 });
 
 bot.action(/^winners:(.+)$/, async (ctx) => {
@@ -6761,115 +6590,6 @@ bot.action(/^winners:(.+)$/, async (ctx) => {
 
 bot.action("draw_finished", async (ctx) => {
   await ctx.answerCbQuery("Нажмите кнопку «завершен» в посте — она откроет список победителей.");
-});
-
-bot.action(/^jp:cap:(\d+)$/, async (ctx) => {
-  const selected = Number(ctx.match[1]);
-  const session = getJoinSession(ctx.from.id);
-  if (!session || session.step !== "captcha") {
-    await ctx.answerCbQuery("Сессия проверки устарела. Запустите участие заново.");
-    return;
-  }
-
-  if (selected !== session.captchaCorrect) {
-    await ctx.answerCbQuery("Неверно, попробуйте еще раз.");
-    await cleanupJoinStage(ctx, session, [ctx.callbackQuery?.message?.message_id]);
-    await sendCaptchaStep(ctx, session);
-    return;
-  }
-
-  await cleanupJoinStage(ctx, session, [ctx.callbackQuery?.message?.message_id]);
-  await ctx.answerCbQuery("Проверка пройдена.");
-  await sendRegistrationStep(ctx, session);
-});
-
-bot.action("jp:reg:open", async (ctx) => {
-  const session = getJoinSession(ctx.from.id);
-  if (!session || session.step !== "registration") {
-    await ctx.answerCbQuery("Сессия проверки устарела.");
-    return;
-  }
-
-  const project = getProjectById(session.projectId);
-  await cleanupJoinStage(ctx, session, [ctx.callbackQuery?.message?.message_id]);
-  session.registrationOpened = true;
-  session.step = "registration_confirm";
-  setJoinSession(ctx.from.id, session);
-
-  try {
-    await ctx.answerCbQuery("Открываю проект...", { url: project?.refLink || "https://t.me" });
-  } catch (error) {
-    await ctx.answerCbQuery("Открываю проект...");
-    const fallbackMessage = await ctx.reply(
-      "Если проект не открылся автоматически, нажмите кнопку ниже:",
-      Markup.inlineKeyboard([[Markup.button.url("Перейти на проект", project?.refLink || "https://t.me")]])
-    );
-    trackJoinBotMessage(session, fallbackMessage);
-    setJoinSession(ctx.from.id, session);
-  }
-
-  await sleep(10_000);
-
-  const confirmMessage = await ctx.reply(
-    [
-      "<b>Подтвердите регистрацию кнопкой ниже:</b>",
-      "",
-      "Если у вас уже был аккаунт не по реф-ссылке — отметьте это отдельно.",
-    ].join("\n"),
-    {
-      parse_mode: "HTML",
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback("Я зарегистрировался(лась)", "jp:reg:registered")],
-        [Markup.button.callback("Я уже зарегистрирован(не реф)", "jp:reg:nonref")],
-      ]),
-    }
-  );
-  trackJoinBotMessage(session, confirmMessage);
-  setJoinSession(ctx.from.id, session);
-});
-
-bot.action("jp:reg:registered", async (ctx) => {
-  const session = getJoinSession(ctx.from.id);
-  if (!session || session.step !== "registration_confirm") {
-    await ctx.answerCbQuery("Сессия проверки устарела.");
-    return;
-  }
-
-  await cleanupJoinStage(ctx, session, [ctx.callbackQuery?.message?.message_id]);
-  session.step = "await_ref_nickname";
-  setJoinSession(ctx.from.id, session);
-  await ctx.answerCbQuery("Продолжаем.");
-  const projectLink = buildProjectLinkHtml(session.projectId);
-  const promptMessage = await ctx.reply(
-    [
-      "<b>Этап 3/4 · Подтверждение реферала</b>",
-      "",
-      `Введите ваш никнейм с ${projectLink} одним сообщением.`,
-    ].join("\n"),
-    { parse_mode: "HTML" }
-  );
-  trackJoinBotMessage(session, promptMessage);
-  setJoinSession(ctx.from.id, session);
-});
-
-bot.action("jp:reg:nonref", async (ctx) => {
-  const session = getJoinSession(ctx.from.id);
-  if (!session || !["registration", "registration_confirm"].includes(session.step)) {
-    await ctx.answerCbQuery("Сессия проверки устарела.");
-    return;
-  }
-
-  setUserProjectProfile(ctx.from.id, session.projectId, {
-    referralVerified: false,
-    selfReportedNonReferral: true,
-    nonReferralMarkedAt: new Date().toISOString(),
-  });
-
-  await cleanupJoinStage(ctx, session, [ctx.callbackQuery?.message?.message_id]);
-  session.skipReferralCheck = true;
-  setJoinSession(ctx.from.id, session);
-  await ctx.answerCbQuery("Отметка сохранена.");
-  await sendTrc20Step(ctx, session);
 });
 
 bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
@@ -6982,9 +6702,19 @@ async function bootstrap() {
 
   app.listen(WEB_PORT, "0.0.0.0", () => {
     console.log(`Веб-панель запущена: ${WEB_PUBLIC_URL || `http://0.0.0.0:${WEB_PORT}`}`);
+    const joinAppUrl = getJoinMiniAppBaseUrl();
+    if (joinAppUrl) {
+      console.log(`Join Mini App (URL в BotFather): ${joinAppUrl}`);
+      if (JOIN_MINI_APP_SHORT_NAME && BOT_USERNAME) {
+        console.log(
+          `Join Direct Link: https://t.me/${BOT_USERNAME}/${JOIN_MINI_APP_SHORT_NAME}?startapp=<draw_id>`,
+        );
+      }
+    }
   });
   await bot.launch();
   await syncActiveDrawKeyboards();
+  await syncAllOrganizerPanelMenus();
   console.log(`Бот запущен: @${BOT_USERNAME}`);
 }
 

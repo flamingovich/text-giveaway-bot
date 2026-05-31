@@ -152,7 +152,7 @@ function renderLoginPage(botUsername, publicUrl, panelPath = "/panel") {
     <h1>🎁 Панель розыгрышей</h1>
     <p class="loading">Загрузка…</p>
     <div class="fallback">
-      <p>Откройте бота в Telegram и нажмите кнопку «📱 Панель» под полем ввода или отправьте /panel.</p>
+      <p>Откройте бота в Telegram и нажмите кнопку «📱 Панель» слева от поля ввода или отправьте /panel.</p>
       <a href="${botLink}">Открыть @${botUsername || "bot"}</a>
     </div>
   </div>

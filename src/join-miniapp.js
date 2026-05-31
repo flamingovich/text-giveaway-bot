@@ -430,10 +430,36 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
   <script>
     ${getMiniAppInitScript({ authSession: false, previewShell: true })}
-    const DRAW_ID = ${JSON.stringify(drawId)};
-    const PROJECT_NAME = ${JSON.stringify(project?.name || "проект")};
+    const PAGE_MODE = ${JSON.stringify(drawId === "app" ? "app" : drawId === "preview" ? "preview" : "draw")};
+    let drawId = PAGE_MODE === "draw" ? ${JSON.stringify(drawId)} : "";
+    let projectName = ${JSON.stringify(project?.name || "проект")};
     const RECAPTCHA_SITE_KEY = ${JSON.stringify(recaptchaSiteKey)};
     const tg = window.Telegram?.WebApp;
+
+    function resolveDrawIdFromTelegram() {
+      if (PAGE_MODE === "draw") return drawId;
+      return String(tg?.initDataUnsafe?.start_param || "").trim();
+    }
+
+    function applyProjectMeta(meta) {
+      projectName = meta?.project?.name || projectName;
+      const refLink = meta?.project?.refLink || "";
+      const link = document.getElementById("projectLink");
+      if (link) {
+        if (refLink) link.href = refLink;
+        const label = link.querySelector(".join-btn-label");
+        if (label) label.textContent = "Перейти на " + projectName;
+      }
+    }
+
+    async function loadDrawMeta() {
+      const res = await fetch("/api/join/" + encodeURIComponent(drawId) + "/meta");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Розыгрыш недоступен.");
+      }
+      applyProjectMeta(data);
+    }
     let googleRecaptchaWidgetId = null;
     let mockRecaptchaBound = false;
     let refConfirmAttempts = 0;
@@ -477,7 +503,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       btn.disabled = true;
       btn.classList.add("is-loading");
       btn.classList.remove("is-done");
-      btn.innerHTML = JOIN_BTN_SPINNER + '<span class="join-btn-label">Проверка базы данных ' + PROJECT_NAME + "...</span>";
+      btn.innerHTML = JOIN_BTN_SPINNER + '<span class="join-btn-label">Проверка базы данных ' + projectName + "...</span>";
     }
 
     function setRefConfirmDone() {
@@ -511,7 +537,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     async function submitCaptcha(payload) {
-      const data = await api("/api/join/" + encodeURIComponent(DRAW_ID) + "/captcha", payload);
+      const data = await api("/api/join/" + encodeURIComponent(drawId) + "/captcha", payload);
       hideMessage();
       handleStep(data.step, data);
     }
@@ -528,7 +554,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       widget.classList.remove("is-loading");
       widget.classList.add("is-checked");
       widget.dataset.state = "checked";
-      if (DRAW_ID === "preview") return;
+      if (PAGE_MODE === "preview") return;
       try {
         await submitCaptcha({ verified: true });
       } catch (error) {
@@ -570,7 +596,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       googleRecaptchaWidgetId = window.grecaptcha.render(google, {
         sitekey: RECAPTCHA_SITE_KEY,
         callback: async (token) => {
-          if (DRAW_ID === "preview") return;
+          if (PAGE_MODE === "preview") return;
           try {
             await submitCaptcha({ token });
           } catch (error) {
@@ -751,7 +777,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const btn = document.getElementById("registrationDoneBtn");
       btn.disabled = true;
       try {
-        const data = await api("/api/join/" + encodeURIComponent(DRAW_ID) + "/registration", { action: "opened" });
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/registration", { action: "opened" });
         hideMessage();
         handleStep(data.step, data);
       } catch (error) {
@@ -778,7 +804,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     document.getElementById("trc20SubmitBtn").addEventListener("click", async () => {
       const address = document.getElementById("trc20Input").value.trim();
       try {
-        const data = await api("/api/join/" + encodeURIComponent(DRAW_ID) + "/trc20", { address });
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/trc20", { address });
         hideMessage();
         handleStep(data.step, data);
       } catch (error) {
@@ -787,7 +813,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     (async () => {
-      if (DRAW_ID === "preview") {
+      if (PAGE_MODE === "preview") {
         document.getElementById("loading").classList.add("hidden");
         document.getElementById("previewToolbar").classList.remove("hidden");
         const nav = document.getElementById("previewNav");
@@ -827,8 +853,21 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         showMessage("Откройте участие через кнопку в Telegram.");
         return;
       }
+
+      if (PAGE_MODE === "app") {
+        drawId = resolveDrawIdFromTelegram();
+        if (!drawId) {
+          document.getElementById("loading").classList.add("hidden");
+          showMessage("Не указан розыгрыш. Нажмите «Участвовать» в посте канала.");
+          return;
+        }
+      }
+
       try {
-        const data = await api("/api/join/" + encodeURIComponent(DRAW_ID) + "/session", {});
+        if (PAGE_MODE === "app") {
+          await loadDrawMeta();
+        }
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/session", {});
         hideMessage();
         handleStep(data.step, data);
       } catch (error) {
@@ -983,7 +1022,40 @@ function registerJoinMiniApp(app, deps) {
 
   app.use("/assets", express.static(deps.ASSETS_DIR));
 
+  app.get("/api/join/:drawId/meta", (req, res) => {
+    const draw = getActiveDraw(req.params.drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
+    const project = draw.projectId ? getProjectById(draw.projectId) : null;
+    res.json({
+      drawId: draw.id,
+      prize: draw.prize || "",
+      project: project
+        ? {
+            name: project.name || "",
+            refLink: project.refLink || "",
+          }
+        : null,
+    });
+  });
+
+  app.get("/join/app", (_req, res) => {
+    res
+      .type("html")
+      .send(
+        renderJoinPage("app", { id: "app", status: DRAW_STATUS.ACTIVE, projectId: null }, null, {
+          recaptchaSiteKey: RECAPTCHA_SITE_KEY,
+        }),
+      );
+  });
+
   app.get("/join/:drawId", (req, res) => {
+    if (req.params.drawId === "app") {
+      res.redirect(301, "/join/app");
+      return;
+    }
     const draw = getActiveDraw(req.params.drawId);
     if (!draw) {
       res.status(404).type("html").send("<h1>Розыгрыш недоступен</h1>");
