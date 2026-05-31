@@ -770,6 +770,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
+    const DONE_LIVE_POLL_MS = 2500;
     let doneLiveTimer = null;
     let doneLiveSignature = "";
 
@@ -782,20 +783,17 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     function stopDoneLivePolling() {
       if (doneLiveTimer) {
-        clearInterval(doneLiveTimer);
+        clearTimeout(doneLiveTimer);
         doneLiveTimer = null;
       }
     }
 
     async function refreshDoneLiveState() {
-      if (activeStep !== "done" || !drawId || PAGE_MODE === "preview") return;
+      if (!drawId || PAGE_MODE === "preview" || activeStep !== "done") return;
       try {
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/live", {});
-        const signature = buildDoneLiveSignature(data);
-        if (signature !== doneLiveSignature) {
-          doneLiveSignature = signature;
-          renderDoneStats(data);
-        }
+        renderDoneStats(data);
+        doneLiveSignature = buildDoneLiveSignature(data);
         if (data.endAt && formatRemaining(data.endAt) === "Завершён") {
           stopDoneLivePolling();
         }
@@ -804,12 +802,23 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
-    function startDoneLivePolling(initialPayload) {
+    function scheduleDoneLivePoll(delayMs = DONE_LIVE_POLL_MS) {
       stopDoneLivePolling();
+      doneLiveTimer = setTimeout(async () => {
+        doneLiveTimer = null;
+        if (activeStep !== "done") return;
+        await refreshDoneLiveState();
+        if (activeStep === "done") {
+          scheduleDoneLivePoll();
+        }
+      }, delayMs);
+    }
+
+    function startDoneLivePolling(initialPayload) {
       doneLiveSignature = initialPayload ? buildDoneLiveSignature(initialPayload) : "";
-      if (PAGE_MODE === "preview") return;
+      if (PAGE_MODE === "preview" || activeStep !== "done") return;
       refreshDoneLiveState();
-      doneLiveTimer = setInterval(refreshDoneLiveState, 3500);
+      scheduleDoneLivePoll(DONE_LIVE_POLL_MS);
     }
 
     function startDoneCountdown(endAtISO) {
@@ -895,9 +904,24 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         if (sub) sub.textContent = "Ждём результатов розыгрыша.";
       }
       renderDoneStats(payload);
-      startDoneLivePolling(payload);
       showStep("done");
+      startDoneLivePolling(payload);
     }
+
+    function bindDoneLiveVisibilityRefresh() {
+      const refreshIfDone = () => {
+        if (activeStep === "done") {
+          refreshDoneLiveState();
+          scheduleDoneLivePoll(800);
+        }
+      };
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) refreshIfDone();
+      });
+      window.addEventListener("focus", refreshIfDone);
+      tg?.onEvent?.("viewportChanged", refreshIfDone);
+    }
+    bindDoneLiveVisibilityRefresh();
 
     (function setupDoneChanceInfo() {
       const modal = document.getElementById("joinDoneChanceInfo");
@@ -1526,7 +1550,11 @@ function registerJoinMiniApp(app, deps) {
     const result = await addUserToDraw(drawId, userId);
     clearJoinApiSession(userId, drawId);
 
-    const updatedDraw = getActiveDraw(drawId) || draw;
+    const updatedDraw = getActiveDraw(drawId);
+    if (!updatedDraw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
     res.json(
       buildJoinDonePayload(updatedDraw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
