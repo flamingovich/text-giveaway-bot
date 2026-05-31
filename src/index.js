@@ -980,7 +980,7 @@ function buildDrawMessage(draw, options = {}) {
         ? `<b>🥳 Победители:</b> ${winnerLinks.join(", ")}`
         : "<b>🥳 Победители:</b> не определены"
     );
-    base.push("", `<b>⚠️ Победители, отметьтесь тут - ${escapeHtml(botHandle)}</b>`);
+    base.push("", `<b>⚠️ Кто выйграл, отметьтесь! ${escapeHtml(botHandle)}</b>`);
   } else {
     base.push("", "<b>Жми кнопку ниже, для участия 👇</b>");
   }
