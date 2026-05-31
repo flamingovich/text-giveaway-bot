@@ -842,23 +842,23 @@ function winnerVerificationSessionKey(userId, drawId) {
   return `${userId}:${drawId}`;
 }
 
-function getWinnerConfirmTimeoutMinutes(draw) {
+function formatWinnerConfirmWindowAfterResults(draw) {
   const cfg = getWinnerConfirmWindow(draw);
   if (!cfg) {
-    return 0;
+    return "отведённое время";
   }
+  const value = Math.floor(cfg.value);
   if (cfg.unit === "hours") {
-    return cfg.value * 60;
+    const word = value === 1 ? "час" : value >= 2 && value <= 4 ? "часа" : "часов";
+    return `${value} ${word}`;
   }
-  return cfg.value;
+  const word = value === 1 ? "минута" : value >= 2 && value <= 4 ? "минуты" : "минут";
+  return `${value} ${word}`;
 }
 
 function buildWinnerExpiredText(draw) {
-  const timeoutMinutes = getWinnerConfirmTimeoutMinutes(draw);
-  return [
-    "🎉 Вы выиграли в розыгрыше.",
-    `😞 Но Вы не отметились вовремя... (${timeoutMinutes} минут после победы)`,
-  ].join("\n");
+  const windowLabel = formatWinnerConfirmWindowAfterResults(draw);
+  return `⏰ Ваш приз сгорел, так как вы не отметились вовремя (${windowLabel} после итогов).`;
 }
 
 function buildDrawPostLink(draw) {
@@ -1401,15 +1401,21 @@ async function markWinnerNotificationExpired(draw, userId) {
 
   if (notify.lastMessageId) {
     try {
-      await bot.telegram.editMessageText(
+      await bot.telegram.editMessageReplyMarkup(
         userId,
         notify.lastMessageId,
         undefined,
-        buildWinnerExpiredText(draw)
+        { inline_keyboard: [] }
       );
     } catch (error) {
-      // Не критично, если не получилось отредактировать старое сообщение.
+      // Не критично, если не получилось убрать клавиатуру у старого сообщения.
     }
+  }
+
+  try {
+    await bot.telegram.sendMessage(userId, buildWinnerExpiredText(draw));
+  } catch (error) {
+    // Не критично, если не получилось отправить отдельное уведомление.
   }
 
   return true;
@@ -3856,65 +3862,52 @@ ${getPanelFluidTypographyVars()}
     .panel-bottom-bar .quick-action,
     body.app-theme-dark .panel-bottom-bar .quick-action,
     body.app-theme-dark .panel-bottom-bar .quick-action:hover,
-    body.app-theme-dark .panel-bottom-bar .quick-action:focus-visible {
+    body.app-theme-dark .panel-bottom-bar .quick-action:focus-visible,
+    body.app-theme-light .panel-bottom-bar .quick-action,
+    body.app-theme-light .panel-bottom-bar .quick-action:hover,
+    body.app-theme-light .panel-bottom-bar .quick-action:focus-visible {
       margin-bottom: 0;
       min-height: 64px;
       padding: 11px 8px;
-      background: rgba(255, 255, 255, 0.1) !important;
-      border: 1px solid rgba(255, 255, 255, 0.16) !important;
-      color: rgba(255, 255, 255, 0.96) !important;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      background: var(--tg-theme-button-color, var(--primary)) !important;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 78%, #000) !important;
+      color: var(--tg-theme-button-text-color, #fff) !important;
+      box-shadow: 0 2px 10px color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 28%, transparent);
       filter: none !important;
       transform: none !important;
     }
-    body.app-theme-light .panel-bottom-bar .quick-action {
-      background: rgba(255, 255, 255, 0.92) !important;
-      border-color: rgba(21, 26, 45, 0.1) !important;
-      color: var(--tg-theme-text-color, #151a2d) !important;
-      box-shadow: 0 1px 2px rgba(21, 26, 45, 0.06);
-    }
     .panel-bottom-bar .quick-action .qa-icon,
-    body.app-theme-dark .panel-bottom-bar .quick-action .qa-icon {
-      color: rgba(255, 255, 255, 0.88) !important;
-    }
+    body.app-theme-dark .panel-bottom-bar .quick-action .qa-icon,
     body.app-theme-light .panel-bottom-bar .quick-action .qa-icon {
-      color: color-mix(in srgb, var(--tg-theme-text-color, #151a2d) 72%, transparent) !important;
+      color: var(--tg-theme-button-text-color, #fff) !important;
     }
     .panel-bottom-bar .quick-action .qa-label,
-    body.app-theme-dark .panel-bottom-bar .quick-action .qa-label {
+    body.app-theme-dark .panel-bottom-bar .quick-action .qa-label,
+    body.app-theme-light .panel-bottom-bar .quick-action .qa-label {
       font-size: var(--panel-fs-sm);
       font-weight: 700;
-      color: inherit !important;
+      color: var(--tg-theme-button-text-color, #fff) !important;
     }
     .panel-bottom-bar .quick-action:hover,
     .panel-bottom-bar .quick-action:focus-visible {
-      background: rgba(255, 255, 255, 0.14) !important;
-      border-color: rgba(255, 255, 255, 0.22) !important;
-    }
-    body.app-theme-light .panel-bottom-bar .quick-action:hover,
-    body.app-theme-light .panel-bottom-bar .quick-action:focus-visible {
-      background: #fff !important;
-      border-color: rgba(21, 26, 45, 0.14) !important;
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 92%, #fff) !important;
+      border-color: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 70%, #000) !important;
+      filter: brightness(1.04) !important;
     }
     .panel-bottom-bar .quick-action.qa-bar-active,
     .panel-bottom-bar .quick-action.qa-bar-active:hover,
     .panel-bottom-bar .quick-action.qa-bar-active:focus-visible {
-      background: rgba(255, 255, 255, 0.18) !important;
-      border-color: rgba(255, 255, 255, 0.28) !important;
-      color: #fff !important;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-    }
-    body.app-theme-light .panel-bottom-bar .quick-action.qa-bar-active,
-    body.app-theme-light .panel-bottom-bar .quick-action.qa-bar-active:hover,
-    body.app-theme-light .panel-bottom-bar .quick-action.qa-bar-active:focus-visible {
-      background: #fff !important;
-      border-color: rgba(21, 26, 45, 0.18) !important;
-      color: var(--tg-theme-text-color, #151a2d) !important;
-      box-shadow: 0 2px 8px rgba(21, 26, 45, 0.08);
+      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 88%, #fff) !important;
+      border-color: rgba(255, 255, 255, 0.35) !important;
+      color: var(--tg-theme-button-text-color, #fff) !important;
+      box-shadow:
+        0 2px 12px color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 34%, transparent),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+      filter: brightness(1.06) !important;
     }
     .panel-bottom-bar .quick-action.qa-bar-active .qa-icon,
     .panel-bottom-bar .quick-action.qa-bar-active .qa-label {
-      color: inherit !important;
+      color: var(--tg-theme-button-text-color, #fff) !important;
     }
     .panel-sheet-root {
       position: fixed;
