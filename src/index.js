@@ -870,19 +870,40 @@ function resolveWinnerPrizeLabel(draw, payoutPrize) {
   return "—";
 }
 
-function buildWinnerWinMessageHtml(draw, payoutPrize) {
+function formatExpiredZeroPrize(draw, originalLabel) {
+  if (draw?.prizeType === "money_usd") {
+    return formatUsdAmount(0);
+  }
+  if (draw?.prizeType === "money_rub") {
+    return formatRubAmount(0);
+  }
+  const label = String(originalLabel || draw?.prize || "");
+  if (/\$/.test(label)) {
+    return "0$";
+  }
+  if (/₽/.test(label)) {
+    return "0₽";
+  }
+  return "0";
+}
+
+function buildWinnerWinMessageHtml(draw, payoutPrize, options = {}) {
+  const expired = options.expired === true;
   const postLink = buildDrawPostLink(draw);
   const giveawayWord = postLink
     ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
     : "розыгрыше";
-  const prizeLabel = escapeHtml(resolveWinnerPrizeLabel(draw, payoutPrize));
+  const prizeLabel = resolveWinnerPrizeLabel(draw, payoutPrize);
+  const prizeHtml = expired
+    ? `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}`
+    : `🏆 Приз: ${escapeHtml(prizeLabel)}`;
 
-  return [`🎉 Вы выиграли в ${giveawayWord}.`, `🏆 Приз: ${prizeLabel}`].join("\n");
+  return [`<b>🎉 Вы выиграли в ${giveawayWord}.</b>`, prizeHtml].join("\n");
 }
 
 function buildWinnerExpiredText(draw) {
   const windowLabel = formatWinnerConfirmWindowAfterResults(draw);
-  return `⏰ Ваш приз сгорел, так как вы не отметились вовремя (${windowLabel} после итогов).`;
+  return `⏰ Ваш приз сгорел, так как вы не отметились вовремя (<i>${escapeHtml(windowLabel)} после итогов</i>).`;
 }
 
 function buildDrawPostLink(draw) {
@@ -1429,7 +1450,7 @@ async function markWinnerNotificationExpired(draw, userId) {
         userId,
         notify.lastMessageId,
         undefined,
-        buildWinnerWinMessageHtml(draw, payoutPrize),
+        buildWinnerWinMessageHtml(draw, payoutPrize, { expired: true }),
         {
           parse_mode: "HTML",
           reply_markup: { inline_keyboard: [] },
@@ -1441,7 +1462,7 @@ async function markWinnerNotificationExpired(draw, userId) {
   }
 
   try {
-    await bot.telegram.sendMessage(userId, buildWinnerExpiredText(draw));
+    await bot.telegram.sendMessage(userId, buildWinnerExpiredText(draw), { parse_mode: "HTML" });
   } catch (error) {
     // Не критично, если не получилось отправить отдельное уведомление.
   }
