@@ -13,11 +13,7 @@ const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp
 const { registerWinnersMiniApp } = require("./winners-miniapp");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
-const {
-  refreshRubUsdtRate,
-  startRubUsdtRateRefresh,
-  convertRubToUsdt,
-} = require("./rub-usdt-rate");
+const { applyNoLinkPreview } = require("./telegram-no-preview");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -62,6 +58,7 @@ if (ADMIN_IDS.length === 0 || ADMIN_IDS.every((id) => id === 123456789)) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
+applyNoLinkPreview(bot.telegram);
 const webAuth = createWebAuth({
   botToken: BOT_TOKEN,
   disabled: WEB_AUTH_DISABLED,
@@ -856,6 +853,13 @@ function formatWinnerConfirmWindowAfterResults(draw) {
   return `${value} ${word}`;
 }
 
+function buildWinnerWinMessageHtml(payoutPrize) {
+  return [
+    "<b>🎉 Поздравляем! Вы выиграли в розыгрыше.</b>",
+    `🏆 Приз: <b>${escapeHtml(payoutPrize)}</b>`,
+  ].join("\n");
+}
+
 function buildWinnerExpiredText(draw) {
   const windowLabel = formatWinnerConfirmWindowAfterResults(draw);
   return `⏰ Ваш приз сгорел, так как вы не отметились вовремя (${windowLabel} после итогов).`;
@@ -969,19 +973,14 @@ function buildDrawMessage(draw, options = {}) {
     const winnerLinks = (draw.winnerIds || []).map((winnerId) => {
       return getWinnerMentionHtml(userProfiles, winnerId);
     });
-    const botMention = BOT_USERNAME
-      ? `<a href="https://t.me/${escapeHtml(BOT_USERNAME)}">@${escapeHtml(BOT_USERNAME)}</a>`
-      : "@roller_official_bot";
+    const botHandle = BOT_USERNAME ? `@${BOT_USERNAME}` : "@roller_official_bot";
     base.push(
       "",
       winnerLinks.length > 0
         ? `<b>🥳 Победители:</b> ${winnerLinks.join(", ")}`
         : "<b>🥳 Победители:</b> не определены"
     );
-    base.push(
-      "",
-      `<b>⚠️ ПОБЕДИТЕЛИ, ЗАЙДИТЕ В БОТА И ОТМЕТЬТЕСЬ ${botMention}</b>`
-    );
+    base.push("", `<b>⚠️ Победители, отметьтесь тут - ${escapeHtml(botHandle)}</b>`);
   } else {
     base.push("", "<b>Жми кнопку ниже, для участия 👇</b>");
   }
@@ -1322,8 +1321,7 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy) {
   const message = await bot.telegram.sendMessage(
     userId,
     [
-      "<b>🎉 Поздравляем! Вы выиграли в розыгрыше.</b>",
-      `🏆 Приз: <b>${escapeHtml(payoutPrize)}</b>`,
+      buildWinnerWinMessageHtml(payoutPrize),
       "",
       "Пройди проверку для подтверждения и получения приза 👇",
       `${task.a} + ${task.b} = ?`,
@@ -1401,14 +1399,24 @@ async function markWinnerNotificationExpired(draw, userId) {
 
   if (notify.lastMessageId) {
     try {
-      await bot.telegram.editMessageReplyMarkup(
+      const payoutPrize =
+        notify.payoutPrize ||
+        getWinnerPayoutText(
+          draw,
+          getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData,
+        );
+      await bot.telegram.editMessageText(
         userId,
         notify.lastMessageId,
         undefined,
-        { inline_keyboard: [] }
+        buildWinnerWinMessageHtml(payoutPrize),
+        {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: [] },
+        },
       );
     } catch (error) {
-      // Не критично, если не получилось убрать клавиатуру у старого сообщения.
+      // Не критично, если не получилось отредактировать старое сообщение.
     }
   }
 

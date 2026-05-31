@@ -5,6 +5,7 @@ const fs = require("fs");
 const { Telegraf } = require("telegraf");
 const { DateTime } = require("luxon");
 const { callOpenRouter, verifyOpenRouterKey, humanizeSupportReply, replyRequestsMedia } = require("./support-ai");
+const { applyNoLinkPreview } = require("./telegram-no-preview");
 
 const SUPPORT_BOT_TOKEN = process.env.SUPPORT_BOT_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -361,6 +362,7 @@ function scheduleReply(bot, chatId, from) {
 }
 
 const bot = new Telegraf(SUPPORT_BOT_TOKEN);
+applyNoLinkPreview(bot.telegram);
 
 bot.start(async (ctx) => {
   if (ctx.chat?.type !== "private") return;
