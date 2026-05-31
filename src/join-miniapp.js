@@ -8,10 +8,12 @@ const {
   getPreviewDevStyles,
   getJoinFlowStyles,
   getGatePageStyles,
+  getJoinPreviewThemeStyles,
   renderThemeToggleButton,
   renderJoinProgressMarkup,
   JOIN_FLOW_STEPS,
 } = require("./miniapp-ui");
+const { getAvatarFallbackStyle } = require("./avatar-fallback");
 
 const NON_REFERRAL_CHANCE = 0.35;
 
@@ -276,6 +278,7 @@ const JOIN_REF_STATUS_ERROR_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke=
 const JOIN_REF_STATUS_OK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg>`;
 const JOIN_DONE_BELL_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`;
 const JOIN_DONE_CLOCK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
+const JOIN_INFO_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 10v5"/><circle cx="12" cy="7.5" r="0.75" fill="currentColor" stroke="none"/></svg>`;
 
 const JOIN_STEP_ICONS = {
   captcha: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`,
@@ -411,6 +414,31 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           <p class="join-done-badge">Участие принято</p>
           <h3 id="doneText" class="join-done-title">Вы участвуете!</h3>
           <p class="join-done-sub">Ждём результатов розыгрыша.</p>
+          <div id="joinDoneStats" class="join-done-stats hidden">
+            <div class="join-done-stat-col">
+              <strong id="joinDoneCount" class="join-done-stat-value">0</strong>
+              <span class="join-done-stat-label">участников</span>
+            </div>
+            <div class="join-done-stat-col">
+              <strong id="joinDoneChance" class="join-done-stat-value join-done-stat-value-accent">0%</strong>
+              <span class="join-done-stat-label join-done-stat-label-chance">
+                <span class="join-done-stat-label-text">шанс</span>
+                <button type="button" class="join-done-info-btn" id="joinDoneChanceInfoBtn" aria-label="Как считается шанс">${JOIN_INFO_ICON}</button>
+              </span>
+            </div>
+            <div class="join-done-stat-col">
+              <strong id="joinDoneTimer" class="join-done-stat-value join-done-stat-value-timer">—</strong>
+              <span class="join-done-stat-label">до конца</span>
+            </div>
+          </div>
+          <div id="joinDoneChanceInfo" class="join-done-info-modal hidden" role="dialog" aria-modal="true" aria-labelledby="joinDoneChanceInfoTitle">
+            <button type="button" class="join-done-info-backdrop" id="joinDoneChanceInfoBackdrop" aria-label="Закрыть"></button>
+            <div class="join-done-info-card">
+              <h4 id="joinDoneChanceInfoTitle" class="join-done-info-title">Как считается шанс</h4>
+              <p class="join-done-info-text">Процент показывает вашу долю при <b>текущем</b> числе участников и количестве призовых мест. Если к розыгрышу присоединятся новые люди — шанс уменьшится. Цифра не фиксируется до конца розыгрыша и обновляется по мере роста списка участников.</p>
+              <button type="button" class="join-btn join-btn-primary join-done-info-close" id="joinDoneChanceInfoClose">Понятно</button>
+            </div>
+          </div>
           <div class="join-done-tips">
             <div class="join-done-tip">
               <span class="join-done-tip-icon">${JOIN_DONE_BELL_ICON}</span>
@@ -418,8 +446,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             </div>
             <div class="join-done-tip">
               <span class="join-done-tip-icon">${JOIN_DONE_CLOCK_ICON}</span>
-              <p class="join-done-tip-text">Не забудьте отметиться вовремя, чтобы подтвердить участие и забрать приз.</p>
+              <p class="join-done-tip-text">Не забудьте отметиться вовремя в боте, чтобы забрать приз.</p>
             </div>
+          </div>
+          <div id="joinDoneParticipants" class="join-done-participants hidden">
+            <h4 class="join-done-participants-title">Участники</h4>
+            <div id="joinDoneList" class="join-done-list"></div>
           </div>
         </div>`,
         "join-done-card",
@@ -691,6 +723,117 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       return data;
     }
 
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function formatWinChance(percent) {
+      const value = Number(percent);
+      if (!Number.isFinite(value) || value <= 0) return "0%";
+      if (value >= 100) return "100%";
+      return value.toFixed(2).replace(".", ",") + "%";
+    }
+
+    let doneCountdownTimer = null;
+
+    function formatRemaining(endAtISO) {
+      if (!endAtISO) return "—";
+      const end = new Date(endAtISO).getTime();
+      if (!Number.isFinite(end)) return "—";
+      const diff = end - Date.now();
+      if (diff <= 0) return "Завершён";
+      const totalSec = Math.floor(diff / 1000);
+      const days = Math.floor(totalSec / 86400);
+      const hours = Math.floor((totalSec % 86400) / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      const secs = totalSec % 60;
+      if (days > 0) return days + "д " + hours + "ч";
+      if (hours > 0) {
+        return hours + "ч " + String(mins).padStart(2, "0") + "м";
+      }
+      return String(mins).padStart(2, "0") + ":" + String(secs).padStart(2, "0");
+    }
+
+    function stopDoneCountdown() {
+      if (doneCountdownTimer) {
+        clearInterval(doneCountdownTimer);
+        doneCountdownTimer = null;
+      }
+    }
+
+    function startDoneCountdown(endAtISO) {
+      stopDoneCountdown();
+      const timerEl = document.getElementById("joinDoneTimer");
+      if (!timerEl) return;
+      const tick = () => {
+        timerEl.textContent = formatRemaining(endAtISO);
+        if (formatRemaining(endAtISO) === "Завершён") {
+          stopDoneCountdown();
+        }
+      };
+      tick();
+      if (endAtISO) {
+        doneCountdownTimer = setInterval(tick, 1000);
+      }
+    }
+
+    function renderDoneParticipant(participant) {
+      const avatarInner = participant.avatarUrl
+        ? '<img src="' + escapeHtml(participant.avatarUrl) + '" alt="" class="join-done-avatar-img" loading="lazy" />'
+        : '<div class="join-done-avatar-fallback" style="' + escapeHtml(participant.fallbackStyle || "") + '">' + escapeHtml(participant.initial || "?") + "</div>";
+      const youBadge = participant.isYou ? '<span class="join-done-you">Вы</span>' : "";
+      const handle = participant.username
+        ? escapeHtml(participant.username)
+        : '<span class="join-done-row-handle-muted">без username</span>';
+      return (
+        '<article class="join-done-row' + (participant.isYou ? " join-done-row-you" : "") + '">' +
+        '<div class="join-done-avatar">' + avatarInner + "</div>" +
+        '<div class="join-done-row-body">' +
+        '<div class="join-done-row-text">' +
+        '<span class="join-done-row-name">' + escapeHtml(participant.displayName) + "</span>" +
+        '<span class="join-done-row-handle">' + handle + "</span>" +
+        "</div>" +
+        youBadge +
+        "</div></article>"
+      );
+    }
+
+    function renderDoneStats(payload) {
+      const stats = document.getElementById("joinDoneStats");
+      const participantsBlock = document.getElementById("joinDoneParticipants");
+      const list = document.getElementById("joinDoneList");
+      const countEl = document.getElementById("joinDoneCount");
+      const chanceEl = document.getElementById("joinDoneChance");
+      if (!stats || !participantsBlock || !list || !countEl || !chanceEl) return;
+
+      const participantCount = Number(payload.participantCount) || 0;
+      const participants = Array.isArray(payload.participants) ? payload.participants : [];
+
+      countEl.textContent = String(participantCount);
+      chanceEl.textContent = formatWinChance(payload.winChancePercent);
+      startDoneCountdown(payload.endAt || "");
+
+      if (participantCount > 0 || payload.endAt) {
+        stats.classList.remove("hidden");
+      } else {
+        stats.classList.add("hidden");
+      }
+
+      if (participantCount > 0) {
+        participantsBlock.classList.remove("hidden");
+        list.innerHTML = participants.length
+          ? participants.map(renderDoneParticipant).join("")
+          : '<p class="join-done-empty">Список участников пока пуст.</p>';
+      } else {
+        participantsBlock.classList.add("hidden");
+        list.innerHTML = "";
+      }
+    }
+
     function showDoneStep(payload) {
       const title = document.getElementById("doneText");
       const badge = document.querySelector(".join-done-badge");
@@ -704,11 +847,33 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         if (badge) badge.textContent = "Участие принято";
         if (sub) sub.textContent = "Ждём результатов розыгрыша.";
       }
+      renderDoneStats(payload);
       showStep("done");
-      if (!payload.alreadyJoined && tg?.close) {
-        setTimeout(() => tg.close(), 2500);
-      }
     }
+
+    (function setupDoneChanceInfo() {
+      const modal = document.getElementById("joinDoneChanceInfo");
+      const openBtn = document.getElementById("joinDoneChanceInfoBtn");
+      const closeBtn = document.getElementById("joinDoneChanceInfoClose");
+      const backdrop = document.getElementById("joinDoneChanceInfoBackdrop");
+      if (!modal || !openBtn) return;
+
+      function openModal() {
+        modal.classList.remove("hidden");
+      }
+
+      function closeModal() {
+        modal.classList.add("hidden");
+      }
+
+      openBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openModal();
+      });
+      closeBtn?.addEventListener("click", closeModal);
+      backdrop?.addEventListener("click", closeModal);
+    })();
 
     function handleStep(step, payload) {
       if (step === "captcha") {
@@ -837,7 +1002,19 @@ function renderJoinPage(drawId, draw, project, options = {}) {
               resetRefConfirmUi();
             }
             if (id === "done") {
-              showDoneStep({ message: "Вы участвуете!", alreadyJoined: false });
+              const previewEnd = new Date(Date.now() + 2 * 60 * 60 * 1000 + 15 * 60 * 1000).toISOString();
+              showDoneStep({
+                message: "Вы участвуете!",
+                alreadyJoined: false,
+                participantCount: 8,
+                winChancePercent: 12.5,
+                endAt: previewEnd,
+                participants: [
+                  { id: "1001", displayName: "Алексей", username: "@alex_winner", initial: "А", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#5b7cfa,#325fff)", isYou: true },
+                  { id: "1002", displayName: "Мария", username: "@maria_p", initial: "М", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#f97316,#ea580c)", isYou: false },
+                  { id: "1003", displayName: "Дмитрий", username: "@dmitry_k", initial: "Д", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#14b8a6,#0d9488)", isYou: false },
+                ],
+              });
               return;
             }
             showStep(id);
@@ -893,6 +1070,10 @@ function registerJoinMiniApp(app, deps) {
     setUserProjectProfile,
     upsertUserMeta,
     addUserToDraw,
+    readUserProjectProfiles,
+    getUserProfileBundle,
+    getWinnerDisplayName,
+    shouldHideParticipant = () => false,
     RECAPTCHA_SITE_KEY = "",
     RECAPTCHA_SECRET_KEY = "",
   } = deps;
@@ -966,6 +1147,43 @@ function registerJoinMiniApp(app, deps) {
     return { step, ...extra };
   }
 
+  function buildJoinDonePayload(draw, userId, extra = {}) {
+    const userProfiles = readUserProjectProfiles();
+    const participantIds = draw.participantIds || [];
+    const winnersCount = Math.max(1, Number(draw.winnersCount) || 1);
+    const participantCount = participantIds.length;
+    const winChancePercent =
+      participantCount > 0 ? Math.min(100, (winnersCount / participantCount) * 100) : 0;
+
+    const participants = participantIds
+      .filter((id) => !shouldHideParticipant(id))
+      .map((id) => {
+        const { meta } = getUserProfileBundle(userProfiles, id, draw.projectId);
+        const displayName = getWinnerDisplayName(meta, id);
+        const username = meta.username ? `@${meta.username}` : "";
+        const initial = (displayName.replace(/^@/, "") || String(id)).charAt(0).toUpperCase() || "?";
+        const avatarFileId = meta.avatarFileId || "";
+        return {
+          id: String(id),
+          displayName,
+          username,
+          initial,
+          avatarUrl: avatarFileId ? `/winners/avatar/${encodeURIComponent(String(id))}` : "",
+          fallbackStyle: avatarFileId ? "" : getAvatarFallbackStyle(id),
+          isYou: Number(id) === Number(userId),
+        };
+      });
+
+    return buildJoinStepResponse("done", {
+      ...extra,
+      participantCount,
+      winnersCount,
+      winChancePercent: Number(winChancePercent.toFixed(2)),
+      endAt: draw.endAt || null,
+      participants,
+    });
+  }
+
   function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
     if (!projectId) {
       return false;
@@ -982,7 +1200,7 @@ function registerJoinMiniApp(app, deps) {
   async function resolveJoinEntry(draw, userId) {
     if (draw.participantIds.includes(userId)) {
       clearJoinApiSession(userId, draw.id);
-      return buildJoinStepResponse("done", {
+      return buildJoinDonePayload(draw, userId, {
         message: "Вы уже участвуете!",
         alreadyJoined: true,
       });
@@ -991,7 +1209,7 @@ function registerJoinMiniApp(app, deps) {
     if (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) {
       const result = await addUserToDraw(draw.id, userId);
       clearJoinApiSession(userId, draw.id);
-      return buildJoinStepResponse("done", {
+      return buildJoinDonePayload(draw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       });
@@ -1000,7 +1218,7 @@ function registerJoinMiniApp(app, deps) {
     if (!draw.projectId) {
       const result = await addUserToDraw(draw.id, userId);
       clearJoinApiSession(userId, draw.id);
-      return buildJoinStepResponse("done", {
+      return buildJoinDonePayload(draw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       });
@@ -1011,7 +1229,7 @@ function registerJoinMiniApp(app, deps) {
     if (canSkip) {
       const result = await addUserToDraw(draw.id, userId);
       clearJoinApiSession(userId, draw.id);
-      return buildJoinStepResponse("done", {
+      return buildJoinDonePayload(draw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       });
@@ -1237,8 +1455,9 @@ function registerJoinMiniApp(app, deps) {
     const result = await addUserToDraw(drawId, userId);
     clearJoinApiSession(userId, drawId);
 
+    const updatedDraw = getActiveDraw(drawId) || draw;
     res.json(
-      buildJoinStepResponse("done", {
+      buildJoinDonePayload(updatedDraw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       }),
