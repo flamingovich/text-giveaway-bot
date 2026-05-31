@@ -9,5 +9,6 @@ APP_USER="giveaway"
 cd "${APP_DIR}"
 sudo -u "${APP_USER}" git -C "${APP_DIR}" pull origin main
 sudo -u "${APP_USER}" npm install --omit=dev
-sudo -u "${APP_USER}" pm2 restart giveaway-bot
-echo "Обновлено."
+sudo -u "${APP_USER}" pm2 startOrRestart /etc/giveaway-bot.ecosystem.config.cjs
+sudo -u "${APP_USER}" pm2 save
+echo "Обновлено (giveaway-bot + support-bot)."

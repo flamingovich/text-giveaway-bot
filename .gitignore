@@ -10,5 +10,6 @@ data/projects.json
 data/known-channels.json
 data/user-project-profiles.json
 data/delegated-admins.json
+data/support-chats.json
 data/uploads/*
 !data/uploads/.gitkeep

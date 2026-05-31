@@ -688,6 +688,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       document.getElementById("loading").classList.add("hidden");
       if (activeStep === name) return;
 
+      if (activeStep === "done" && name !== "done") {
+        stopDoneLivePolling();
+        stopDoneCountdown();
+      }
+
       const current = activeStep ? document.getElementById("step-" + activeStep) : null;
       if (current && current !== next) {
         current.classList.add("is-leaving");
@@ -763,6 +768,48 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         clearInterval(doneCountdownTimer);
         doneCountdownTimer = null;
       }
+    }
+
+    let doneLiveTimer = null;
+    let doneLiveSignature = "";
+
+    function buildDoneLiveSignature(payload) {
+      const ids = (Array.isArray(payload.participants) ? payload.participants : [])
+        .map((participant) => participant.id)
+        .join(",");
+      return String(payload.participantCount || 0) + "|" + ids;
+    }
+
+    function stopDoneLivePolling() {
+      if (doneLiveTimer) {
+        clearInterval(doneLiveTimer);
+        doneLiveTimer = null;
+      }
+    }
+
+    async function refreshDoneLiveState() {
+      if (activeStep !== "done" || !drawId || PAGE_MODE === "preview") return;
+      try {
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/live", {});
+        const signature = buildDoneLiveSignature(data);
+        if (signature !== doneLiveSignature) {
+          doneLiveSignature = signature;
+          renderDoneStats(data);
+        }
+        if (data.endAt && formatRemaining(data.endAt) === "Завершён") {
+          stopDoneLivePolling();
+        }
+      } catch (error) {
+        // Фоновое обновление не должно мешать экрану участия.
+      }
+    }
+
+    function startDoneLivePolling(initialPayload) {
+      stopDoneLivePolling();
+      doneLiveSignature = initialPayload ? buildDoneLiveSignature(initialPayload) : "";
+      if (PAGE_MODE === "preview") return;
+      refreshDoneLiveState();
+      doneLiveTimer = setInterval(refreshDoneLiveState, 3500);
     }
 
     function startDoneCountdown(endAtISO) {
@@ -848,6 +895,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         if (sub) sub.textContent = "Ждём результатов розыгрыша.";
       }
       renderDoneStats(payload);
+      startDoneLivePolling(payload);
       showStep("done");
     }
 
@@ -1281,6 +1329,29 @@ function registerJoinMiniApp(app, deps) {
     }
     const project = draw.projectId ? getProjectById(draw.projectId) : null;
     res.type("html").send(renderJoinPage(req.params.drawId, draw, project, { recaptchaSiteKey: RECAPTCHA_SITE_KEY }));
+  });
+
+  app.post("/api/join/:drawId/live", requireJoinUser, (req, res) => {
+    const drawId = req.params.drawId;
+    const userId = req.telegramUser.id;
+    const draw = getActiveDraw(drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
+    if (!(draw.participantIds || []).includes(userId)) {
+      res.status(403).json({ error: "Вы не участвуете в этом розыгрыше." });
+      return;
+    }
+
+    const payload = buildJoinDonePayload(draw, userId);
+    res.json({
+      participantCount: payload.participantCount,
+      winnersCount: payload.winnersCount,
+      winChancePercent: payload.winChancePercent,
+      endAt: payload.endAt,
+      participants: payload.participants,
+    });
   });
 
   app.post("/api/join/:drawId/session", requireJoinUser, async (req, res) => {

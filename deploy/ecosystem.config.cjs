@@ -11,5 +11,16 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
+    {
+      name: "support-bot",
+      cwd: "/opt/giveaway-bot",
+      script: "src/support-bot.js",
+      instances: 1,
+      autorestart: true,
+      max_memory_restart: "256M",
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };
