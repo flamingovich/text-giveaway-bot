@@ -9,6 +9,7 @@ const {
   renderDesktopTiledBackground,
   renderThemeToggleButton,
 } = require("./miniapp-ui");
+const { getAvatarFallbackStyle } = require("./avatar-fallback");
 
 const GIFT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M20 12v10H4V12"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>`;
 const TROPHY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10"/><path d="M17 4v3a5 5 0 0 1-10 0V4"/><path d="M5 5H3v1a3 3 0 0 0 3 3"/><path d="M19 5h2v1a3 3 0 0 1-3 3"/></svg>`;
@@ -58,40 +59,11 @@ function formatParticipantsLabel(count) {
   return `${n} участников`;
 }
 
-const TG_AVATAR_GRADIENTS = [
-  { top: "#7BD3FF", bottom: "#2AABEE" },
-  { top: "#90CAF9", bottom: "#42A5F5" },
-  { top: "#FFAB91", bottom: "#E64A19" },
-  { top: "#FFB74D", bottom: "#F57C00" },
-  { top: "#A5D6A7", bottom: "#43A047" },
-  { top: "#80CBC4", bottom: "#00897B" },
-  { top: "#CE93D8", bottom: "#AB47BC" },
-  { top: "#B39DDB", bottom: "#7E57C2" },
-  { top: "#F48FB1", bottom: "#D81B60" },
-  { top: "#EF9A9A", bottom: "#E53935" },
-  { top: "#FFE082", bottom: "#FFB300" },
-  { top: "#80DEEA", bottom: "#00ACC1" },
-  { top: "#9FA8DA", bottom: "#5C6BC0" },
-  { top: "#FFCC80", bottom: "#FB8C00" },
-  { top: "#C5E1A5", bottom: "#7CB342" },
-  { top: "#F06292", bottom: "#C2185B" },
-];
-
-function getAvatarFallbackStyle(userId) {
-  const seed = String(userId || "0");
-  let hash = 0;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  }
-  const palette = TG_AVATAR_GRADIENTS[hash % TG_AVATAR_GRADIENTS.length];
-  return `--avatar-grad-top:${palette.top};--avatar-grad-bottom:${palette.bottom};`;
-}
-
 function renderAvatar(user) {
-  if (user.avatarUrl) {
-    return `<img src="${escapeHtml(user.avatarUrl)}" alt="" class="winners-avatar" loading="lazy" />`;
-  }
-  return `<div class="winners-avatar winners-avatar-fallback" style="${getAvatarFallbackStyle(user.id)}">${escapeHtml(user.initial)}</div>`;
+  const inner = user.avatarUrl
+    ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" class="winners-avatar-img" loading="lazy" />`
+    : `<div class="winners-avatar-fallback" style="${getAvatarFallbackStyle(user.id)}">${escapeHtml(user.initial)}</div>`;
+  return `<div class="winners-avatar">${inner}</div>`;
 }
 function buildUserViewModel(userId, draw, deps, options = {}) {
   const userProfiles = deps.readUserProjectProfiles();

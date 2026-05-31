@@ -11,7 +11,8 @@ const { DateTime } = require("luxon");
 const { createWebAuth, validateInitData, renderLoginPage } = require("./web-auth");
 const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp");
 const { registerWinnersMiniApp } = require("./winners-miniapp");
-const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta } = require("./miniapp-ui");
+const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
+const { getAvatarFallbackStyle } = require("./avatar-fallback");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -560,7 +561,7 @@ function formatCardDateTime(isoString) {
     return "не задано";
   }
   const month = RU_MONTHS_SHORT[dt.month] || dt.toFormat("LLL");
-  return `${dt.day} ${month} ${dt.year} в ${dt.toFormat("HH:mm")}`;
+  return `${dt.day} ${month} ${dt.year}, ${dt.toFormat("HH:mm")}`;
 }
 
 function formatDateTimeForInput(isoString) {
@@ -769,12 +770,18 @@ function isWinnerNotificationExpired(notifyInfo) {
   return Boolean(expiresAt?.isValid && expiresAt <= DateTime.now().setZone(TIMEZONE));
 }
 
+function isWinnerConfirmRequired(draw) {
+  return Number.isFinite(draw.winnerConfirmValue) && draw.winnerConfirmValue > 0;
+}
+
 function getWinnerConfirmWindow(draw) {
-  const value = Number.isFinite(draw.winnerConfirmValue) && draw.winnerConfirmValue > 0
-    ? Math.floor(draw.winnerConfirmValue)
-    : 30;
-  const unit = ["minutes", "hours"].includes(draw.winnerConfirmUnit) ? draw.winnerConfirmUnit : "minutes";
-  return { value, unit };
+  if (!isWinnerConfirmRequired(draw)) {
+    return null;
+  }
+  return {
+    value: Math.floor(draw.winnerConfirmValue),
+    unit: ["minutes", "hours"].includes(draw.winnerConfirmUnit) ? draw.winnerConfirmUnit : "minutes",
+  };
 }
 
 function winnerVerificationSessionKey(userId, drawId) {
@@ -783,6 +790,9 @@ function winnerVerificationSessionKey(userId, drawId) {
 
 function getWinnerConfirmTimeoutMinutes(draw) {
   const cfg = getWinnerConfirmWindow(draw);
+  if (!cfg) {
+    return 0;
+  }
   if (cfg.unit === "hours") {
     return cfg.value * 60;
   }
@@ -822,6 +832,13 @@ function buildParticipationSuccessMessage(draw) {
     `<b>Вы участвуете в ${giveawayWord} 🎉</b>`,
     "Если выиграете, бот отправит вам уведомление в личные сообщения.",
   ].join("\n");
+}
+
+function getParticipationReplyOptions() {
+  return {
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+  };
 }
 
 function buildProjectLinkHtml(projectId) {
@@ -1170,7 +1187,9 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy) {
   const payoutPrize = getWinnerPayoutText(draw, projectData);
   const task = buildCaptchaTask();
   const windowCfg = getWinnerConfirmWindow(draw);
-  const expiresAt = DateTime.now().setZone(TIMEZONE).plus({ [windowCfg.unit]: windowCfg.value }).toISO();
+  const expiresAt = windowCfg
+    ? DateTime.now().setZone(TIMEZONE).plus({ [windowCfg.unit]: windowCfg.value }).toISO()
+    : null;
 
   const message = await bot.telegram.sendMessage(
     userId,
@@ -1526,7 +1545,7 @@ function renderAccessPersonCard(userId, userProfiles, options = {}) {
   const initial = (fullName || person.username || String(userId)).charAt(0).toUpperCase();
   const avatar = person.avatarFileId
     ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(userId))}" alt="" class="access-avatar" />`
-    : `<div class="access-avatar access-avatar-fallback">${escapeHtml(initial)}</div>`;
+    : `<div class="access-avatar access-avatar-fallback" style="${getAvatarFallbackStyle(userId)}">${escapeHtml(initial)}</div>`;
   const badgeHtml = badge ? `<span class="access-badge">${escapeHtml(badge)}</span>` : "";
   const deleteAction = removable
     ? `<div class="access-card-actions">
@@ -1850,7 +1869,7 @@ async function startJoinFlow(ctx, drawId) {
   const autoJoin = await tryAutoJoinDraw(draw, ctx.from.id);
   if (autoJoin.joined) {
     if (autoJoin.messageHtml) {
-      await ctx.reply(autoJoin.messageHtml, { parse_mode: "HTML" });
+      await ctx.reply(autoJoin.messageHtml, getParticipationReplyOptions());
     } else {
       await ctx.reply(autoJoin.message || "Вы участвуете ✅");
     }
@@ -2358,7 +2377,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
   const initial = (fullName || meta.username || String(winnerId)).charAt(0).toUpperCase() || "?";
   const avatar = meta.avatarFileId
     ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="winner-card-avatar" />`
-    : `<div class="winner-card-avatar winner-card-avatar-fallback">${escapeHtml(initial)}</div>`;
+    : `<div class="winner-card-avatar winner-card-avatar-fallback" style="${getAvatarFallbackStyle(winnerId)}">${escapeHtml(initial)}</div>`;
   const trcAddress = projectData.trc20Address || "Не указан";
   const notifyInfo = winnerNotifications[String(winnerId)];
   const payoutText = getWinnerPayoutText(draw, projectData);
@@ -2519,12 +2538,12 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
               <div class="history-chips">
                 <span class="history-chip">
                   <span class="draw-ico">${renderFormIcon("winners")}</span>
-                  <span class="history-chip-label">Участников</span>
+                  <span class="history-chip-label">Участ.</span>
                   <span class="history-chip-value">${draw.participantIds.length}</span>
                 </span>
                 <span class="history-chip">
                   <span class="draw-ico">${renderFormIcon("trophy")}</span>
-                  <span class="history-chip-label">Приз. мест</span>
+                  <span class="history-chip-label">Мест</span>
                   <span class="history-chip-value">${draw.winnersCount}</span>
                 </span>
               </div>
@@ -2599,11 +2618,11 @@ function renderPanelLiveHtml(draws, projects, userProfiles) {
             <span class="stat-card-value">${drawsStats.active}</span>
           </div>
           <div class="stat-card">
-            <span class="stat-card-label">Выплачено за ${escapeHtml(drawsStats.monthLabel)}</span>
+            <span class="stat-card-label">За ${escapeHtml(drawsStats.monthLabel)}</span>
             <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidThisMonth)}</span>
           </div>
           <div class="stat-card">
-            <span class="stat-card-label">Выплачено за всё время</span>
+            <span class="stat-card-label">За всё время</span>
             <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidAllTime)}</span>
           </div>
         </div>
@@ -2683,6 +2702,7 @@ function renderWebPage(draws, message, webUser) {
       --ok-bg: #ebfff1;
       --ok-line: #a7e6bc;
       --ok-text: #1f6a3c;
+${getPanelFluidTypographyVars()}
     }
     * { box-sizing: border-box; }
     img, video { max-width: 100%; height: auto; }
@@ -2941,8 +2961,8 @@ function renderWebPage(draws, message, webUser) {
       max-width: 100%;
       box-sizing: border-box;
     }
-    .draw-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .draw-field { min-width: 0; overflow: hidden; }
+    .draw-row-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+    .draw-field { min-width: 0; max-width: 100%; overflow: hidden; }
     .draw-label {
       display: flex;
       align-items: center;
@@ -2952,6 +2972,7 @@ function renderWebPage(draws, message, webUser) {
       color: var(--tg-theme-hint-color, var(--sub));
       margin-bottom: 4px;
       min-width: 0;
+      max-width: 100%;
       white-space: nowrap;
     }
     .draw-label-text {
@@ -2995,29 +3016,33 @@ function renderWebPage(draws, message, webUser) {
     }
     .draw-timing-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 8px;
       align-items: end;
       width: 100%;
-    }
-    .draw-inline-full {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-      width: 100%;
       min-width: 0;
     }
+    .draw-inline-full {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+      gap: 5px;
+      align-items: stretch;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+    }
     .draw-input-num {
-      width: 52px;
-      flex: 0 0 52px;
-      padding: 9px 6px;
+      width: 100%;
+      min-width: 0;
+      padding: 9px 4px;
       text-align: center;
+      font-size: 14px;
     }
     .draw-input-unit {
-      flex: 1 1 auto;
-      min-width: 72px;
-      padding: 9px 26px 9px 8px;
-      font-size: 13px;
+      width: 100%;
+      min-width: 0;
+      padding: 9px 22px 9px 6px;
+      font-size: 12px;
     }
     .draw-block-confirm {
       padding: 8px 10px;
@@ -3326,11 +3351,12 @@ function renderWebPage(draws, message, webUser) {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: var(--tg-theme-secondary-bg-color, #fff);
-      color: var(--tg-theme-button-color, var(--primary));
-      font-weight: 800;
+      color: #fff;
+      font-weight: 700;
       font-size: 18px;
-      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+      border: none;
+      background: linear-gradient(180deg, var(--avatar-grad-top, #7BD3FF) 0%, var(--avatar-grad-bottom, #2AABEE) 100%);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
     }
     .access-card-body {
       min-width: 0;
@@ -3501,6 +3527,7 @@ function renderWebPage(draws, message, webUser) {
     .draw-image-preview {
       display: block;
       width: 100%;
+      min-height: 96px;
       max-height: 180px;
       object-fit: cover;
       background: var(--tg-theme-bg-color, #f5f8ff);
@@ -3821,7 +3848,7 @@ function renderWebPage(draws, message, webUser) {
       flex-shrink: 0;
     }
     .quick-action .qa-label {
-      font-size: 11px;
+      font-size: var(--panel-fs-xs);
       line-height: 1.15;
       text-align: center;
       max-width: 100%;
@@ -3908,33 +3935,40 @@ function renderWebPage(draws, message, webUser) {
       background: var(--tg-theme-bg-color, #f5f8ff);
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
       border-radius: 12px;
-      padding: 10px;
+      padding: var(--panel-pad-stat);
       min-width: 0;
       box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
     }
     .stat-card-label {
       display: block;
       color: var(--tg-theme-hint-color, #7582a5);
-      font-size: 11px;
+      font-size: var(--panel-fs-xs);
       font-weight: 600;
-      line-height: 1.25;
-      margin-bottom: 4px;
+      line-height: 1.2;
+      margin-bottom: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .stat-card-value {
       display: block;
-      font-size: 20px;
+      font-size: var(--panel-fs-stat);
       font-weight: 800;
       color: var(--tg-theme-text-color, var(--text));
       line-height: 1.15;
     }
     .stat-card-value-rub {
-      font-size: 17px;
+      font-size: var(--panel-fs-stat-rub);
       letter-spacing: -0.01em;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .draw-history-title { margin: 0 0 10px; font-size: 17px; }
+    .draw-history-title { margin: 0 0 10px; font-size: var(--panel-fs-xl); }
     .history-list {
       display: flex;
       flex-direction: column;
@@ -4015,7 +4049,7 @@ function renderWebPage(draws, message, webUser) {
       display: block;
     }
     .history-title-text .history-title {
-      font-size: 15px;
+      font-size: var(--panel-fs-lg);
       font-weight: 800;
       line-height: 1.2;
       color: var(--tg-theme-text-color, var(--text));
@@ -4027,7 +4061,7 @@ function renderWebPage(draws, message, webUser) {
     .history-subtitle {
       margin-top: 2px;
       padding-left: 0;
-      font-size: 11px;
+      font-size: var(--panel-fs-xs);
       font-weight: 600;
       line-height: 1.25;
       color: var(--tg-theme-hint-color, var(--sub));
@@ -4056,7 +4090,7 @@ function renderWebPage(draws, message, webUser) {
     }
     .history-status {
       flex-shrink: 0;
-      font-size: 11px;
+      font-size: var(--panel-fs-xs);
       font-weight: 700;
       padding: 4px 8px;
       border-radius: 999px;
@@ -4122,9 +4156,9 @@ function renderWebPage(draws, message, webUser) {
     .history-time-row {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: clamp(4px, 1.2vw, 6px);
       min-width: 0;
-      padding: 6px 8px;
+      padding: var(--panel-pad-compact);
       border-radius: 8px;
       background: var(--tg-theme-bg-color, #f5f8ff);
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 12%, transparent);
@@ -4139,17 +4173,20 @@ function renderWebPage(draws, message, webUser) {
       height: 13px;
     }
     .history-time-text {
-      font-size: 11px;
+      font-size: var(--panel-fs-sm);
       font-weight: 600;
       color: var(--tg-theme-hint-color, var(--sub));
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       min-width: 0;
+      flex: 1 1 auto;
+      line-height: 1.2;
     }
     .history-time-label {
       font-weight: 800;
       color: var(--tg-theme-text-color, var(--text));
+      white-space: nowrap;
     }
     .history-chips {
       display: grid;
@@ -4160,16 +4197,18 @@ function renderWebPage(draws, message, webUser) {
     .history-chip {
       display: flex;
       align-items: center;
-      gap: 4px;
-      padding: 6px 8px;
+      gap: clamp(3px, 1vw, 5px);
+      padding: var(--panel-pad-compact);
       border-radius: 8px;
       background: var(--tg-theme-bg-color, #f5f8ff);
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
-      font-size: 11px;
+      font-size: var(--panel-fs-sm);
       font-weight: 600;
       color: var(--tg-theme-hint-color, var(--sub));
       min-width: 0;
       justify-content: flex-start;
+      white-space: nowrap;
+      overflow: hidden;
     }
     .history-chip-label {
       white-space: nowrap;
@@ -4177,9 +4216,10 @@ function renderWebPage(draws, message, webUser) {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
+      font-size: var(--panel-fs-xs);
     }
     .history-chip-value {
-      font-size: 12px;
+      font-size: var(--panel-fs-md);
       font-weight: 800;
       color: var(--tg-theme-text-color, var(--text));
       flex-shrink: 0;
@@ -4205,9 +4245,9 @@ function renderWebPage(draws, message, webUser) {
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 9px 10px;
+      padding: clamp(8px, 2.2vw, 9px) clamp(9px, 2.5vw, 10px);
       cursor: pointer;
-      font-size: 13px;
+      font-size: var(--panel-fs-sm);
       font-weight: 700;
       color: var(--tg-theme-text-color, var(--text));
       list-style: none;
@@ -4284,10 +4324,12 @@ function renderWebPage(draws, message, webUser) {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: var(--tg-theme-bg-color, #edf2ff);
-      color: var(--tg-theme-button-color, var(--primary));
-      font-weight: 800;
+      color: #fff;
+      font-weight: 700;
       font-size: 16px;
+      border: none;
+      background: linear-gradient(180deg, var(--avatar-grad-top, #7BD3FF) 0%, var(--avatar-grad-bottom, #2AABEE) 100%);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
     }
     .winner-card-body {
       flex: 1;
@@ -4765,14 +4807,23 @@ function renderWebPage(draws, message, webUser) {
           </div>
 
           <div class="draw-block draw-block-confirm">
-            <div class="draw-field">
-              ${drawLabel("confirm", "Время на подтверждение")}
-              <div class="draw-inline-full">
-                <input class="draw-input draw-input-num" name="winnerConfirmValue" type="number" min="1" step="1" value="30" />
-                <select class="draw-input draw-input-unit" name="winnerConfirmUnit">
-                  <option value="minutes">мин.</option>
-                  <option value="hours">ч.</option>
+            <div class="draw-timing-row">
+              <div class="draw-field">
+                ${drawLabel("confirm", "Подтверждение")}
+                <select class="draw-input" id="winnerConfirmMode" name="winnerConfirmMode">
+                  <option value="required" selected>Нужно</option>
+                  <option value="disabled">Не нужно</option>
                 </select>
+              </div>
+              <div class="draw-field anim-collapse anim-collapse-open" id="winnerConfirmWrap">
+                ${drawLabel("confirm", "Время")}
+                <div class="draw-inline-full">
+                  <input class="draw-input draw-input-num" name="winnerConfirmValue" type="number" min="1" step="1" value="30" />
+                  <select class="draw-input draw-input-unit" name="winnerConfirmUnit">
+                    <option value="minutes">мин.</option>
+                    <option value="hours">ч.</option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
@@ -4967,8 +5018,20 @@ function renderWebPage(draws, message, webUser) {
         }
         hiddenInput.value = "";
         hiddenInput.removeAttribute("name");
-        objectUrl = URL.createObjectURL(file);
-        showPreview(objectUrl, "Обложка из галереи");
+        revokeObjectUrl();
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = String(reader.result || "");
+          if (!dataUrl) {
+            clearPreview();
+            return;
+          }
+          showPreview(dataUrl, "Обложка из галереи");
+        };
+        reader.onerror = () => {
+          clearPreview();
+        };
+        reader.readAsDataURL(file);
         if (pasteTarget) pasteTarget.textContent = "Вставить";
       });
 
@@ -5162,6 +5225,8 @@ function renderWebPage(draws, message, webUser) {
       const publishAtWrap = document.getElementById("publishAtWrap");
       const endMode = document.getElementById("endMode");
       const endAfterWrap = document.getElementById("endAfterWrap");
+      const winnerConfirmMode = document.getElementById("winnerConfirmMode");
+      const winnerConfirmWrap = document.getElementById("winnerConfirmWrap");
       if (!publishMode || !publishAtWrap || !endMode || !endAfterWrap) return;
 
       function syncPublish() {
@@ -5172,10 +5237,19 @@ function renderWebPage(draws, message, webUser) {
         endAfterWrap.classList.toggle("anim-collapse-open", endMode.value === "scheduled");
       }
 
+      function syncWinnerConfirm() {
+        if (!winnerConfirmMode || !winnerConfirmWrap) return;
+        winnerConfirmWrap.classList.toggle("anim-collapse-open", winnerConfirmMode.value === "required");
+      }
+
       publishMode.addEventListener("change", syncPublish);
       endMode.addEventListener("change", syncEnd);
+      if (winnerConfirmMode) {
+        winnerConfirmMode.addEventListener("change", syncWinnerConfirm);
+      }
       syncPublish();
       syncEnd();
+      syncWinnerConfirm();
     }
 
     function setupSettingsPanel() {
@@ -5902,6 +5976,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
     const endAfterUnit = ["minutes", "hours", "days"].includes(body.endAfterUnit)
       ? body.endAfterUnit
       : "minutes";
+    const winnerConfirmMode = body.winnerConfirmMode === "disabled" ? "disabled" : "required";
     const winnerConfirmValue = Number(body.winnerConfirmValue);
     const winnerConfirmUnit = ["minutes", "hours"].includes(body.winnerConfirmUnit)
       ? body.winnerConfirmUnit
@@ -5950,9 +6025,15 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       redirectWithMessage(res, "Количество победителей должно быть от 1 до 20.");
       return;
     }
-    if (!Number.isFinite(winnerConfirmValue) || winnerConfirmValue <= 0) {
-      redirectWithMessage(res, "Укажите корректный таймер подтверждения победы.");
-      return;
+    let normalizedWinnerConfirmValue = 0;
+    let normalizedWinnerConfirmUnit = "minutes";
+    if (winnerConfirmMode === "required") {
+      if (!Number.isFinite(winnerConfirmValue) || winnerConfirmValue <= 0) {
+        redirectWithMessage(res, "Укажите корректный таймер подтверждения победы.");
+        return;
+      }
+      normalizedWinnerConfirmValue = Math.floor(winnerConfirmValue);
+      normalizedWinnerConfirmUnit = winnerConfirmUnit;
     }
 
     let publishAtISO = DateTime.now().setZone(TIMEZONE).toISO();
@@ -6026,8 +6107,8 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       participantIds: [],
       winnerIds: [],
       winnerNotifications: {},
-      winnerConfirmValue: Math.floor(winnerConfirmValue),
-      winnerConfirmUnit,
+      winnerConfirmValue: normalizedWinnerConfirmValue,
+      winnerConfirmUnit: normalizedWinnerConfirmUnit,
     };
 
     if (publishMode === "now") {
@@ -6522,7 +6603,7 @@ bot.on("text", async (ctx) => {
 
       const result = await addUserToDraw(joinSession.drawId, ctx.from.id);
       if (result.messageHtml) {
-        await ctx.reply(result.messageHtml, { parse_mode: "HTML" });
+        await ctx.reply(result.messageHtml, getParticipationReplyOptions());
       } else {
         await ctx.reply(result.cbMessage || "Вы участвуете ✅");
       }

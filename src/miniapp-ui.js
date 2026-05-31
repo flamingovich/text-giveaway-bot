@@ -104,6 +104,22 @@ const MANUAL_DARK_THEME = {
   secondary_bg_color: "#232f42",
 };
 
+const PANEL_FLUID_TYPOGRAPHY_VARS = `
+      --panel-fs-xs: clamp(11px, 3.1vw, 12px);
+      --panel-fs-sm: clamp(12px, 3.35vw, 13px);
+      --panel-fs-md: clamp(13px, 3.6vw, 14px);
+      --panel-fs-lg: clamp(14px, 3.95vw, 15px);
+      --panel-fs-xl: clamp(15px, 4.25vw, 17px);
+      --panel-fs-stat: clamp(17px, 5.1vw, 20px);
+      --panel-fs-stat-rub: clamp(14px, 4.2vw, 17px);
+      --panel-pad-compact: clamp(6px, 1.8vw, 8px) clamp(7px, 2.2vw, 10px);
+      --panel-pad-stat: clamp(8px, 2.4vw, 10px);
+`;
+
+function getPanelFluidTypographyVars() {
+  return PANEL_FLUID_TYPOGRAPHY_VARS;
+}
+
 function getMiniAppHeadScript() {
   return `
 (function () {
@@ -148,6 +164,7 @@ function getMiniAppStyles() {
       --mini-pad-bottom: max(10px, var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
       --bg-dark: #152238;
       --app-bg-image-dark: url("/brand/background-dark.png");
+${PANEL_FLUID_TYPOGRAPHY_VARS}
     }
 
     html[data-app-theme="light"] {
@@ -358,7 +375,7 @@ function getMiniAppStyles() {
     }
 
     body.mini-app-shell .qa-label {
-      font-size: 10px;
+      font-size: var(--panel-fs-xs);
     }
 
     body.mini-app-shell .qa-icon svg {
@@ -385,7 +402,7 @@ function getMiniAppStyles() {
     }
 
     body.mini-app-shell .card:not(.join-step-card):not(.winners-row):not(.winners-header):not(.winners-stat):not(.winners-viewer-banner),
-    body.mini-app-shell img:not(.join-guide-img):not(.winners-avatar),
+    body.mini-app-shell img:not(.join-guide-img):not(.winners-avatar-img),
     body.mini-app-shell input,
     body.mini-app-shell select,
     body.mini-app-shell button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.join-btn),
@@ -398,7 +415,7 @@ function getMiniAppStyles() {
     }
 
     body.mini-app-shell img.join-guide-img,
-    body.mini-app-shell img.winners-avatar {
+    body.mini-app-shell img.winners-avatar-img {
       max-width: 100%;
       min-width: 0;
       box-sizing: border-box;
@@ -436,25 +453,11 @@ function getMiniAppStyles() {
     }
 
     body.mini-app-shell .stat-card {
-      padding: 8px 9px;
+      padding: var(--panel-pad-stat);
       border-radius: 10px;
     }
 
-    body.mini-app-shell .stat-card-label {
-      font-size: 10px;
-      margin-bottom: 2px;
-    }
-
-    body.mini-app-shell .stat-card-value {
-      font-size: 15px;
-    }
-
-    body.mini-app-shell .stat-card-value-rub {
-      font-size: 13px;
-    }
-
     body.mini-app-shell .draw-history-title {
-      font-size: 15px;
       margin: 0 0 8px;
     }
 
@@ -488,28 +491,13 @@ function getMiniAppStyles() {
       gap: 4px;
     }
 
-    body.mini-app-shell .history-time-text {
-      font-size: 10px;
-      white-space: normal;
-      line-height: 1.3;
-    }
-
     body.mini-app-shell .history-chips {
       grid-template-columns: 1fr 1fr;
     }
 
     body.mini-app-shell .history-chip {
-      font-size: 9px;
-      padding: 4px 6px;
-      gap: 3px;
-    }
-
-    body.mini-app-shell .history-chip-label {
-      white-space: nowrap;
-    }
-
-    body.mini-app-shell .history-chip-value {
-      font-size: 11px;
+      padding: var(--panel-pad-compact);
+      gap: clamp(3px, 1vw, 5px);
     }
 
     body.mini-app-shell .winner-details-content {
@@ -534,8 +522,7 @@ function getMiniAppStyles() {
     }
 
     body.mini-app-shell .history-details summary {
-      font-size: 12px;
-      padding: 8px 9px;
+      padding: clamp(8px, 2.2vw, 9px) clamp(9px, 2.5vw, 10px);
     }
 
     body.mini-app-shell .history-action-btn {
@@ -608,6 +595,10 @@ function getMiniAppStyles() {
 
     body.mini-app-shell .draw-block-confirm {
       margin-top: 0;
+    }
+
+    body.mini-app-shell .draw-row-2 {
+      gap: 10px;
     }
 
     body.mini-app-shell .project-card-name {
@@ -1887,13 +1878,28 @@ function getWinnersPageStyles() {
     body.winners-page .winners-avatar {
       width: 38px;
       height: 38px;
+      min-width: 38px;
+      min-height: 38px;
       border-radius: 50%;
-      object-fit: cover;
+      overflow: hidden;
       flex-shrink: 0;
       border: 1.5px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 22%, transparent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    body.winners-page .winners-avatar-img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      border-radius: 50%;
     }
 
     body.winners-page .winners-avatar-fallback {
+      width: 100%;
+      height: 100%;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1901,6 +1907,7 @@ function getWinnersPageStyles() {
       font-weight: 700;
       color: #fff;
       border: none;
+      border-radius: 50%;
       background: linear-gradient(180deg, var(--avatar-grad-top, #7BD3FF) 0%, var(--avatar-grad-bottom, #2AABEE) 100%);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
     }
@@ -2427,6 +2434,7 @@ function getGatePageStyles() {
 }
 
 module.exports = {
+  getPanelFluidTypographyVars,
   getMiniAppStyles,
   getMiniAppInitScript,
   getMiniAppHeadScript,
