@@ -162,6 +162,7 @@ function getMiniAppStyles() {
       --mini-pad-x: 12px;
       --mini-pad-top: max(6px, var(--tg-safe-area-inset-top, env(safe-area-inset-top, 0px)));
       --mini-pad-bottom: max(10px, var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+      --panel-bottom-bar-space: calc(96px + env(safe-area-inset-bottom, 0px));
       --bg-dark: #152238;
       --app-bg-image-dark: url("/brand/background-dark.png");
 ${PANEL_FLUID_TYPOGRAPHY_VARS}
@@ -212,6 +213,7 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
       touch-action: manipulation;
       -ms-touch-action: manipulation;
       font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      scroll-padding-bottom: var(--panel-bottom-bar-space);
     }
 
     body.mini-app-shell input,
@@ -276,7 +278,7 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
       padding-left: var(--mini-pad-x);
       padding-right: var(--mini-pad-x);
       padding-top: 12px;
-      padding-bottom: var(--mini-pad-bottom);
+      padding-bottom: var(--panel-bottom-bar-space);
       overflow-x: hidden;
       box-sizing: border-box;
     }
@@ -346,17 +348,49 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
     body.mini-app-shell .quick-actions {
       display: flex;
       gap: 8px;
-      margin-bottom: 8px;
       width: 100%;
       max-width: 100%;
     }
 
-    body.mini-app-shell .quick-action {
-      flex: 1 1 0;
-      width: auto;
-      min-width: 0;
-      min-height: 56px;
-      padding: 9px 4px;
+    body.mini-app-shell .panel-bottom-bar {
+      padding-left: max(16px, var(--mini-pad-x, 16px), env(safe-area-inset-left, 0px));
+      padding-right: max(16px, var(--mini-pad-x, 16px), env(safe-area-inset-right, 0px));
+    }
+
+    body.mini-app-shell .panel-bottom-bar .quick-action {
+      min-height: 64px;
+      padding: 11px 8px;
+    }
+
+    body.mini-app-shell button.panel-sheet-close,
+    body.mini-app-shell button.panel-sheet-backdrop {
+      font-weight: 400;
+      transform: none !important;
+      filter: none !important;
+      overflow: visible !important;
+      box-sizing: border-box;
+    }
+
+    body.mini-app-shell button.panel-sheet-backdrop {
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: none !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      height: 100% !important;
+      border-radius: 0 !important;
+      padding: 0 !important;
+    }
+
+    body.mini-app-shell button.panel-sheet-close {
+      width: 32px !important;
+      min-width: 32px !important;
+      max-width: 32px !important;
+      height: 32px !important;
+      min-height: 32px !important;
+      max-height: 32px !important;
+      padding: 0 !important;
+      flex-shrink: 0 !important;
     }
 
     body.mini-app-shell .draw-file-btn,
@@ -405,7 +439,7 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
     body.mini-app-shell img:not(.join-guide-img):not(.winners-avatar-img),
     body.mini-app-shell input,
     body.mini-app-shell select,
-    body.mini-app-shell button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.join-btn),
+    body.mini-app-shell button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.join-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.draw-submit):not(.draw-file-btn):not(.draw-paste-btn):not(.quick-action),
     body.mini-app-shell .history-list,
     body.mini-app-shell .history-card {
       max-width: 100%;
@@ -545,7 +579,16 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
 
     body.mini-app-shell input,
     body.mini-app-shell select,
-    body.mini-app-shell button:not(.settings-action-btn):not(.join-btn) {
+    body.mini-app-shell button.draw-submit {
+      width: 100% !important;
+      min-height: 48px;
+      max-width: none;
+      min-width: 0;
+      overflow: visible !important;
+      flex-shrink: 0;
+    }
+
+    body.mini-app-shell button:not(.settings-action-btn):not(.join-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.draw-submit):not(.draw-file-btn):not(.draw-paste-btn):not(.quick-action) {
       font-size: 14px;
     }
 

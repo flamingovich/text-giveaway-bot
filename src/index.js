@@ -2243,6 +2243,7 @@ function renderFormIcon(type) {
     copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
     trophy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
+    close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>',
   };
   return icons[type] || "";
 }
@@ -2694,6 +2695,7 @@ function renderWebPage(draws, message, webUser) {
       --ok-bg: #ebfff1;
       --ok-line: #a7e6bc;
       --ok-text: #1f6a3c;
+      --panel-bottom-bar-space: calc(96px + env(safe-area-inset-bottom, 0px));
 ${getPanelFluidTypographyVars()}
     }
     * { box-sizing: border-box; }
@@ -2762,6 +2764,57 @@ ${getPanelFluidTypographyVars()}
       min-width: 0;
       box-sizing: border-box;
     }
+    .site-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .header-icon-btn {
+      flex-shrink: 0;
+      width: 36px;
+      min-width: 36px;
+      max-width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--primary);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+    }
+    .header-icon-btn svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+    }
+    .header-icon-btn:hover,
+    .header-icon-btn:focus-visible {
+      background: #f5f8ff;
+    }
+    .header-icon-btn.header-icon-btn-active {
+      background: var(--tg-theme-button-color, var(--primary));
+      color: var(--tg-theme-button-text-color, #fff);
+      border-color: transparent;
+    }
+    body.app-theme-dark .header-icon-btn {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 28%, transparent);
+      color: var(--tg-theme-button-color, #5b8cff);
+    }
+    body.app-theme-dark .header-icon-btn:hover,
+    body.app-theme-dark .header-icon-btn:focus-visible {
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #232f42) 82%, #000);
+    }
+    body.app-theme-dark .header-icon-btn.header-icon-btn-active {
+      background: var(--tg-theme-button-color, #5b8cff);
+      color: var(--tg-theme-button-text-color, #fff);
+    }
     .page-title {
       flex: 1;
       min-width: 0;
@@ -2773,7 +2826,6 @@ ${getPanelFluidTypographyVars()}
       max-width: 36px;
       height: 36px;
       padding: 0;
-      margin-left: auto;
       border-radius: 10px;
       border: 1px solid var(--line);
       background: #fff;
@@ -2863,7 +2915,7 @@ ${getPanelFluidTypographyVars()}
       max-width: 100%;
       width: 100%;
       margin: 0 auto;
-      padding: 16px 16px 24px;
+      padding: 16px 16px var(--panel-bottom-bar-space);
       overflow-x: hidden;
       box-sizing: border-box;
     }
@@ -3053,17 +3105,21 @@ ${getPanelFluidTypographyVars()}
     }
     .settings-actions {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 8px;
       margin-bottom: 8px;
     }
-    .settings-action-btn {
-      display: inline-flex;
+    .settings-action-btn,
+    button.settings-action-btn,
+    a.settings-action-btn {
+      display: flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
       width: 100%;
-      padding: 10px 6px;
+      min-width: 0;
+      max-width: 100%;
+      padding: 10px 8px;
       border-radius: 10px;
       border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 28%, transparent);
       background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 10%, transparent);
@@ -3071,10 +3127,13 @@ ${getPanelFluidTypographyVars()}
       font-family: inherit;
       font-size: 11px;
       font-weight: 700;
+      line-height: 1.2;
       white-space: nowrap;
       cursor: pointer;
       text-decoration: none;
       box-sizing: border-box;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .settings-action-btn:hover,
     .settings-action-btn:focus-visible,
@@ -3551,21 +3610,27 @@ ${getPanelFluidTypographyVars()}
       border-style: solid;
       background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 10%, var(--tg-theme-secondary-bg-color, #fff));
     }
-    .draw-submit {
+    .draw-submit,
+    button.draw-submit {
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 8px;
       width: 100%;
+      min-height: 48px;
       padding: 13px 16px;
       border-radius: 12px;
       font-size: 15px;
       font-weight: 800;
       font-family: inherit;
+      line-height: 1.2;
       background: var(--tg-theme-button-color, var(--primary));
       color: var(--tg-theme-button-text-color, #fff);
       border: none;
       cursor: pointer;
+      overflow: visible;
+      box-sizing: border-box;
+      flex-shrink: 0;
     }
     .draw-submit:hover,
     .draw-submit:focus-visible {
@@ -3593,7 +3658,7 @@ ${getPanelFluidTypographyVars()}
     }
     label { display: block; font-size: 12px; margin-bottom: 6px; color: #3b4560; font-weight: 600; }
     .card-dark label { color: #e7edff; }
-    input, select, button {
+    input, select, button:not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.theme-toggle-btn):not(.header-icon-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.winner-copy-btn):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit) {
       border-radius: 12px;
       border: 1px solid #cfd8ef;
       padding: 9px 11px;
@@ -3602,7 +3667,7 @@ ${getPanelFluidTypographyVars()}
       background: #fff;
     }
     input, select,
-    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn):not(.winner-copy-btn) {
+    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn):not(.winner-copy-btn):not(.header-icon-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit) {
       width: 100%;
     }
     .card-dark input,
@@ -3610,7 +3675,7 @@ ${getPanelFluidTypographyVars()}
       border: 1px solid #6f86d8;
       background: rgba(255, 255, 255, 0.96);
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn) {
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit) {
       background: var(--primary);
       color: #fff;
       border: none;
@@ -3618,7 +3683,7 @@ ${getPanelFluidTypographyVars()}
       font-weight: 700;
       transition: all 0.18s ease;
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):hover {
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):hover {
       background: var(--primary-2);
       transform: translateY(-1px);
     }
@@ -3765,11 +3830,252 @@ ${getPanelFluidTypographyVars()}
     .quick-actions {
       display: flex;
       gap: 8px;
-      margin-bottom: 10px;
       width: 100%;
       max-width: 100%;
       min-width: 0;
       overflow: hidden;
+    }
+    .panel-bottom-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 25;
+      display: flex;
+      gap: 10px;
+      padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+      background: color-mix(in srgb, var(--tg-theme-bg-color, #0f1420) 96%, #000);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.24);
+      box-sizing: border-box;
+    }
+    body.app-theme-dark .panel-bottom-bar {
+      background: color-mix(in srgb, var(--tg-theme-bg-color, #0f1420) 96%, #000);
+      border-top-color: rgba(255, 255, 255, 0.08);
+    }
+    .panel-bottom-bar .quick-action,
+    body.app-theme-dark .panel-bottom-bar .quick-action,
+    body.app-theme-dark .panel-bottom-bar .quick-action:hover,
+    body.app-theme-dark .panel-bottom-bar .quick-action:focus-visible {
+      margin-bottom: 0;
+      min-height: 64px;
+      padding: 11px 8px;
+      background: rgba(255, 255, 255, 0.1) !important;
+      border: 1px solid rgba(255, 255, 255, 0.16) !important;
+      color: rgba(255, 255, 255, 0.96) !important;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      filter: none !important;
+      transform: none !important;
+    }
+    body.app-theme-light .panel-bottom-bar .quick-action {
+      background: rgba(255, 255, 255, 0.92) !important;
+      border-color: rgba(21, 26, 45, 0.1) !important;
+      color: var(--tg-theme-text-color, #151a2d) !important;
+      box-shadow: 0 1px 2px rgba(21, 26, 45, 0.06);
+    }
+    .panel-bottom-bar .quick-action .qa-icon,
+    body.app-theme-dark .panel-bottom-bar .quick-action .qa-icon {
+      color: rgba(255, 255, 255, 0.88) !important;
+    }
+    body.app-theme-light .panel-bottom-bar .quick-action .qa-icon {
+      color: color-mix(in srgb, var(--tg-theme-text-color, #151a2d) 72%, transparent) !important;
+    }
+    .panel-bottom-bar .quick-action .qa-label,
+    body.app-theme-dark .panel-bottom-bar .quick-action .qa-label {
+      font-size: var(--panel-fs-sm);
+      font-weight: 700;
+      color: inherit !important;
+    }
+    .panel-bottom-bar .quick-action:hover,
+    .panel-bottom-bar .quick-action:focus-visible {
+      background: rgba(255, 255, 255, 0.14) !important;
+      border-color: rgba(255, 255, 255, 0.22) !important;
+    }
+    body.app-theme-light .panel-bottom-bar .quick-action:hover,
+    body.app-theme-light .panel-bottom-bar .quick-action:focus-visible {
+      background: #fff !important;
+      border-color: rgba(21, 26, 45, 0.14) !important;
+    }
+    .panel-bottom-bar .quick-action.qa-bar-active,
+    .panel-bottom-bar .quick-action.qa-bar-active:hover,
+    .panel-bottom-bar .quick-action.qa-bar-active:focus-visible {
+      background: rgba(255, 255, 255, 0.18) !important;
+      border-color: rgba(255, 255, 255, 0.28) !important;
+      color: #fff !important;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+    body.app-theme-light .panel-bottom-bar .quick-action.qa-bar-active,
+    body.app-theme-light .panel-bottom-bar .quick-action.qa-bar-active:hover,
+    body.app-theme-light .panel-bottom-bar .quick-action.qa-bar-active:focus-visible {
+      background: #fff !important;
+      border-color: rgba(21, 26, 45, 0.18) !important;
+      color: var(--tg-theme-text-color, #151a2d) !important;
+      box-shadow: 0 2px 8px rgba(21, 26, 45, 0.08);
+    }
+    .panel-bottom-bar .quick-action.qa-bar-active .qa-icon,
+    .panel-bottom-bar .quick-action.qa-bar-active .qa-label {
+      color: inherit !important;
+    }
+    .panel-sheet-root {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      pointer-events: none;
+      visibility: hidden;
+      background: transparent;
+    }
+    .panel-sheet-root.is-open {
+      pointer-events: auto;
+      visibility: visible;
+      background: transparent;
+    }
+    .panel-sheet-backdrop {
+      position: absolute;
+      inset: 0;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      opacity: 0;
+      cursor: pointer;
+      transform: none;
+      transition: opacity 0.22s ease;
+    }
+    .panel-sheet-root.is-open .panel-sheet-backdrop {
+      opacity: 1;
+      background: rgba(0, 0, 0, 0.55) !important;
+    }
+    .panel-sheet {
+      position: relative;
+      z-index: 1;
+      width: min(100%, 560px);
+      max-height: min(92vh, 920px);
+      display: flex;
+      flex-direction: column;
+      border-radius: 16px 16px 0 0;
+      background: var(--tg-theme-secondary-bg-color, var(--tg-theme-bg-color, #fff));
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+      border-bottom: 0;
+      box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.22);
+      transform: translateY(104%);
+      transition: transform 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+      overflow: hidden;
+    }
+    .panel-sheet-root.is-open .panel-sheet {
+      transform: translateY(0);
+    }
+    button.panel-sheet-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 3;
+      width: 32px !important;
+      min-width: 32px !important;
+      max-width: 32px !important;
+      height: 32px !important;
+      min-height: 32px !important;
+      max-height: 32px !important;
+      padding: 0 !important;
+      border: 1px solid rgba(255, 255, 255, 0.12) !important;
+      border-radius: 999px !important;
+      background: rgba(255, 255, 255, 0.1) !important;
+      color: rgba(255, 255, 255, 0.72) !important;
+      display: inline-flex !important;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      cursor: pointer;
+      transform: none !important;
+      box-shadow: none !important;
+      filter: none !important;
+      overflow: visible !important;
+      line-height: 1;
+    }
+    body.app-theme-light button.panel-sheet-close {
+      border-color: rgba(21, 26, 45, 0.1) !important;
+      background: rgba(21, 26, 45, 0.06) !important;
+      color: rgba(21, 26, 45, 0.52) !important;
+    }
+    button.panel-sheet-close svg {
+      width: 15px;
+      height: 15px;
+      display: block;
+    }
+    button.panel-sheet-close:hover,
+    button.panel-sheet-close:focus-visible {
+      background: rgba(255, 255, 255, 0.16) !important;
+      border-color: rgba(255, 255, 255, 0.18) !important;
+      color: rgba(255, 255, 255, 0.92) !important;
+      transform: none !important;
+    }
+    body.app-theme-light button.panel-sheet-close:hover,
+    body.app-theme-light button.panel-sheet-close:focus-visible {
+      background: rgba(21, 26, 45, 0.1) !important;
+      border-color: rgba(21, 26, 45, 0.14) !important;
+      color: rgba(21, 26, 45, 0.78) !important;
+    }
+    button.panel-sheet-backdrop {
+      transform: none !important;
+    }
+    button.panel-sheet-backdrop:hover,
+    button.panel-sheet-backdrop:focus-visible {
+      transform: none !important;
+      background: rgba(0, 0, 0, 0.55) !important;
+      filter: none !important;
+    }
+    .panel-sheet-scroll {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 44px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+      -webkit-overflow-scrolling: touch;
+    }
+    body.panel-sheet-open {
+      overflow: hidden;
+    }
+    body.panel-sheet-open .site-header,
+    body.panel-sheet-open .container {
+      pointer-events: none;
+    }
+    body.panel-sheet-open .panel-bottom-bar {
+      opacity: 0;
+      pointer-events: none;
+    }
+    body.app-theme-dark .panel-sheet {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.48);
+    }
+    .panel-sheet-root .admin-panels-stack {
+      display: block;
+      min-height: 0;
+      min-width: 0;
+    }
+    .panel-sheet-root .admin-panels-stack > .create-panel {
+      grid-area: unset;
+      width: 100%;
+      min-width: 0;
+    }
+    .panel-sheet-root .create-panel.panel-hidden {
+      display: none !important;
+      pointer-events: none;
+    }
+    .panel-sheet-root .create-panel:not(.panel-hidden) {
+      display: block;
+      max-height: none;
+      opacity: 1;
+      transform: none;
+      padding: 0;
+      border: 0;
+      box-shadow: none;
+      pointer-events: auto;
+    }
+    .panel-bottom-bar .quick-action .qa-icon svg {
+      width: 24px;
+      height: 24px;
     }
     .quick-action {
       flex: 1 1 0;
@@ -3900,9 +4206,6 @@ ${getPanelFluidTypographyVars()}
       min-height: 0;
       min-width: 0;
     }
-    .admin-panels-stack:not(:has(.create-panel:not(.panel-hidden))) {
-      display: none;
-    }
     .admin-panels-stack > .create-panel {
       grid-area: 1 / 1;
       width: 100%;
@@ -3915,7 +4218,9 @@ ${getPanelFluidTypographyVars()}
       .history-details-anim,
       .history-details-chevron,
       .history-details summary,
-      .quick-action {
+      .quick-action,
+      .panel-sheet,
+      .panel-sheet-backdrop {
         transition: none !important;
       }
     }
@@ -4688,34 +4993,42 @@ ${getPanelFluidTypographyVars()}
     <div class="site-header-inner">
       <img src="/brand/logo.jpg" alt="" class="page-logo" width="36" height="36" loading="eager" />
       <h1 class="page-title"><span class="page-title-brand">RollerBot</span><span class="page-title-sub">Панель розыгрышей</span></h1>
-      <button type="button" class="theme-toggle-btn" id="themeToggleBtn" title="Переключить тему" aria-label="Переключить тему">
-        <span class="theme-icon theme-icon-light" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span>
-        <span class="theme-icon theme-icon-dark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span>
-      </button>
+      <div class="site-header-actions">
+        ${
+          showAccessPanel
+            ? `<button type="button" id="toggleAccessBtn" class="header-icon-btn" title="Доступ" aria-label="Доступ">${renderQuickActionIcon("access")}</button>`
+            : ""
+        }
+        <button type="button" class="theme-toggle-btn" id="themeToggleBtn" title="Переключить тему" aria-label="Переключить тему">
+          <span class="theme-icon theme-icon-light" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span>
+          <span class="theme-icon theme-icon-dark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span>
+        </button>
+      </div>
     </div>
   </header>
   <div class="container">
     ${message ? `<div class="msg">${escapeHtml(message)}</div>` : ""}
     <div class="grid">
-      <div class="quick-actions">
-        <button id="toggleCreateDrawBtn" type="button" class="quick-action">
-          <span class="qa-icon">${renderQuickActionIcon("create")}</span>
-          <span class="qa-label">Создать</span>
-        </button>
-        <button id="toggleSettingsBtn" type="button" class="quick-action">
-          <span class="qa-icon">${renderQuickActionIcon("settings")}</span>
-          <span class="qa-label">Настройки</span>
-        </button>
-        ${
-          showAccessPanel
-            ? `<button id="toggleAccessBtn" type="button" class="quick-action">
-          <span class="qa-icon">${renderQuickActionIcon("access")}</span>
-          <span class="qa-label">Доступ</span>
-        </button>`
-            : ""
-        }
+      <div id="panelLiveRoot" data-version="${escapeHtml(panelLiveVersion)}">
+        ${panelLiveHtml}
       </div>
-
+    </div>
+  </div>
+  <nav class="panel-bottom-bar quick-actions" aria-label="Действия панели">
+    <button id="toggleCreateDrawBtn" type="button" class="quick-action">
+      <span class="qa-icon">${renderQuickActionIcon("create")}</span>
+      <span class="qa-label">Создать</span>
+    </button>
+    <button id="toggleSettingsBtn" type="button" class="quick-action">
+      <span class="qa-icon">${renderQuickActionIcon("settings")}</span>
+      <span class="qa-label">Настройки</span>
+    </button>
+  </nav>
+  <div id="panelSheetRoot" class="panel-sheet-root" aria-hidden="true">
+    <button type="button" class="panel-sheet-backdrop" id="panelSheetBackdrop" aria-label="Закрыть"></button>
+    <div class="panel-sheet" role="dialog" aria-modal="true">
+      <button type="button" class="panel-sheet-close" id="panelSheetClose" aria-label="Закрыть">${renderFormIcon("close")}</button>
+      <div class="panel-sheet-scroll">
       <div class="admin-panels-stack">
       <section id="createDrawPanel" class="card create-panel panel-hidden">
         <h2 class="create-title">
@@ -4974,9 +5287,6 @@ ${getPanelFluidTypographyVars()}
       }
 
       </div>
-
-      <div id="panelLiveRoot" data-version="${escapeHtml(panelLiveVersion)}">
-        ${panelLiveHtml}
       </div>
     </div>
   </div>
@@ -5305,6 +5615,16 @@ ${getPanelFluidTypographyVars()}
     function openProjectForm() {
       const addProjectWrap = document.getElementById("addProjectWrap");
       const addProjectBtn = document.getElementById("toggleAddProjectBtn");
+      const settingsPanel = document.getElementById("settingsPanel");
+      const sheetRoot = document.getElementById("panelSheetRoot");
+      const settingsBtn = document.getElementById("toggleSettingsBtn");
+      const settingsOpen =
+        sheetRoot?.classList.contains("is-open") &&
+        settingsPanel &&
+        !settingsPanel.classList.contains("panel-hidden");
+      if (!settingsOpen && settingsBtn) {
+        settingsBtn.click();
+      }
       if (addProjectWrap) addProjectWrap.classList.remove("panel-hidden");
       if (addProjectBtn) addProjectBtn.classList.add("settings-action-active");
     }
@@ -5316,51 +5636,89 @@ ${getPanelFluidTypographyVars()}
       const createPanel = document.getElementById("createDrawPanel");
       const settingsPanel = document.getElementById("settingsPanel");
       const accessPanel = document.getElementById("accessPanel");
-      if (!createBtn || !settingsBtn || !createPanel || !settingsPanel) return;
+      const sheetRoot = document.getElementById("panelSheetRoot");
+      const sheetBackdrop = document.getElementById("panelSheetBackdrop");
+      const sheetClose = document.getElementById("panelSheetClose");
+      if (!createBtn || !settingsBtn || !createPanel || !settingsPanel || !sheetRoot) return;
 
-      function getTabButtons() {
-        return [createBtn, settingsBtn, accessBtn].filter(Boolean);
+      function getBottomTabButtons() {
+        return [createBtn, settingsBtn];
       }
 
-      function setActiveTab(btn) {
-        for (const item of getTabButtons()) {
-          item.classList.remove("qa-active", "quick-action-primary");
+      function getAllPanels() {
+        const panels = [
+          { panel: createPanel, btn: createBtn, header: false },
+          { panel: settingsPanel, btn: settingsBtn, header: false },
+        ];
+        if (accessPanel && accessBtn) {
+          panels.push({ panel: accessPanel, btn: accessBtn, header: true });
         }
-        if (btn) {
-          btn.classList.add("qa-active", "quick-action-primary");
+        return panels;
+      }
+
+      function setActiveTab(btn, isHeaderBtn = false) {
+        for (const item of getBottomTabButtons()) {
+          item.classList.remove("qa-active", "qa-bar-active", "quick-action-primary");
         }
+        if (accessBtn) {
+          accessBtn.classList.remove("header-icon-btn-active");
+        }
+        if (!btn) return;
+        if (isHeaderBtn || btn === accessBtn) {
+          accessBtn?.classList.add("header-icon-btn-active");
+          return;
+        }
+        btn.classList.add("qa-active", "qa-bar-active");
       }
 
       function closeOtherPanels(exceptPanel) {
-        const panels = [
-          { panel: createPanel, btn: createBtn },
-          { panel: settingsPanel, btn: settingsBtn },
-        ];
-        if (accessPanel && accessBtn) {
-          panels.push({ panel: accessPanel, btn: accessBtn });
-        }
-        for (const item of panels) {
+        for (const item of getAllPanels()) {
           if (item.panel === exceptPanel) continue;
           item.panel.classList.add("panel-hidden");
         }
       }
 
-      function togglePanel(panel, btn) {
-        const willOpen = panel.classList.contains("panel-hidden");
-        panel.classList.toggle("panel-hidden");
-        if (willOpen) {
-          closeOtherPanels(panel);
-          setActiveTab(btn);
-        } else {
-          setActiveTab(null);
+      function closeSheet() {
+        sheetRoot.classList.remove("is-open");
+        sheetRoot.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("panel-sheet-open");
+        for (const item of getAllPanels()) {
+          item.panel.classList.add("panel-hidden");
         }
+        setActiveTab(null);
+      }
+
+      function openSheet(panel, btn, isHeaderBtn = false) {
+        closeOtherPanels(panel);
+        panel.classList.remove("panel-hidden");
+        setActiveTab(btn, isHeaderBtn);
+        sheetRoot.classList.add("is-open");
+        sheetRoot.setAttribute("aria-hidden", "false");
+        document.body.classList.add("panel-sheet-open");
+      }
+
+      function togglePanel(panel, btn, isHeaderBtn = false) {
+        const sheetOpen = sheetRoot.classList.contains("is-open");
+        const panelVisible = !panel.classList.contains("panel-hidden");
+        if (sheetOpen && panelVisible) {
+          closeSheet();
+          return;
+        }
+        openSheet(panel, btn, isHeaderBtn);
       }
 
       createBtn.addEventListener("click", () => togglePanel(createPanel, createBtn));
       settingsBtn.addEventListener("click", () => togglePanel(settingsPanel, settingsBtn));
       if (accessPanel && accessBtn) {
-        accessBtn.addEventListener("click", () => togglePanel(accessPanel, accessBtn));
+        accessBtn.addEventListener("click", () => togglePanel(accessPanel, accessBtn, true));
       }
+      sheetBackdrop?.addEventListener("click", closeSheet);
+      sheetClose?.addEventListener("click", closeSheet);
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && sheetRoot.classList.contains("is-open")) {
+          closeSheet();
+        }
+      });
     }
 
     function setupProjectFormEdit() {
@@ -5469,12 +5827,11 @@ ${getPanelFluidTypographyVars()}
 
       function shouldSkipPoll() {
         if (document.hidden) return true;
+        if (document.getElementById("panelSheetRoot")?.classList.contains("is-open")) return true;
         if (document.querySelector("input:focus, select:focus, textarea:focus, [contenteditable=true]:focus")) {
           return true;
         }
-        const createPanel = document.getElementById("createDrawPanel");
         const addProjectWrap = document.getElementById("addProjectWrap");
-        if (createPanel && !createPanel.classList.contains("panel-hidden")) return true;
         if (addProjectWrap && !addProjectWrap.classList.contains("panel-hidden")) return true;
         return false;
       }
