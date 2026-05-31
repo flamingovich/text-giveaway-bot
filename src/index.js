@@ -858,9 +858,14 @@ function formatWinnerConfirmWindowAfterResults(draw) {
   return `${value} ${word}`;
 }
 
-function buildWinnerWinMessageHtml(payoutPrize) {
+function buildWinnerWinMessageHtml(draw, payoutPrize) {
+  const postLink = buildDrawPostLink(draw);
+  const giveawayWord = postLink
+    ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
+    : "розыгрыше";
+
   return [
-    "<b>🎉 Поздравляем! Вы выиграли в розыгрыше.</b>",
+    `<b>🎉 Вы выиграли в ${giveawayWord}.</b>`,
     `🏆 Приз: <b>${escapeHtml(payoutPrize)}</b>`,
   ].join("\n");
 }
