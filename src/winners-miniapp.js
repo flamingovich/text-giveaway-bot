@@ -318,6 +318,65 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
 </html>`;
 }
 
+function renderWinnersAppLauncherPage() {
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  ${getMiniAppViewportMeta()}
+  ${getMiniAppFontLinks()}
+  <title>Победители</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>${getMiniAppHeadScript()}</script>
+  <style>
+    .hidden { display: none !important; }
+    ${getWinnersPageStyles()}
+    ${getMiniAppStyles()}
+    body.winners-page .winners-app-status {
+      margin: 24px auto 0;
+      max-width: 320px;
+      text-align: center;
+      font-size: 15px;
+      line-height: 1.45;
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+    body.winners-page .winners-app-error {
+      color: #cf222e;
+    }
+  </style>
+</head>
+<body class="winners-page mini-app-shell">
+  ${renderDesktopTiledBackground()}
+  <div class="winners-shell">
+    <p id="winnersLoading" class="winners-app-status">Загрузка итогов...</p>
+    <p id="winnersError" class="winners-app-status winners-app-error hidden"></p>
+  </div>
+  <script>
+    ${getMiniAppInitScript({ authSession: false, previewShell: true })}
+    (function () {
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.ready();
+        tg.expand();
+      }
+      const drawId = String(tg?.initDataUnsafe?.start_param || "").trim();
+      const loading = document.getElementById("winnersLoading");
+      const err = document.getElementById("winnersError");
+      if (!drawId) {
+        if (loading) loading.classList.add("hidden");
+        if (err) {
+          err.textContent = "Не указан розыгрыш. Нажмите кнопку в посте канала.";
+          err.classList.remove("hidden");
+        }
+        return;
+      }
+      location.replace("/winners/" + encodeURIComponent(drawId));
+    })();
+  </script>
+</body>
+</html>`;
+}
+
 function registerWinnersMiniApp(app, deps) {
   const {
     readData,
@@ -375,7 +434,15 @@ function registerWinnersMiniApp(app, deps) {
     }
   });
 
+  app.get("/winners/app", (_req, res) => {
+    res.type("html").send(renderWinnersAppLauncherPage());
+  });
+
   app.get("/winners/:drawId", (req, res) => {
+    if (req.params.drawId === "app") {
+      res.redirect(301, "/winners/app");
+      return;
+    }
     const draw = getFinishedDraw(req.params.drawId);
     if (!draw) {
       res.status(404).type("html").send("<h1>Розыгрыш не найден или ещё не завершён</h1>");
@@ -435,4 +502,4 @@ function registerWinnersMiniApp(app, deps) {
   }
 }
 
-module.exports = { registerWinnersMiniApp, renderWinnersPage };
+module.exports = { registerWinnersMiniApp, renderWinnersPage, renderWinnersAppLauncherPage };

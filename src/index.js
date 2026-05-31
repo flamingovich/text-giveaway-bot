@@ -13,6 +13,11 @@ const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp
 const { registerWinnersMiniApp } = require("./winners-miniapp");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
+const {
+  refreshRubUsdtRate,
+  startRubUsdtRateRefresh,
+  convertRubToUsdt,
+} = require("./rub-usdt-rate");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -34,6 +39,7 @@ const WEB_AUTH_DISABLED = process.env.WEB_AUTH_DISABLED === "true" || WEB_ONLY;
 const RECAPTCHA_SITE_KEY = process.env.RECAPTCHA_SITE_KEY || "";
 const RECAPTCHA_SECRET_KEY = process.env.RECAPTCHA_SECRET_KEY || "";
 const JOIN_MINI_APP_SHORT_NAME = (process.env.JOIN_MINI_APP_SHORT_NAME || "join").replace(/^\/+/, "");
+const WINNERS_MINI_APP_SHORT_NAME = (process.env.WINNERS_MINI_APP_SHORT_NAME || "winners").replace(/^\/+/, "");
 let BOT_USERNAME = (process.env.BOT_USERNAME || "").replace("@", "");
 const TRC20_GUIDE_IMAGES = [
   path.join(__dirname, "..", "assets", "trc20-guide", "step-1.png"),
@@ -622,11 +628,16 @@ function formatUsdStatDisplay(value) {
   return `${formatted} $`;
 }
 
-function formatPaidStatDisplay(rub, usd) {
-  const parts = [];
-  if (rub > 0) parts.push(formatRubStatDisplay(rub));
-  if (usd > 0) parts.push(formatUsdStatDisplay(usd));
-  return parts.length ? parts.join(" · ") : "0 ₽";
+function formatUsdtStatDisplay(value) {
+  const amount = Number(value) || 0;
+  if (amount <= 0) {
+    return "0 USDT";
+  }
+  return `${amount.toFixed(2)} USDT`;
+}
+
+function formatPaidStatDisplay(totalUsdt) {
+  return formatUsdtStatDisplay(totalUsdt);
 }
 
 function isMoneyPrizeType(prizeType) {
@@ -683,10 +694,8 @@ function computeDrawStats(draws, userProfiles) {
   const now = DateTime.now().setZone(TIMEZONE);
   const monthName = now.setLocale("ru").toFormat("LLLL");
   const monthLabel = monthName.charAt(0).toUpperCase() + monthName.slice(1);
-  let paidThisMonthRub = 0;
-  let paidAllTimeRub = 0;
-  let paidThisMonthUsd = 0;
-  let paidAllTimeUsd = 0;
+  let paidThisMonthUsdt = 0;
+  let paidAllTimeUsdt = 0;
 
   for (const draw of draws) {
     for (const winnerId of draw.winnerIds || []) {
@@ -700,16 +709,11 @@ function computeDrawStats(draws, userProfiles) {
       }
       const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
       const amount = getWinnerPayoutAmount(draw, projectData);
-      if (draw.prizeType === "money_usd") {
-        paidAllTimeUsd += amount;
-        if (paidAt.year === now.year && paidAt.month === now.month) {
-          paidThisMonthUsd += amount;
-        }
-      } else {
-        paidAllTimeRub += amount;
-        if (paidAt.year === now.year && paidAt.month === now.month) {
-          paidThisMonthRub += amount;
-        }
+      const usdtAmount =
+        draw.prizeType === "money_usd" ? amount : convertRubToUsdt(amount);
+      paidAllTimeUsdt += usdtAmount;
+      if (paidAt.year === now.year && paidAt.month === now.month) {
+        paidThisMonthUsdt += usdtAmount;
       }
     }
   }
@@ -718,8 +722,8 @@ function computeDrawStats(draws, userProfiles) {
     total: draws.length,
     active: draws.filter((draw) => draw.status === DRAW_STATUS.ACTIVE).length,
     monthLabel,
-    paidThisMonth: formatPaidStatDisplay(paidThisMonthRub, paidThisMonthUsd),
-    paidAllTime: formatPaidStatDisplay(paidAllTimeRub, paidAllTimeUsd),
+    paidThisMonth: formatPaidStatDisplay(paidThisMonthUsdt),
+    paidAllTime: formatPaidStatDisplay(paidAllTimeUsdt),
   };
 }
 
@@ -755,8 +759,57 @@ function getWinnerPayoutText(draw, projectData) {
   return formatMoneyAmount(amount, draw.prizeType);
 }
 
+function getWinnerPayoutPanelHtml(draw, projectData) {
+  const payoutText = getWinnerPayoutText(draw, projectData);
+  if (draw.prizeType !== "money_rub") {
+    return escapeHtml(payoutText);
+  }
+
+  const amount = getWinnerPayoutAmount(draw, projectData);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return escapeHtml(payoutText);
+  }
+
+  const usdtText = convertRubToUsdt(amount).toFixed(2);
+  return `${escapeHtml(payoutText)} <span class="winner-payout-usdt">(${escapeHtml(usdtText)} USDT)</span>`;
+}
+
+function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired }) {
+  if (isPaid) {
+    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData);
+    return {
+      icon: "check",
+      iconClass: " winner-card-row-icon-paid",
+      rowClass: " winner-card-row-paid",
+      labelHtml: `<strong class="winner-payout-paid-label">Выплачено:</strong> ${payoutHtml}`,
+    };
+  }
+
+  if (isExpired) {
+    const zeroAmount =
+      draw.prizeType === "money_usd" ? formatUsdAmount(0) : formatRubAmount(0);
+    return {
+      icon: "prize",
+      iconClass: "",
+      rowClass: "",
+      labelHtml: `<strong>К выплате:</strong> ${escapeHtml(zeroAmount)}`,
+    };
+  }
+
+  const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData);
+  return {
+    icon: "prize",
+    iconClass: "",
+    rowClass: "",
+    labelHtml: `<strong>К выплате:</strong> ${payoutHtml}`,
+  };
+}
+
 function isWinnerNotificationExpired(notifyInfo) {
   if (!notifyInfo) {
+    return false;
+  }
+  if (notifyInfo.paidAt) {
     return false;
   }
   if (notifyInfo.status === "expired") {
@@ -1030,6 +1083,20 @@ function getWinnersWebAppUrl(drawId) {
   return `${base}/winners/${encodeURIComponent(drawId)}`;
 }
 
+function getWinnersMiniAppBaseUrl() {
+  if (!WEB_PUBLIC_URL.startsWith("https://")) {
+    return "";
+  }
+  return `${WEB_PUBLIC_URL}/winners/app`;
+}
+
+function getWinnersDirectLink(drawId) {
+  if (!BOT_USERNAME || !WINNERS_MINI_APP_SHORT_NAME || !WEB_PUBLIC_URL.startsWith("https://")) {
+    return "";
+  }
+  return `https://t.me/${BOT_USERNAME}/${WINNERS_MINI_APP_SHORT_NAME}?startapp=${encodeURIComponent(drawId)}`;
+}
+
 function getWinnersDeepLink(drawId) {
   if (!BOT_USERNAME) {
     return "";
@@ -1038,6 +1105,10 @@ function getWinnersDeepLink(drawId) {
 }
 
 function getWinnersChannelUrl(drawId) {
+  const directLink = getWinnersDirectLink(drawId);
+  if (directLink) {
+    return directLink;
+  }
   if (WEB_PUBLIC_URL.startsWith("https://")) {
     return getWinnersWebAppUrl(drawId);
   }
@@ -2171,6 +2242,7 @@ function renderFormIcon(type) {
     chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6-1.41-1.41z"/></svg>',
     copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
     trophy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/></svg>',
+    check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
   };
   return icons[type] || "";
 }
@@ -2300,21 +2372,19 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
     : `<div class="winner-card-avatar winner-card-avatar-fallback" style="${getAvatarFallbackStyle(winnerId)}">${escapeHtml(initial)}</div>`;
   const trcAddress = projectData.trc20Address || "Не указан";
   const notifyInfo = winnerNotifications[String(winnerId)];
-  const payoutText = getWinnerPayoutText(draw, projectData);
   const isPaid = Boolean(notifyInfo?.paidAt);
   const isVerified = Boolean(notifyInfo?.verifiedAt);
   const notifySent = Boolean(notifyInfo?.sentAt);
   const isExpired = isWinnerNotificationExpired(notifyInfo);
+  const payoutRow = getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired });
   const refBadge = projectData.selfReportedNonReferral
     ? `<span class="winner-badge winner-badge-warn">Не реф</span>`
     : `<span class="winner-badge winner-badge-ok">Реф</span>`;
-  const statusBadge = isPaid
-    ? `<span class="winner-badge winner-badge-paid">Выплачено</span>`
-    : isVerified
-      ? `<span class="winner-badge winner-badge-ok">Проверен</span>`
-      : isExpired
-        ? `<span class="winner-badge winner-badge-danger">Не отметился</span>`
-        : notifySent
+  const statusBadge = isVerified
+    ? `<span class="winner-badge winner-badge-ok">Проверен</span>`
+    : isExpired
+      ? `<span class="winner-badge winner-badge-danger">Не отметился</span>`
+      : notifySent
         ? `<span class="winner-badge">Уведомлён</span>`
         : `<span class="winner-badge">Ожидает</span>`;
   const copyBtn =
@@ -2344,9 +2414,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
           <div class="winner-card-badges">${refBadge}${statusBadge}</div>
         </div>
       </div>
-      <div class="winner-card-row">
-        <span class="draw-ico">${renderFormIcon("prize")}</span>
-        <span class="winner-card-row-text"><strong>К выплате:</strong> ${escapeHtml(payoutText)}</span>
+      <div class="winner-card-row${payoutRow.rowClass}">
+        <span class="draw-ico${payoutRow.iconClass}">${renderFormIcon(payoutRow.icon)}</span>
+        <span class="winner-card-row-text">${payoutRow.labelHtml}</span>
       </div>
       <div class="winner-card-row winner-card-address-row">
         <div class="winner-address-wrap">
@@ -2438,7 +2508,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
                 }
               </div>
             </div>
-            <div class="history-head-divider" aria-hidden="true"></div>
+            <div class="history-divider" aria-hidden="true"></div>
           </div>
 
           <div class="history-body${coverPreview ? "" : " history-body-no-cover"}">
@@ -2471,6 +2541,8 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
             </div>
             ${coverPreview}
           </div>
+
+          <div class="history-divider history-divider-before-actions" aria-hidden="true"></div>
 
           ${
             draw.status === DRAW_STATUS.FINISHED
@@ -3788,22 +3860,26 @@ ${getPanelFluidTypographyVars()}
     .page-title {
       margin: 0;
       display: flex;
-      align-items: center;
-      flex-wrap: wrap;
+      align-items: baseline;
+      flex-wrap: nowrap;
       gap: 6px;
       font-size: 17px;
-      line-height: 1;
+      line-height: 1.2;
       min-width: 0;
       flex: 1;
     }
     .page-title-brand {
       font-weight: 800;
+      line-height: 1.2;
       color: var(--tg-theme-text-color, var(--text));
+      white-space: nowrap;
     }
     .page-title-sub {
       font-size: 13px;
       font-weight: 500;
+      line-height: 1.2;
       color: var(--tg-theme-hint-color, var(--sub));
+      white-space: nowrap;
     }
     .btn-secondary { background: #ffffff; color: #2c3f86; border: 1px solid #cad6ff; }
     .btn-secondary:hover { background: #f5f8ff; }
@@ -3945,11 +4021,17 @@ ${getPanelFluidTypographyVars()}
       flex: 1 1 auto;
       min-width: 0;
     }
-    .history-head-divider {
-      margin-top: 8px;
+    .history-divider {
       border-top: 1px dashed color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 24%, transparent);
     }
-    body.app-theme-dark .history-head-divider {
+    .history-card-head .history-divider {
+      margin-top: 8px;
+    }
+    .history-divider-before-actions {
+      margin-top: 8px;
+      margin-bottom: 8px;
+    }
+    body.app-theme-dark .history-divider {
       border-top-color: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 32%, transparent);
     }
     .history-title-icon {
@@ -4368,6 +4450,20 @@ ${getPanelFluidTypographyVars()}
     .winner-card-row-text {
       min-width: 0;
       word-break: break-word;
+    }
+    .winner-payout-usdt {
+      color: var(--tg-theme-hint-color, #7582a5);
+      font-weight: 600;
+    }
+    .winner-card-row .draw-ico.winner-card-row-icon-paid {
+      color: #4ade80;
+    }
+    .winner-payout-paid-label {
+      color: #4ade80;
+    }
+    body.app-theme-dark .winner-card-row .draw-ico.winner-card-row-icon-paid,
+    body.app-theme-dark .winner-payout-paid-label {
+      color: #6ee7a0;
     }
     .winner-card-address-row {
       align-items: center;
@@ -5587,11 +5683,16 @@ function renderPanelForUser(res, webUser, message) {
   res.type("html").send(renderWebPage(draws, message, webUser));
 }
 
+async function renderPanelForUserWithRate(res, webUser, message) {
+  await refreshRubUsdtRate();
+  renderPanelForUser(res, webUser, message);
+}
+
 function sendPanelAuthPage(res, message) {
   res.status(200).type("html").send(renderLoginPage(BOT_USERNAME, WEB_PUBLIC_URL, PANEL_BASE));
 }
 
-panelRouter.get("/", (req, res) => {
+panelRouter.get("/", async (req, res) => {
   const user = webAuth.resolveUser(req);
   if (!user?.id) {
     sendPanelAuthPage(res);
@@ -5618,10 +5719,10 @@ panelRouter.get("/", (req, res) => {
   }
 
   req.webUser = user;
-  renderPanelForUser(res, user, req.query.msg);
+  await renderPanelForUserWithRate(res, user, req.query.msg);
 });
 
-panelRouter.post("/enter", (req, res) => {
+panelRouter.post("/enter", async (req, res) => {
   const initData = req.body?.initData || req.body?.telegramInitData;
   const tgUser = validateInitData(initData, BOT_TOKEN);
   if (!tgUser?.id) {
@@ -5631,10 +5732,11 @@ panelRouter.post("/enter", (req, res) => {
 
   webAuth.setSessionCookie(res, tgUser.id);
   req.webUser = { id: tgUser.id, user: tgUser };
-  renderPanelForUser(res, req.webUser, req.body?.msg || req.query?.msg);
+  await renderPanelForUserWithRate(res, req.webUser, req.body?.msg || req.query?.msg);
 });
 
-panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, (req, res) => {
+panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+  await refreshRubUsdtRate();
   const ownerId = req.webUser.id;
   const draws = getOwnerDraws(ownerId);
   const userProfiles = readUserProjectProfiles();
@@ -6688,6 +6790,8 @@ async function bootstrap() {
   ensureStorage();
   migrateLegacyOwnership();
   await ensureBotUsername();
+  startRubUsdtRateRefresh();
+  await refreshRubUsdtRate(true);
 
   if (WEB_ONLY) {
     app.listen(WEB_PORT, "0.0.0.0", () => {
@@ -6712,6 +6816,15 @@ async function bootstrap() {
       if (JOIN_MINI_APP_SHORT_NAME && BOT_USERNAME) {
         console.log(
           `Join Direct Link: https://t.me/${BOT_USERNAME}/${JOIN_MINI_APP_SHORT_NAME}?startapp=<draw_id>`,
+        );
+      }
+    }
+    const winnersAppUrl = getWinnersMiniAppBaseUrl();
+    if (winnersAppUrl) {
+      console.log(`Winners Mini App (URL в BotFather): ${winnersAppUrl}`);
+      if (WINNERS_MINI_APP_SHORT_NAME && BOT_USERNAME) {
+        console.log(
+          `Winners Direct Link: https://t.me/${BOT_USERNAME}/${WINNERS_MINI_APP_SHORT_NAME}?startapp=<draw_id>`,
         );
       }
     }

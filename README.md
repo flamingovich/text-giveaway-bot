@@ -85,6 +85,8 @@ npm run start
 
 Кнопка **«Участвовать»** в посте канала открывает **Mini App** напрямую (Direct Link).
 
+После завершения розыгрыша кнопка **«Розыгрыш … завершен»** открывает **Mini App с итогами** (победители и участники) — тоже через Direct Link.
+
 В mini-app пользователь проходит:
 
 1. Проверка «Я не робот» (галочка).
@@ -97,12 +99,21 @@ npm run start
 
 ### Настройка Mini App в BotFather
 
+**Участие (`join`):**
+
 1. @BotFather → ваш бот → **Bot Settings** → **Configure Mini App** → **Enable Mini App**.
 2. **Edit Mini App URL**: `https://ваш-домен/join/app` (из `WEB_PUBLIC_URL`).
 3. **Edit Mini App Mode** → **Direct Link**.
 4. **Edit Mini App short name**: `join` (должен совпадать с `JOIN_MINI_APP_SHORT_NAME` в `.env`).
 
-Кнопка в канале ведёт на `https://t.me/ваш_бот/join?startapp=<draw_id>`.
+Кнопка «Участвовать» ведёт на `https://t.me/ваш_бот/join?startapp=<draw_id>`.
+
+**Итоги (`winners`):**
+
+1. В том же разделе **Configure Mini App** добавьте Direct Link с short name `winners` (или как в `WINNERS_MINI_APP_SHORT_NAME`).
+2. URL для этого Direct Link: `https://ваш-домен/winners/app`.
+
+Кнопка «Розыгрыш … завершен» ведёт на `https://t.me/ваш_бот/winners?startapp=<draw_id>`.
 
 ## 6) Команды Telegram (дополнительно)
 
