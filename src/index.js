@@ -13,6 +13,11 @@ const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp
 const { registerWinnersMiniApp } = require("./winners-miniapp");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
+const {
+  refreshRubUsdtRate,
+  startRubUsdtRateRefresh,
+  convertRubToUsdt,
+} = require("./rub-usdt-rate");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
