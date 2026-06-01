@@ -6,6 +6,11 @@ const { Telegraf } = require("telegraf");
 const { DateTime } = require("luxon");
 const { callOpenRouter, verifyOpenRouterKey, humanizeSupportReply, replyRequestsMedia } = require("./support-ai");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
+const {
+  appendTranscript,
+  syncChatUser,
+  ensureChatTranscriptFields,
+} = require("./support-transcripts");
 
 const SUPPORT_BOT_TOKEN = process.env.SUPPORT_BOT_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -103,7 +108,7 @@ function loadChats() {
   try {
     const raw = JSON.parse(fs.readFileSync(CHATS_FILE, "utf8"));
     for (const [chatId, state] of Object.entries(raw)) {
-      chats.set(chatId, state);
+      chats.set(chatId, ensureChatTranscriptFields(state));
     }
   } catch {
     // ignore broken file
@@ -121,6 +126,9 @@ function getChatState(chatId) {
     chats.set(key, {
       agentName: AGENT_NAMES[Math.floor(Math.random() * AGENT_NAMES.length)],
       history: [],
+      messages: [],
+      lastMessageAt: null,
+      user: null,
       escalated: false,
       greeted: false,
       lastOffHoursNoticeAt: null,
@@ -164,11 +172,13 @@ async function closeIdleSupportChat(bot, chatId) {
   }
 
   clearChatTimers(chatKey);
-  chats.delete(chatKey);
+  const text = "Оператор закрыл вопрос";
+  appendTranscript(state, { role: "assistant", content: text, kind: "idle_close" });
+  state.closedAt = new Date().toISOString();
   saveChats();
 
   try {
-    await bot.telegram.sendMessage(chatId, "Оператор закрыл вопрос");
+    await bot.telegram.sendMessage(chatId, text);
   } catch {
     // ignore delivery errors
   }
@@ -337,13 +347,15 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
 
   if (ESCALATION_PATTERN.test(combinedText)) {
     state.escalated = true;
+    syncChatUser(state, from);
     await clearStatusMessage(bot, chatId, state);
     saveChats();
     await notifyAdmins(bot, from, combinedText, "ключевые слова");
-    await bot.telegram.sendMessage(
-      chatId,
-      "Понял, сейчас передам старшему специалисту — вернёмся к вам в ближайшее время.",
-    );
+    const escalationReply =
+      "Понял, сейчас передам старшему специалисту — вернёмся к вам в ближайшее время.";
+    appendTranscript(state, { role: "assistant", content: escalationReply, kind: "escalation" });
+    saveChats();
+    await bot.telegram.sendMessage(chatId, escalationReply);
     return;
   }
 
@@ -370,6 +382,7 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
     state.history.push({ role: "user", content: combinedText });
     state.history.push({ role: "assistant", content: reply });
     state.history = trimHistory(state.history);
+    appendTranscript(state, { role: "assistant", content: reply, kind: "ai" });
     await clearStatusMessage(bot, chatId, state);
     saveChats();
 
@@ -378,10 +391,10 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
     console.error("[support-bot] OpenRouter error:", error.message);
     stopTypingAction(String(chatId));
     await clearStatusMessage(bot, chatId, state);
-    await bot.telegram.sendMessage(
-      chatId,
-      "Что-то подвисло у меня. Напиши ещё раз через пару минут.",
-    );
+    const errorReply = "Что-то подвисло у меня. Напиши ещё раз через пару минут.";
+    appendTranscript(state, { role: "assistant", content: errorReply, kind: "error" });
+    saveChats();
+    await bot.telegram.sendMessage(chatId, errorReply);
     await notifyAdmins(bot, from, combinedText, `ошибка AI: ${error.message}`);
   }
 }
@@ -431,8 +444,12 @@ bot.start(async (ctx) => {
   if (ctx.chat?.type !== "private") return;
 
   const state = getChatState(ctx.chat.id);
+  syncChatUser(state, ctx.from);
   if (!isWithinSupportHours()) {
-    await ctx.reply(buildOffHoursReply());
+    const offHoursText = buildOffHoursReply();
+    appendTranscript(state, { role: "assistant", content: offHoursText, kind: "off_hours" });
+    saveChats();
+    await ctx.reply(offHoursText);
     return;
   }
 
@@ -451,14 +468,18 @@ bot.start(async (ctx) => {
 
   state.greeted = true;
   state.hasUserMessage = false;
+  const greeting = `Привет, на связи ${state.agentName} из поддержки RollerBot, чем помочь?`;
+  appendTranscript(state, { role: "assistant", content: greeting, kind: "greeting" });
   saveChats();
-  await ctx.reply(`Привет, на связи ${state.agentName} из поддержки RollerBot, чем помочь?`);
+  await ctx.reply(greeting);
   scheduleIdleClose(bot, ctx.chat.id);
 });
 
 bot.command("human", async (ctx) => {
   if (ctx.chat?.type !== "private") return;
   const state = getChatState(ctx.chat.id);
+  syncChatUser(state, ctx.from);
+  appendTranscript(state, { role: "user", content: ctx.message?.text || "/human" });
   state.escalated = true;
   state.hasUserMessage = true;
   clearIdleCloseTimer(String(ctx.chat.id));
@@ -469,7 +490,10 @@ bot.command("human", async (ctx) => {
   await clearStatusMessage(bot, ctx.chat.id, state);
   saveChats();
   await notifyAdmins(bot, ctx.from, ctx.message?.text || "/human", "команда /human");
-  await ctx.reply("Передал ваш вопрос старшему специалисту — скоро вернёмся с ответом.");
+  const humanReply = "Передал ваш вопрос старшему специалисту — скоро вернёмся с ответом.";
+  appendTranscript(state, { role: "assistant", content: humanReply, kind: "escalation" });
+  saveChats();
+  await ctx.reply(humanReply);
 });
 
 bot.on("text", async (ctx) => {
@@ -484,21 +508,30 @@ bot.on("text", async (ctx) => {
   const chatId = ctx.chat.id;
   const chatKey = String(chatId);
   const state = getChatState(chatId);
+  syncChatUser(state, ctx.from);
 
   if (!isWithinSupportHours()) {
     const now = Date.now();
     const last = state.lastOffHoursNoticeAt ? Date.parse(state.lastOffHoursNoticeAt) : 0;
     if (!last || now - last > 4 * 60 * 60 * 1000) {
       state.lastOffHoursNoticeAt = new Date().toISOString();
+      const offHoursText = buildOffHoursReply();
+      appendTranscript(state, { role: "user", content: text });
+      appendTranscript(state, { role: "assistant", content: offHoursText, kind: "off_hours" });
       saveChats();
-      await ctx.reply(buildOffHoursReply());
+      await ctx.reply(offHoursText);
     }
     return;
   }
 
   if (state.escalated) {
+    appendTranscript(state, { role: "user", content: text });
+    saveChats();
     await notifyAdmins(bot, ctx.from, text, "диалог уже эскалирован");
-    await ctx.reply("Ваше сообщение передано специалисту, мы скоро ответим.");
+    const escalatedReply = "Ваше сообщение передано специалисту, мы скоро ответим.";
+    appendTranscript(state, { role: "assistant", content: escalatedReply, kind: "escalation" });
+    saveChats();
+    await ctx.reply(escalatedReply);
     return;
   }
 
@@ -512,6 +545,7 @@ bot.on("text", async (ctx) => {
 
   if (!state.pendingTexts) state.pendingTexts = [];
   state.pendingTexts.push(text);
+  appendTranscript(state, { role: "user", content: text });
   saveChats();
   scheduleReply(bot, chatId, ctx.from);
 });
@@ -521,6 +555,7 @@ bot.on(["photo", "document", "video", "voice", "video_note", "audio", "sticker",
 
   const chatId = ctx.chat.id;
   const state = getChatState(chatId);
+  syncChatUser(state, ctx.from);
 
   state.hasUserMessage = true;
   clearIdleCloseTimer(String(chatId));
@@ -537,19 +572,31 @@ bot.on(["photo", "document", "video", "voice", "video_note", "audio", "sticker",
     const last = state.lastOffHoursNoticeAt ? Date.parse(state.lastOffHoursNoticeAt) : 0;
     if (!last || now - last > 4 * 60 * 60 * 1000) {
       state.lastOffHoursNoticeAt = new Date().toISOString();
+      const offHoursText = buildOffHoursReply();
+      appendTranscript(state, { role: "user", content: "[медиа]" });
+      appendTranscript(state, { role: "assistant", content: offHoursText, kind: "off_hours" });
       saveChats();
-      await ctx.reply(buildOffHoursReply());
+      await ctx.reply(offHoursText);
     }
     return;
   }
 
   if (state.escalated) {
+    appendTranscript(state, { role: "user", content: "[медиа]" });
+    saveChats();
     await notifyAdmins(bot, ctx.from, "[медиа]", "диалог уже эскалирован");
-    await ctx.reply("Ваше сообщение передано специалисту, мы скоро ответим.");
+    const escalatedReply = "Ваше сообщение передано специалисту, мы скоро ответим.";
+    appendTranscript(state, { role: "assistant", content: escalatedReply, kind: "escalation" });
+    saveChats();
+    await ctx.reply(escalatedReply);
     return;
   }
 
-  await ctx.reply(buildMediaDeclineReply());
+  appendTranscript(state, { role: "user", content: "[медиа]" });
+  const mediaReply = buildMediaDeclineReply();
+  appendTranscript(state, { role: "assistant", content: mediaReply, kind: "media" });
+  saveChats();
+  await ctx.reply(mediaReply);
 });
 
 bot.catch((error) => {

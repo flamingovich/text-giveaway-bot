@@ -1,5 +1,12 @@
 const crypto = require("crypto");
 const { DateTime } = require("luxon");
+const {
+  readSupportChats,
+  getChatTranscript,
+  formatSupportChatUser,
+  listSupportChats,
+  formatMessageTime,
+} = require("./support-transcripts");
 
 const COOKIE_NAME = "admin_panel";
 const SESSION_MAX_AGE_SEC = 86400 * 7;
@@ -232,6 +239,22 @@ function buildStats(deps, ownerFilter = "") {
   };
 }
 
+const ADMIN_NAV = `
+  <nav class="admin-nav">
+    <a class="btn btn-ghost" href="/admin/dashboard">Статистика</a>
+    <a class="btn btn-ghost" href="/admin/support">Поддержка</a>
+  </nav>`;
+
+function renderAdminTop(title, active = "stats") {
+  return `<header class="top">
+    <h1>${escapeHtml(title)}</h1>
+    <div class="top-actions">
+      ${ADMIN_NAV}
+      <form method="post" action="/admin/logout" class="logout"><button type="submit" class="btn btn-ghost">Выйти</button></form>
+    </div>
+  </header>`;
+}
+
 function renderLoginPage(error = "") {
   return `<!doctype html>
 <html lang="ru">
@@ -358,13 +381,27 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     .bar { width: 100%; max-width: 28px; border-radius: 6px 6px 0 0; min-height: 4px; }
     .bar-wrap span { font-size: 10px; color: #64748b; margin-top: 4px; }
     .logout { margin: 0; }
+    .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .admin-nav { display: flex; gap: 6px; }
+    .support-table a { color: #93c5fd; text-decoration: none; }
+    .support-table a:hover { text-decoration: underline; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; }
+    .badge-warn { background: #713f12; color: #fde68a; }
+    .chat-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; font-size: 13px; color: #94a3b8; }
+    .chat-log {
+      display: flex; flex-direction: column; gap: 10px;
+      max-height: 70vh; overflow: auto; padding: 12px; background: #0f172a; border-radius: 12px; border: 1px solid #334155;
+    }
+    .chat-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+    .chat-msg-user { align-self: flex-end; background: #1d4ed8; color: #eff6ff; border-bottom-right-radius: 4px; }
+    .chat-msg-assistant { align-self: flex-start; background: #334155; color: #f1f5f9; border-bottom-left-radius: 4px; }
+    .chat-msg-system { align-self: center; background: #422006; color: #fde68a; font-size: 12px; max-width: 95%; text-align: center; }
+    .chat-msg-meta { display: block; margin-top: 6px; font-size: 11px; opacity: 0.75; }
+    .preview-cell { max-width: 320px; color: #cbd5e1; }
   </style>
 </head>
 <body>
-  <header class="top">
-    <h1>RollerBot Admin</h1>
-    <form method="post" action="/admin/logout" class="logout"><button type="submit" class="btn btn-ghost">Выйти</button></form>
-  </header>
+  ${renderAdminTop("RollerBot Admin")}
   <main class="wrap">
     <div class="grid">
       <div class="stat"><span>Пользователей</span><b>${stats.totals.users}</b></div>
@@ -416,6 +453,149 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
         <thead><tr><th>Приз</th><th>Статус</th><th>Организатор</th><th>Участн.</th><th>Побед.</th><th>Создан</th></tr></thead>
         <tbody>${drawRows || "<tr><td colspan='6'>Нет данных</td></tr>"}</tbody>
       </table>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function renderSupportListPage(chats, timezone) {
+  const rows = chats
+    .map((chat) => {
+      const time = formatMessageTime(chat.lastMessageAt, timezone);
+      const escalated = chat.escalated
+        ? '<span class="badge badge-warn">эскалация</span>'
+        : '<span class="badge">бот</span>';
+      return `<tr>
+        <td><a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.label)}</a></td>
+        <td>${escapeHtml(chat.agentName)}</td>
+        <td>${escalated}</td>
+        <td class="preview-cell">${escapeHtml(chat.preview)}</td>
+        <td>${chat.messageCount}</td>
+        <td>${escapeHtml(time)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Поддержка — Admin</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
+    .top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #334155; background: #1e293b; }
+    .top h1 { margin: 0; font-size: 20px; }
+    .wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .panel { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; }
+    .panel h2 { margin: 0 0 12px; font-size: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; vertical-align: top; }
+    th { color: #94a3b8; font-weight: 600; }
+    .btn { padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; text-decoration: none; display: inline-block; cursor: pointer; }
+    .btn-ghost { background: transparent; }
+    .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .admin-nav { display: flex; gap: 6px; }
+    .support-table a { color: #93c5fd; text-decoration: none; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; }
+    .badge-warn { background: #713f12; color: #fde68a; }
+    .preview-cell { max-width: 320px; color: #cbd5e1; }
+    .logout { margin: 0; }
+    .hint { color: #94a3b8; font-size: 13px; margin: 0 0 14px; }
+  </style>
+</head>
+<body>
+  ${renderAdminTop("Поддержка")}
+  <main class="wrap">
+    <section class="panel">
+      <h2>Диалоги с ботом поддержки</h2>
+      <p class="hint">Показываются сохранённые переписки из <code>data/support-chats.json</code>. Старые диалоги могут содержать только последние сообщения (до включения полного лога).</p>
+      <table class="support-table">
+        <thead>
+          <tr>
+            <th>Пользователь</th>
+            <th>Оператор</th>
+            <th>Статус</th>
+            <th>Последнее</th>
+            <th>Сообщ.</th>
+            <th>Время</th>
+          </tr>
+        </thead>
+        <tbody>${rows || "<tr><td colspan='6'>Пока нет диалогов</td></tr>"}</tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function roleLabel(role, kind) {
+  if (role === "user") return "Пользователь";
+  if (kind === "greeting") return "Приветствие";
+  if (kind === "escalation") return "Эскалация";
+  if (kind === "off_hours") return "Вне часов";
+  if (kind === "idle_close") return "Закрытие";
+  if (kind === "media") return "Медиа";
+  if (kind === "error") return "Ошибка AI";
+  return "Бот";
+}
+
+function renderSupportChatPage(chatId, state, timezone) {
+  const transcript = getChatTranscript(state);
+  const label = formatSupportChatUser(state, chatId);
+  const agentName = state.agentName || "—";
+  const status = state.escalated ? "эскалация (живой оператор)" : "ведёт бот";
+
+  const messages = transcript
+    .map((msg) => {
+      const role = msg.role === "user" ? "user" : msg.role === "system" ? "system" : "assistant";
+      const css = role === "user" ? "chat-msg-user" : role === "system" ? "chat-msg-system" : "chat-msg-assistant";
+      const meta = `${roleLabel(msg.role, msg.kind)} · ${formatMessageTime(msg.at, timezone)}`;
+      return `<div class="chat-msg ${css}">${escapeHtml(msg.content)}<span class="chat-msg-meta">${escapeHtml(meta)}</span></div>`;
+    })
+    .join("");
+
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(label)} — Поддержка</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
+    .top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #334155; background: #1e293b; }
+    .top h1 { margin: 0; font-size: 20px; }
+    .wrap { padding: 20px; max-width: 900px; margin: 0 auto; }
+    .panel { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; }
+    .btn { padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; text-decoration: none; display: inline-block; }
+    .btn-ghost { background: transparent; }
+    .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .admin-nav { display: flex; gap: 6px; }
+    .logout { margin: 0; }
+    .chat-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; font-size: 13px; color: #94a3b8; }
+    .chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 70vh; overflow: auto; padding: 12px; background: #0f172a; border-radius: 12px; border: 1px solid #334155; }
+    .chat-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+    .chat-msg-user { align-self: flex-end; background: #1d4ed8; color: #eff6ff; border-bottom-right-radius: 4px; }
+    .chat-msg-assistant { align-self: flex-start; background: #334155; color: #f1f5f9; border-bottom-left-radius: 4px; }
+    .chat-msg-system { align-self: center; background: #422006; color: #fde68a; font-size: 12px; max-width: 95%; text-align: center; }
+    .chat-msg-meta { display: block; margin-top: 6px; font-size: 11px; opacity: 0.75; }
+  </style>
+</head>
+<body>
+  ${renderAdminTop("Диалог")}
+  <main class="wrap">
+    <p><a class="btn btn-ghost" href="/admin/support">← Все диалоги</a></p>
+    <section class="panel">
+      <h2 style="margin:0 0 8px">${escapeHtml(label)}</h2>
+      <div class="chat-meta">
+        <span>Оператор: <b>${escapeHtml(agentName)}</b></span>
+        <span>Статус: <b>${escapeHtml(status)}</b></span>
+        <span>Chat ID: <b>${escapeHtml(chatId)}</b></span>
+      </div>
+      <div class="chat-log">${messages || '<div class="chat-msg chat-msg-system">Сообщений пока нет</div>'}</div>
     </section>
   </main>
 </body>
@@ -487,6 +667,23 @@ function registerAdminDashboard(app, deps) {
     );
     const stats = buildStats(deps, selectedOwner);
     res.type("html").send(renderDashboardPage(deps, stats, organizers, selectedOwner, profiles));
+  });
+
+  app.get("/admin/support", requireAuth, (_req, res) => {
+    const raw = readSupportChats();
+    const chats = listSupportChats(raw);
+    res.type("html").send(renderSupportListPage(chats, deps.timezone));
+  });
+
+  app.get("/admin/support/:chatId", requireAuth, (req, res) => {
+    const chatId = String(req.params.chatId || "").trim();
+    const raw = readSupportChats();
+    const state = raw[chatId];
+    if (!state) {
+      res.status(404).type("html").send(`<!doctype html><html lang="ru"><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:24px"><p>Диалог не найден.</p><p><a href="/admin/support" style="color:#93c5fd">← К списку</a></p></body></html>`);
+      return;
+    }
+    res.type("html").send(renderSupportChatPage(chatId, state, deps.timezone));
   });
 }
 
