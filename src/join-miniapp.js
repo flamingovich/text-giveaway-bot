@@ -474,9 +474,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     function apiUrl(path) {
       if (!path) return API_BASE || "";
-      if (/^https?:\\/\\//i.test(path)) return path;
-      const base = API_BASE || "";
-      return base + path;
+      if (path.indexOf("http://") === 0 || path.indexOf("https://") === 0) return path;
+      return (API_BASE || "") + path;
     }
     let projectName = ${JSON.stringify(project?.name || "проект")};
     const RECAPTCHA_SITE_KEY = ${JSON.stringify(recaptchaSiteKey)};
@@ -902,7 +901,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const avatarInner = participant.avatarUrl
         ? '<img src="' +
           escapeHtml(participant.avatarUrl) +
-          '" alt="" class="join-done-avatar-img" loading="lazy" onerror="this.classList.add(\'hidden\');var f=this.nextElementSibling;if(f)f.classList.remove(\'hidden\')" />' +
+          '" alt="" class="join-done-avatar-img" loading="lazy" onerror="this.classList.add(\\'hidden\\');var f=this.nextElementSibling;if(f)f.classList.remove(\\'hidden\\')" />' +
           fallbackHtml
         : fallbackHtml;
       const youBadge = participant.isYou ? '<span class="join-done-you">Вы</span>' : "";
@@ -1183,6 +1182,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (PAGE_MODE === "app") {
         drawId = resolveDrawIdFromTelegram();
         if (!drawId) {
+          try {
+            drawId = String(localStorage.getItem("join:lastDrawId") || "").trim();
+          } catch (_storageError) {
+            drawId = "";
+          }
+        }
+        if (!drawId) {
           hideLoading();
           showMessage("Не указан розыгрыш. Нажмите «Участвовать» в посте канала.");
           return;
@@ -1204,6 +1210,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         hideMessage();
         if (!data?.step) {
           throw new Error("Пустой ответ сервера. Попробуйте ещё раз.");
+        }
+        try {
+          localStorage.setItem("join:lastDrawId", drawId);
+        } catch (_storageError) {
+          /* ignore */
         }
         handleStep(data.step, data);
       }
@@ -1450,10 +1461,6 @@ function registerJoinMiniApp(app, deps) {
 
   app.use("/assets", express.static(deps.ASSETS_DIR));
 
-  app.get("/api/join/health", (_req, res) => {
-    res.json({ ok: true, ts: new Date().toISOString() });
-  });
-
   app.use("/api/join", (req, res, next) => {
     const started = Date.now();
     res.on("finish", () => {
@@ -1462,6 +1469,10 @@ function registerJoinMiniApp(app, deps) {
       );
     });
     next();
+  });
+
+  app.get("/api/join/health", (_req, res) => {
+    res.json({ ok: true, ts: new Date().toISOString() });
   });
 
   app.get("/api/join/:drawId/meta", (req, res) => {
