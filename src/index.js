@@ -989,21 +989,34 @@ function getDrawDurationLabel(draw) {
   return "по команде администратора";
 }
 
+function buildDrawParticipateConditionLine(draw) {
+  const participateUrl = getJoinParticipateUrl(draw.id);
+  if (participateUrl) {
+    return `• Нажать на кнопку <a href="${escapeHtml(participateUrl)}"><b>Участвовать</b></a>`;
+  }
+  return "• Нажать на кнопку Участвовать";
+}
+
 function buildDrawMessage(draw, options = {}) {
   const { includeWinners = false, forCaption = false } = options;
-  const project = getProjectById(draw.projectId);
-  const projectLink =
-    project && project.refLink
-      ? `<a href="${escapeHtml(project.refLink)}"><b>${escapeHtml(project.name)}</b></a>`
-      : escapeHtml(project?.name || "");
+  const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const durationLabel = getDrawDurationLabel(draw);
+
+  const conditions = [];
+  if (project) {
+    const projectLink =
+      project.refLink
+        ? `<a href="${escapeHtml(project.refLink)}"><b>${escapeHtml(project.name)}</b></a>`
+        : escapeHtml(project.name);
+    conditions.push(`• Быть рефералом на ${projectLink}`);
+  }
+  conditions.push(buildDrawParticipateConditionLine(draw));
 
   const base = [
     `<b>🎁 РОЗЫГРЫШ НА ${escapeHtml(draw.prize)}</b>`,
     "",
     "<b>📌 Условия участия</b>",
-    `• Быть рефералом на ${projectLink}`,
-    "• Подтвердить статус реферала",
+    ...conditions,
     "",
     `👥 Призовых мест: ${draw.winnersCount}`,
     `⏰ Итоги через ${escapeHtml(durationLabel)}`,
@@ -1345,6 +1358,7 @@ async function finishDraw(draw) {
   draw.winnerNotifications = {};
   draw.status = DRAW_STATUS.FINISHED;
   await updateDrawPost(draw, true);
+  void ensureUserAvatars([...(draw.participantIds || []), ...(draw.winnerIds || [])], { limit: 100 });
   await notifyWinnersOnFinish(draw);
 }
 
@@ -1611,6 +1625,10 @@ function getWinnerMentionHtml(userProfiles, winnerId) {
 }
 
 async function enrichUserAvatar(userId) {
+  if (!userId || WEB_ONLY || !bot) {
+    return;
+  }
+
   const userProfiles = readUserProjectProfiles();
   const userKey = String(userId);
   if (!userProfiles.users[userKey]) {
@@ -1625,12 +1643,34 @@ async function enrichUserAvatar(userId) {
     if (photos && photos.total_count > 0 && photos.photos?.[0]?.length) {
       const best = photos.photos[0][photos.photos[0].length - 1];
       userProfiles.users[userKey].meta.avatarFileId = best.file_id;
-      userProfiles.users[userKey].meta.avatarUpdatedAt = new Date().toISOString();
-      writeUserProjectProfiles(userProfiles);
+    } else {
+      delete userProfiles.users[userKey].meta.avatarFileId;
     }
-  } catch (error) {
+    userProfiles.users[userKey].meta.avatarUpdatedAt = new Date().toISOString();
+    writeUserProjectProfiles(userProfiles);
+  } catch {
     // Игнорируем, если Telegram не вернул фото профиля.
   }
+}
+
+async function ensureUserAvatars(userIds, options = {}) {
+  const { limit = 25, onlyMissing = true } = options;
+  if (!userIds?.length || WEB_ONLY || !bot) {
+    return;
+  }
+
+  const profiles = readUserProjectProfiles();
+  const targets = [...new Set(userIds.map((id) => String(id)))].filter((userKey) => {
+    if (!/^\d+$/.test(userKey)) {
+      return false;
+    }
+    if (!onlyMissing) {
+      return true;
+    }
+    return !profiles.users?.[userKey]?.meta?.avatarFileId;
+  });
+
+  await Promise.all(targets.slice(0, limit).map((userKey) => enrichUserAvatar(Number(userKey))));
 }
 
 function findUserInProfilesByUsername(username) {
@@ -1806,6 +1846,8 @@ async function addUserToDraw(drawId, userId) {
 
   draw.participantIds.push(userId);
   writeData(data);
+
+  void enrichUserAvatar(userId);
 
   try {
     await updateDrawPost(draw, false);
@@ -2708,9 +2750,12 @@ function renderWebPage(draws, message, webUser) {
     .join("");
   const projects = filterByOwner(readProjects().projects || [], ownerId);
   const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
-  const projectOptions = projects
-    .map((project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`)
-    .join("");
+  const projectOptions = [
+    '<option value="">Без проекта</option>',
+    ...projects.map(
+      (project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`,
+    ),
+  ].join("");
   const channelOptions = knownChannels
     .map((channel) => {
       const preferredValue = channel.username ? `@${channel.username}` : channel.id;
@@ -5082,8 +5127,7 @@ ${getPanelFluidTypographyVars()}
             <div class="draw-row-2">
               <div class="draw-field">
                 ${drawLabel("project", "Проект")}
-                <select class="draw-input" name="projectId" required>
-                  <option value="">Выберите</option>
+                <select class="draw-input" name="projectId">
                   ${projectOptions}
                 </select>
               </div>
@@ -6045,6 +6089,8 @@ registerJoinMiniApp(app, {
   setUserProjectProfile,
   upsertUserMeta,
   addUserToDraw,
+  enrichUserAvatar,
+  ensureUserAvatars,
   readUserProjectProfiles,
   getUserProfileBundle,
   getWinnerDisplayName,
@@ -6065,6 +6111,8 @@ registerWinnersMiniApp(app, {
   getPerWinnerPrizeText,
   getTelegramUserProfileUrl,
   shouldHideParticipant: (userId) => isPlatformAdmin(userId),
+  enrichUserAvatar,
+  ensureUserAvatars,
   bot: WEB_ONLY ? null : bot,
   designPreview: WEB_ONLY,
 });
@@ -6431,8 +6479,8 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       prize = prizeCustomText;
     }
 
-    if (!channelId || !projectId) {
-      redirectWithMessage(res, "Выберите проект и канал. Каналы добавляются в Настройках.");
+    if (!channelId) {
+      redirectWithMessage(res, "Выберите канал. Каналы добавляются в Настройках.");
       return;
     }
 
@@ -6441,7 +6489,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       return;
     }
 
-    if (!getProjectById(projectId, ownerId)) {
+    if (projectId && !getProjectById(projectId, ownerId)) {
       redirectWithMessage(res, "Выбранный проект не найден.");
       return;
     }
@@ -6512,7 +6560,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
     const draw = {
       id: createDrawId(),
       status: publishMode === "now" ? DRAW_STATUS.ACTIVE : DRAW_STATUS.SCHEDULED,
-      projectId,
+      projectId: projectId || null,
       channelId,
       prizeType,
       prize,

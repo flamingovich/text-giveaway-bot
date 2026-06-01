@@ -60,9 +60,10 @@ function formatParticipantsLabel(count) {
 }
 
 function renderAvatar(user) {
+  const fallback = `<div class="winners-avatar-fallback${user.avatarUrl ? " hidden" : ""}" style="${getAvatarFallbackStyle(user.id)}">${escapeHtml(user.initial)}</div>`;
   const inner = user.avatarUrl
-    ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" class="winners-avatar-img" loading="lazy" />`
-    : `<div class="winners-avatar-fallback" style="${getAvatarFallbackStyle(user.id)}">${escapeHtml(user.initial)}</div>`;
+    ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" class="winners-avatar-img" loading="lazy" onerror="this.classList.add('hidden');var f=this.nextElementSibling;if(f)f.classList.remove('hidden')" />${fallback}`
+    : fallback;
   return `<div class="winners-avatar">${inner}</div>`;
 }
 function buildUserViewModel(userId, draw, deps, options = {}) {
@@ -387,6 +388,8 @@ function registerWinnersMiniApp(app, deps) {
     getPerWinnerPrizeText,
     getTelegramUserProfileUrl,
     shouldHideParticipant,
+    enrichUserAvatar,
+    ensureUserAvatars,
     bot,
     designPreview,
   } = deps;
@@ -419,6 +422,14 @@ function registerWinnersMiniApp(app, deps) {
     return buildParticipantsList(draw, viewDeps);
   }
 
+  async function prepareDrawUserAvatars(draw) {
+    if (!ensureUserAvatars || !draw) {
+      return;
+    }
+    const ids = [...new Set([...(draw.winnerIds || []), ...(draw.participantIds || [])])];
+    await ensureUserAvatars(ids, { limit: 50 });
+  }
+
   app.get("/winners/avatar/:userId", async (req, res) => {
     const userProfiles = readUserProjectProfiles();
     const fileId = userProfiles.users?.[String(req.params.userId)]?.meta?.avatarFileId;
@@ -438,7 +449,7 @@ function registerWinnersMiniApp(app, deps) {
     res.type("html").send(renderWinnersAppLauncherPage());
   });
 
-  app.get("/winners/:drawId", (req, res) => {
+  app.get("/winners/:drawId", async (req, res) => {
     if (req.params.drawId === "app") {
       res.redirect(301, "/winners/app");
       return;
@@ -448,17 +459,19 @@ function registerWinnersMiniApp(app, deps) {
       res.status(404).type("html").send("<h1>Розыгрыш не найден или ещё не завершён</h1>");
       return;
     }
+    await prepareDrawUserAvatars(draw);
     const winners = buildWinnersList(draw);
     const participants = buildParticipantsForPage(draw);
     res.type("html").send(renderWinnersPage(draw, winners, participants));
   });
 
-  app.get("/api/winners/:drawId", (req, res) => {
+  app.get("/api/winners/:drawId", async (req, res) => {
     const draw = getFinishedDraw(req.params.drawId);
     if (!draw) {
       res.status(404).json({ error: "Розыгрыш не найден или ещё не завершён." });
       return;
     }
+    await prepareDrawUserAvatars(draw);
     const participants = buildParticipantsForPage(draw);
     res.json({
       drawId: draw.id,

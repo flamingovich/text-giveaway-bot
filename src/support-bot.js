@@ -26,6 +26,7 @@ const SUPPORT_TYPING_MS_PER_CHAR_MIN = Number(process.env.SUPPORT_TYPING_MS_PER_
 const SUPPORT_TYPING_MS_PER_CHAR_MAX = Number(process.env.SUPPORT_TYPING_MS_PER_CHAR_MAX || 28);
 const TYPING_ACTION_INTERVAL_MS = 4_500;
 const SUPPORT_HISTORY_LIMIT = Number(process.env.SUPPORT_HISTORY_LIMIT || 16);
+const SUPPORT_IDLE_CLOSE_MS = Number(process.env.SUPPORT_IDLE_CLOSE_MS || 10 * 60 * 1000);
 const SUPPORT_ADMIN_IDS = (process.env.SUPPORT_ADMIN_IDS || process.env.ADMIN_IDS || "")
   .split(",")
   .map((id) => Number(id.trim()))
@@ -62,6 +63,8 @@ const typingStartTimers = new Map();
 const typingActionTimers = new Map();
 /** @type {Map<string, NodeJS.Timeout>} */
 const statusAnimTimers = new Map();
+/** @type {Map<string, NodeJS.Timeout>} */
+const idleCloseTimers = new Map();
 
 const STATUS_DOT_FRAMES = ["", ".", "..", "..."];
 const STATUS_ANIM_MS = 480;
@@ -123,9 +126,69 @@ function getChatState(chatId) {
       lastOffHoursNoticeAt: null,
       pendingTexts: [],
       statusMessageId: null,
+      hasUserMessage: false,
     });
   }
   return chats.get(key);
+}
+
+function clearIdleCloseTimer(chatKey) {
+  const timer = idleCloseTimers.get(chatKey);
+  if (timer) {
+    clearTimeout(timer);
+    idleCloseTimers.delete(chatKey);
+  }
+}
+
+function clearChatTimers(chatKey) {
+  clearPendingReplyTimer(chatKey);
+  clearTypingStartTimer(chatKey);
+  stopTypingAction(chatKey);
+  stopStatusAnimation(chatKey);
+  clearIdleCloseTimer(chatKey);
+}
+
+function resetChatState(chatId) {
+  const chatKey = String(chatId);
+  clearChatTimers(chatKey);
+  chats.delete(chatKey);
+  saveChats();
+}
+
+async function closeIdleSupportChat(bot, chatId) {
+  const chatKey = String(chatId);
+  const state = chats.get(chatKey);
+  if (!state || state.hasUserMessage || state.escalated) {
+    clearIdleCloseTimer(chatKey);
+    return;
+  }
+
+  clearChatTimers(chatKey);
+  chats.delete(chatKey);
+  saveChats();
+
+  try {
+    await bot.telegram.sendMessage(chatId, "Оператор закрыл вопрос");
+  } catch {
+    // ignore delivery errors
+  }
+}
+
+function scheduleIdleClose(bot, chatId) {
+  const chatKey = String(chatId);
+  clearIdleCloseTimer(chatKey);
+  if (!SUPPORT_IDLE_CLOSE_MS || SUPPORT_IDLE_CLOSE_MS <= 0) {
+    return;
+  }
+
+  const timer = setTimeout(() => {
+    idleCloseTimers.delete(chatKey);
+    closeIdleSupportChat(bot, chatId).catch((error) => {
+      console.error("[support-bot] idle close error:", error.message);
+    });
+  }, SUPPORT_IDLE_CLOSE_MS);
+
+  idleCloseTimers.set(chatKey, timer);
 }
 
 function isWithinSupportHours(now = DateTime.now().setZone(TIMEZONE)) {
@@ -387,14 +450,18 @@ bot.start(async (ctx) => {
   await deleteMessageSafe(bot, ctx.chat.id, searchMessage.message_id);
 
   state.greeted = true;
+  state.hasUserMessage = false;
   saveChats();
   await ctx.reply(`Привет, на связи ${state.agentName} из поддержки RollerBot, чем помочь?`);
+  scheduleIdleClose(bot, ctx.chat.id);
 });
 
 bot.command("human", async (ctx) => {
   if (ctx.chat?.type !== "private") return;
   const state = getChatState(ctx.chat.id);
   state.escalated = true;
+  state.hasUserMessage = true;
+  clearIdleCloseTimer(String(ctx.chat.id));
   clearPendingReplyTimer(String(ctx.chat.id));
   clearTypingStartTimer(String(ctx.chat.id));
   stopTypingAction(String(ctx.chat.id));
@@ -440,6 +507,9 @@ bot.on("text", async (ctx) => {
     saveChats();
   }
 
+  state.hasUserMessage = true;
+  clearIdleCloseTimer(chatKey);
+
   if (!state.pendingTexts) state.pendingTexts = [];
   state.pendingTexts.push(text);
   saveChats();
@@ -452,6 +522,8 @@ bot.on(["photo", "document", "video", "voice", "video_note", "audio", "sticker",
   const chatId = ctx.chat.id;
   const state = getChatState(chatId);
 
+  state.hasUserMessage = true;
+  clearIdleCloseTimer(String(chatId));
   clearPendingReplyTimer(String(chatId));
   clearTypingStartTimer(String(chatId));
   stopTypingAction(String(chatId));

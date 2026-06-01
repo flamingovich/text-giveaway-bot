@@ -1661,6 +1661,10 @@ function getJoinFlowStyles() {
       object-fit: cover;
     }
 
+    body.join-flow .join-done-avatar-fallback.hidden {
+      display: none;
+    }
+
     body.join-flow .join-done-avatar-fallback {
       display: flex;
       align-items: center;
@@ -1668,6 +1672,8 @@ function getJoinFlowStyles() {
       font-size: 14px;
       font-weight: 700;
       color: #fff;
+      background: linear-gradient(180deg, var(--avatar-grad-top, #7BD3FF) 0%, var(--avatar-grad-bottom, #2AABEE) 100%);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
     }
 
     body.join-flow .join-done-row-body {
@@ -2206,6 +2212,10 @@ function getWinnersPageStyles() {
       display: block;
       object-fit: cover;
       border-radius: 50%;
+    }
+
+    body.winners-page .winners-avatar-fallback.hidden {
+      display: none;
     }
 
     body.winners-page .winners-avatar-fallback {

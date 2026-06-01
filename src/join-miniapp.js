@@ -838,9 +838,20 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     function renderDoneParticipant(participant) {
+      const fallbackHtml =
+        '<div class="join-done-avatar-fallback' +
+        (participant.avatarUrl ? " hidden" : "") +
+        '" style="' +
+        escapeHtml(participant.fallbackStyle || "") +
+        '">' +
+        escapeHtml(participant.initial || "?") +
+        "</div>";
       const avatarInner = participant.avatarUrl
-        ? '<img src="' + escapeHtml(participant.avatarUrl) + '" alt="" class="join-done-avatar-img" loading="lazy" />'
-        : '<div class="join-done-avatar-fallback" style="' + escapeHtml(participant.fallbackStyle || "") + '">' + escapeHtml(participant.initial || "?") + "</div>";
+        ? '<img src="' +
+          escapeHtml(participant.avatarUrl) +
+          '" alt="" class="join-done-avatar-img" loading="lazy" onerror="this.classList.add(\'hidden\');var f=this.nextElementSibling;if(f)f.classList.remove(\'hidden\')" />' +
+          fallbackHtml
+        : fallbackHtml;
       const youBadge = participant.isYou ? '<span class="join-done-you">Вы</span>' : "";
       const handle = participant.username
         ? escapeHtml(participant.username)
@@ -1142,6 +1153,8 @@ function registerJoinMiniApp(app, deps) {
     setUserProjectProfile,
     upsertUserMeta,
     addUserToDraw,
+    enrichUserAvatar,
+    ensureUserAvatars,
     readUserProjectProfiles,
     getUserProfileBundle,
     getWinnerDisplayName,
@@ -1193,6 +1206,9 @@ function registerJoinMiniApp(app, deps) {
       return null;
     }
     upsertUserMeta(user);
+    if (enrichUserAvatar) {
+      void enrichUserAvatar(user.id);
+    }
     return user;
   }
 
@@ -1256,6 +1272,17 @@ function registerJoinMiniApp(app, deps) {
     });
   }
 
+  async function buildJoinDonePayloadWithAvatars(draw, userId, extra = {}) {
+    const ids = [...(draw.participantIds || [])];
+    if (userId) {
+      ids.push(userId);
+    }
+    if (ensureUserAvatars) {
+      await ensureUserAvatars(ids, { limit: 30 });
+    }
+    return buildJoinDonePayload(draw, userId, extra);
+  }
+
   function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
     if (!projectId) {
       return false;
@@ -1272,7 +1299,7 @@ function registerJoinMiniApp(app, deps) {
   async function resolveJoinEntry(draw, userId) {
     if (draw.participantIds.includes(userId)) {
       clearJoinApiSession(userId, draw.id);
-      return buildJoinDonePayload(draw, userId, {
+      return buildJoinDonePayloadWithAvatars(draw, userId, {
         message: "Вы уже участвуете!",
         alreadyJoined: true,
       });
@@ -1281,16 +1308,7 @@ function registerJoinMiniApp(app, deps) {
     if (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) {
       const result = await addUserToDraw(draw.id, userId);
       clearJoinApiSession(userId, draw.id);
-      return buildJoinDonePayload(draw, userId, {
-        message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
-        alreadyJoined: Boolean(result.already),
-      });
-    }
-
-    if (!draw.projectId) {
-      const result = await addUserToDraw(draw.id, userId);
-      clearJoinApiSession(userId, draw.id);
-      return buildJoinDonePayload(draw, userId, {
+      return buildJoinDonePayloadWithAvatars(draw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       });
@@ -1301,7 +1319,7 @@ function registerJoinMiniApp(app, deps) {
     if (canSkip) {
       const result = await addUserToDraw(draw.id, userId);
       clearJoinApiSession(userId, draw.id);
-      return buildJoinDonePayload(draw, userId, {
+      return buildJoinDonePayloadWithAvatars(draw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       });
@@ -1355,7 +1373,7 @@ function registerJoinMiniApp(app, deps) {
     res.type("html").send(renderJoinPage(req.params.drawId, draw, project, { recaptchaSiteKey: RECAPTCHA_SITE_KEY }));
   });
 
-  app.post("/api/join/:drawId/live", requireJoinUser, (req, res) => {
+  app.post("/api/join/:drawId/live", requireJoinUser, async (req, res) => {
     const drawId = req.params.drawId;
     const userId = req.telegramUser.id;
     const draw = getActiveDraw(drawId);
@@ -1368,6 +1386,9 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
+    if (ensureUserAvatars) {
+      await ensureUserAvatars(draw.participantIds, { limit: 12 });
+    }
     const payload = buildJoinDonePayload(draw, userId);
     res.json({
       participantCount: payload.participantCount,
@@ -1459,6 +1480,18 @@ function registerJoinMiniApp(app, deps) {
       }
     } else if (req.body?.verified !== true) {
       res.status(400).json({ error: "Подтвердите, что вы не робот.", step: "captcha" });
+      return;
+    }
+
+    if (!draw.projectId) {
+      const result = await addUserToDraw(draw.id, userId);
+      clearJoinApiSession(userId, drawId);
+      res.json(
+        await buildJoinDonePayloadWithAvatars(draw, userId, {
+          message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+          alreadyJoined: Boolean(result.already),
+        }),
+      );
       return;
     }
 
@@ -1556,7 +1589,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
     res.json(
-      buildJoinDonePayload(updatedDraw, userId, {
+      await buildJoinDonePayloadWithAvatars(updatedDraw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       }),

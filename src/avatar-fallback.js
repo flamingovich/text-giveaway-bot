@@ -24,7 +24,11 @@ function getAvatarFallbackStyle(userId) {
     hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
   }
   const palette = TG_AVATAR_GRADIENTS[hash % TG_AVATAR_GRADIENTS.length];
-  return `--avatar-grad-top:${palette.top};--avatar-grad-bottom:${palette.bottom};`;
+  return [
+    `--avatar-grad-top:${palette.top}`,
+    `--avatar-grad-bottom:${palette.bottom}`,
+    `background:linear-gradient(180deg,${palette.top} 0%,${palette.bottom} 100%)`,
+  ].join(";");
 }
 
 module.exports = { TG_AVATAR_GRADIENTS, getAvatarFallbackStyle };
