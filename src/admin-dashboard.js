@@ -535,6 +535,7 @@ function roleLabel(role, kind) {
   if (kind === "escalation") return "Эскалация";
   if (kind === "off_hours") return "Вне часов";
   if (kind === "idle_close") return "Закрытие";
+  if (kind === "closed") return "Завершён (/stop)";
   if (kind === "media") return "Медиа";
   if (kind === "error") return "Ошибка AI";
   return "Бот";

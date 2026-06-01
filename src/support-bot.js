@@ -157,6 +157,35 @@ function resetChatState(chatId) {
   saveChats();
 }
 
+function buildStopReply(agentName) {
+  const name = agentName || "оператор";
+  return `Ок, ${name} закончил диалог. Если снова понадобится помощь — нажми /start`;
+}
+
+async function endSupportChat(bot, chatId, state, from) {
+  const chatKey = String(chatId);
+  clearChatTimers(chatKey);
+  stopStatusAnimation(chatKey);
+  await clearStatusMessage(bot, chatId, state);
+
+  if (state) {
+    syncChatUser(state, from);
+    state.pendingTexts = [];
+    const replyText = buildStopReply(state.agentName);
+    const outgoing = humanizeSupportReply(replyText, state.agentName);
+    appendTranscript(state, { role: "assistant", content: outgoing, kind: "closed" });
+    state.closedAt = new Date().toISOString();
+    saveChats();
+    try {
+      await bot.telegram.sendMessage(chatId, outgoing);
+    } catch {
+      // ignore delivery errors
+    }
+  }
+
+  resetChatState(chatId);
+}
+
 async function closeIdleSupportChat(bot, chatId) {
   const chatKey = String(chatId);
   const state = chats.get(chatKey);
@@ -426,6 +455,19 @@ bot.start(async (ctx) => {
   scheduleIdleClose(bot, ctx.chat.id);
 });
 
+bot.command("stop", async (ctx) => {
+  if (ctx.chat?.type !== "private") return;
+
+  const chatKey = String(ctx.chat.id);
+  const state = chats.get(chatKey);
+  if (!state) {
+    await ctx.reply("Диалога нет. Чтобы начать — /start");
+    return;
+  }
+
+  await endSupportChat(bot, ctx.chat.id, state, ctx.from);
+});
+
 bot.on("text", async (ctx) => {
   if (ctx.chat?.type !== "private") {
     await ctx.reply("Напишите мне в личные сообщения — так быстрее поможем.");
@@ -435,6 +477,7 @@ bot.on("text", async (ctx) => {
   const text = String(ctx.message.text || "").trim();
   if (!text) return;
   if (/^\/human\b/i.test(text)) return;
+  if (/^\/stop\b/i.test(text)) return;
   if (text.startsWith("/")) return;
 
   const chatId = ctx.chat.id;
@@ -533,7 +576,10 @@ async function boot() {
 
   await bot.launch();
   try {
-    await bot.telegram.setMyCommands([{ command: "start", description: "Начать чат с поддержкой" }]);
+    await bot.telegram.setMyCommands([
+      { command: "start", description: "Начать чат с поддержкой" },
+      { command: "stop", description: "Завершить диалог" },
+    ]);
   } catch (error) {
     console.warn("[support-bot] не удалось обновить команды бота:", error.message);
   }
