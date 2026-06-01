@@ -1122,12 +1122,12 @@ function getJoinDirectLink(drawId) {
 }
 
 function getJoinParticipateUrl(drawId) {
+  if (WEB_PUBLIC_URL.startsWith("https://")) {
+    return getJoinWebAppUrl(drawId);
+  }
   const directLink = getJoinDirectLink(drawId);
   if (directLink) {
     return directLink;
-  }
-  if (WEB_PUBLIC_URL.startsWith("https://")) {
-    return getJoinWebAppUrl(drawId);
   }
   return getJoinDeepLink(drawId);
 }
@@ -1311,33 +1311,84 @@ async function publishDraw(draw) {
   draw.status = DRAW_STATUS.ACTIVE;
 }
 
+const DRAW_POST_UPDATE_DEBOUNCE_MS = Number(process.env.DRAW_POST_UPDATE_DEBOUNCE_MS || 8000);
+/** @type {Map<string, { timer: NodeJS.Timeout, includeWinners: boolean }>} */
+const drawPostUpdateTimers = new Map();
+
+function isIgnorableTelegramEditError(error) {
+  const message = String(error?.message || error || "");
+  return message.includes("message is not modified") || message.includes("Too Many Requests");
+}
+
 async function updateDrawPost(draw, includeWinners) {
   const keyboard = includeWinners ? getFinishedKeyboard(draw) : getKeyboard(draw.id, draw.participantIds.length);
 
-  if (draw.messageType === "photo") {
-    await bot.telegram.editMessageCaption(
+  try {
+    if (draw.messageType === "photo") {
+      await bot.telegram.editMessageCaption(
+        draw.channelId,
+        draw.messageId,
+        undefined,
+        buildDrawMessage(draw, { includeWinners, forCaption: true }),
+        {
+          parse_mode: "HTML",
+          ...keyboard,
+        },
+      );
+      return;
+    }
+
+    await bot.telegram.editMessageText(
       draw.channelId,
       draw.messageId,
       undefined,
-      buildDrawMessage(draw, { includeWinners, forCaption: true }),
+      buildDrawMessage(draw, { includeWinners }),
       {
         parse_mode: "HTML",
         ...keyboard,
-      }
+      },
     );
+  } catch (error) {
+    if (isIgnorableTelegramEditError(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+
+function scheduleDrawPostUpdate(drawId, includeWinners = false) {
+  if (!drawId || WEB_ONLY) {
     return;
   }
 
-  await bot.telegram.editMessageText(
-    draw.channelId,
-    draw.messageId,
-    undefined,
-    buildDrawMessage(draw, { includeWinners }),
-    {
-      parse_mode: "HTML",
-      ...keyboard,
+  const prev = drawPostUpdateTimers.get(drawId);
+  if (prev?.timer) {
+    clearTimeout(prev.timer);
+  }
+
+  const flushIncludeWinners = Boolean(prev?.includeWinners || includeWinners);
+
+  const timer = setTimeout(async () => {
+    drawPostUpdateTimers.delete(drawId);
+    const data = readData();
+    const draw = data.draws.find((item) => item.id === drawId);
+    if (!draw || !draw.messageId || draw.status === DRAW_STATUS.DRAFT) {
+      return;
     }
-  );
+    const winners = flushIncludeWinners || draw.status === DRAW_STATUS.FINISHED;
+    try {
+      await updateDrawPost(draw, winners);
+    } catch (error) {
+      if (!isIgnorableTelegramEditError(error)) {
+        console.error(`Не удалось обновить пост ${drawId}:`, error.message);
+      }
+    }
+  }, DRAW_POST_UPDATE_DEBOUNCE_MS);
+
+  drawPostUpdateTimers.set(drawId, {
+    timer,
+    includeWinners: flushIncludeWinners,
+  });
 }
 
 function pickWinners(draw) {
@@ -1523,20 +1574,11 @@ async function processWinnerConfirmTimeouts(data) {
 
 async function syncActiveDrawKeyboards() {
   const data = readData();
-  let hasErrors = false;
   for (const draw of data.draws) {
     if (draw.status !== DRAW_STATUS.ACTIVE || !draw.messageId) {
       continue;
     }
-    try {
-      await updateDrawPost(draw, false);
-    } catch (error) {
-      hasErrors = true;
-      console.error(`Не удалось обновить кнопки для ${draw.id}:`, error.message);
-    }
-  }
-  if (!hasErrors) {
-    writeData(data);
+    scheduleDrawPostUpdate(draw.id, false);
   }
 }
 
@@ -1872,9 +1914,7 @@ async function addUserToDraw(drawId, userId) {
   draw.participantIds.push(userId);
   writeData(data);
 
-  void updateDrawPost(draw, false).catch((error) => {
-    console.error("Не удалось обновить пост после участия:", error.message);
-  });
+  scheduleDrawPostUpdate(draw.id, false);
   void enrichUserAvatar(userId);
 
   return {
@@ -6107,6 +6147,7 @@ app.post("/auth/session", (req, res) => {
 registerJoinMiniApp(app, {
   validateInitData,
   BOT_TOKEN,
+  WEB_PUBLIC_URL,
   readData,
   readProjects,
   getProjectById,
@@ -7316,7 +7357,8 @@ async function bootstrap() {
     }
   });
   await bot.launch();
-  await syncActiveDrawKeyboards();
+  console.log("[boot] Telegram bot polling started");
+  void syncActiveDrawKeyboards();
   await syncAllOrganizerPanelMenus();
   console.log(`Бот запущен: @${BOT_USERNAME}`);
 }

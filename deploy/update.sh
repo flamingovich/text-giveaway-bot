@@ -8,6 +8,12 @@ APP_USER="giveaway"
 
 cd "${APP_DIR}"
 sudo -u "${APP_USER}" git -C "${APP_DIR}" pull origin main
+BUILD_ID="$(date +%s)"
+if grep -q '^JOIN_PAGE_BUILD=' "${APP_DIR}/.env" 2>/dev/null; then
+  sudo sed -i "s/^JOIN_PAGE_BUILD=.*/JOIN_PAGE_BUILD=${BUILD_ID}/" "${APP_DIR}/.env"
+else
+  echo "JOIN_PAGE_BUILD=${BUILD_ID}" | sudo tee -a "${APP_DIR}/.env" >/dev/null
+fi
 sudo -u "${APP_USER}" npm install --omit=dev
 cp "${APP_DIR}/deploy/ecosystem.config.cjs" /etc/giveaway-bot.ecosystem.config.cjs
 sudo -u "${APP_USER}" pm2 startOrRestart /etc/giveaway-bot.ecosystem.config.cjs

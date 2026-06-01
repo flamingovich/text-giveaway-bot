@@ -303,6 +303,7 @@ function renderJoinStepCard(stepId, stepNum, title, bodyHtml, extraClass = "") {
 function renderJoinPage(drawId, draw, project, options = {}) {
   const isPreview = drawId === "preview";
   const recaptchaSiteKey = options.recaptchaSiteKey || "";
+  const apiBase = String(options.apiBase || "").replace(/\/$/, "");
   const refLink = escapeHtml(project?.refLink || "");
   const projectName = escapeHtml(project?.name || "проект");
 
@@ -467,14 +468,39 @@ function renderJoinPage(drawId, draw, project, options = {}) {
   <script>
     ${getMiniAppInitScript({ authSession: false, previewShell: true })}
     const PAGE_MODE = ${JSON.stringify(drawId === "app" ? "app" : drawId === "preview" ? "preview" : "draw")};
+    const PAGE_BUILD = ${JSON.stringify(JOIN_PAGE_BUILD)};
+    const API_BASE = ${JSON.stringify(apiBase)};
     let drawId = PAGE_MODE === "draw" ? ${JSON.stringify(drawId)} : "";
+
+    function apiUrl(path) {
+      if (!path) return API_BASE || "";
+      if (/^https?:\\/\\//i.test(path)) return path;
+      const base = API_BASE || "";
+      return base + path;
+    }
     let projectName = ${JSON.stringify(project?.name || "проект")};
     const RECAPTCHA_SITE_KEY = ${JSON.stringify(recaptchaSiteKey)};
     const tg = window.Telegram?.WebApp;
 
+    function parseStartParamFromInitData(raw) {
+      if (!raw) return "";
+      try {
+        return String(new URLSearchParams(raw).get("start_param") || "").trim();
+      } catch (_error) {
+        return "";
+      }
+    }
+
     function resolveDrawIdFromTelegram() {
       if (PAGE_MODE === "draw") return drawId;
-      return String(tg?.initDataUnsafe?.start_param || "").trim();
+      const fromUnsafe = String(tg?.initDataUnsafe?.start_param || "").trim();
+      if (fromUnsafe) return fromUnsafe;
+      const fromInitData = parseStartParamFromInitData(initData());
+      if (fromInitData) return fromInitData;
+      const params = new URLSearchParams(window.location.search || "");
+      return String(
+        params.get("tgWebAppStartParam") || params.get("startapp") || params.get("drawId") || "",
+      ).trim();
     }
 
     function applyProjectMeta(meta) {
@@ -489,7 +515,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     async function loadDrawMeta() {
-      const res = await fetch("/api/join/" + encodeURIComponent(drawId) + "/meta");
+      const res = await fetch(apiUrl("/api/join/" + encodeURIComponent(drawId) + "/meta"), {
+        cache: "no-store",
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || "Розыгрыш недоступен.");
@@ -728,9 +756,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const res = await fetch(path, {
+        const res = await fetch(apiUrl(path), {
           method: "POST",
           signal: controller.signal,
+          cache: "no-store",
           headers: {
             "Content-Type": "application/json",
             "X-Telegram-Init-Data": initData(),
@@ -1012,7 +1041,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       setRegistrationLocked(true);
     }
 
-    document.getElementById("refConfirmBtn").addEventListener("click", async () => {
+    function bindClick(id, handler) {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("click", handler);
+    }
+
+    bindClick("refConfirmBtn", async () => {
       const btn = document.getElementById("refConfirmBtn");
       const status = document.getElementById("refConfirmStatus");
       if (!btn || refConfirmed || btn.disabled) return;
@@ -1041,7 +1075,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       setRegistrationLocked(false);
     });
 
-    document.getElementById("registrationDoneBtn").addEventListener("click", async () => {
+    bindClick("registrationDoneBtn", async () => {
       if (!refConfirmed) {
         showMessage("Сначала подтвердите статус реферала.");
         return;
@@ -1059,7 +1093,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     });
 
-    document.getElementById("trc20PasteBtn").addEventListener("click", async () => {
+    bindClick("trc20PasteBtn", async () => {
       const input = document.getElementById("trc20Input");
       if (!input) return;
       try {
@@ -1073,7 +1107,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     });
 
-    document.getElementById("trc20SubmitBtn").addEventListener("click", async () => {
+    bindClick("trc20SubmitBtn", async () => {
       const address = document.getElementById("trc20Input").value.trim();
       try {
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/trc20", { address });
@@ -1085,6 +1119,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     (async () => {
+      try {
+        const healthRes = await fetch(apiUrl("/api/join/health"), { cache: "no-store" });
+        const health = await healthRes.json().catch(() => ({}));
+        console.log("[join-client] health", healthRes.status, health);
+      } catch (healthError) {
+        console.error("[join-client] health failed:", healthError.message);
+      }
+
       if (PAGE_MODE === "preview") {
         document.getElementById("loading").classList.add("hidden");
         document.getElementById("previewToolbar").classList.remove("hidden");
@@ -1192,8 +1234,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         }
       }, 13000);
 
+      console.log("[join-client] boot drawId=" + drawId + " build=" + PAGE_BUILD);
+
       bootJoin()
         .catch((error) => {
+          console.error("[join-client] boot failed:", error.message);
           hideLoading();
           showMessage(error.message);
         })
@@ -1209,6 +1254,8 @@ function sendJoinHtml(res, html) {
   res.setHeader("Pragma", "no-cache");
   res.type("html").send(html);
 }
+
+const JOIN_PAGE_BUILD = process.env.JOIN_PAGE_BUILD || String(Date.now());
 
 function registerJoinMiniApp(app, deps) {
   const {
@@ -1436,12 +1483,18 @@ function registerJoinMiniApp(app, deps) {
     });
   });
 
-  app.get("/join/app", (_req, res) => {
+  const joinPageOptions = () => ({
+    recaptchaSiteKey: RECAPTCHA_SITE_KEY,
+    apiBase: deps.WEB_PUBLIC_URL || "",
+  });
+
+  app.get("/join/app", (req, res) => {
+    console.log(
+      `[join] GET /join/app build=${JOIN_PAGE_BUILD} ua=${String(req.headers["user-agent"] || "").slice(0, 96)}`,
+    );
     sendJoinHtml(
       res,
-      renderJoinPage("app", { id: "app", status: DRAW_STATUS.ACTIVE, projectId: null }, null, {
-        recaptchaSiteKey: RECAPTCHA_SITE_KEY,
-      }),
+      renderJoinPage("app", { id: "app", status: DRAW_STATUS.ACTIVE, projectId: null }, null, joinPageOptions()),
     );
   });
 
@@ -1452,13 +1505,15 @@ function registerJoinMiniApp(app, deps) {
     }
     const draw = getActiveDraw(req.params.drawId);
     if (!draw) {
+      console.warn(`[join] GET /join/${req.params.drawId} → 404`);
       res.status(404).type("html").send("<h1>Розыгрыш недоступен</h1>");
       return;
     }
+    console.log(`[join] GET /join/${req.params.drawId} build=${JOIN_PAGE_BUILD}`);
     const project = draw.projectId ? getProjectById(draw.projectId) : null;
     sendJoinHtml(
       res,
-      renderJoinPage(req.params.drawId, draw, project, { recaptchaSiteKey: RECAPTCHA_SITE_KEY }),
+      renderJoinPage(req.params.drawId, draw, project, joinPageOptions()),
     );
   });
 
