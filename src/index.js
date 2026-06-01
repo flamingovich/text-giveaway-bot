@@ -1639,7 +1639,12 @@ async function enrichUserAvatar(userId) {
   }
 
   try {
-    const photos = await bot.telegram.getUserProfilePhotos(userId, 0, 1);
+    const photos = await Promise.race([
+      bot.telegram.getUserProfilePhotos(userId, 0, 1),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("avatar_timeout")), 4000);
+      }),
+    ]);
     if (photos && photos.total_count > 0 && photos.photos?.[0]?.length) {
       const best = photos.photos[0][photos.photos[0].length - 1];
       userProfiles.users[userKey].meta.avatarFileId = best.file_id;
@@ -1653,24 +1658,43 @@ async function enrichUserAvatar(userId) {
   }
 }
 
+let avatarEnrichChain = Promise.resolve();
+
+function runSerializedAvatarTask(task) {
+  const run = avatarEnrichChain.then(task, task);
+  avatarEnrichChain = run.catch(() => {});
+  return run;
+}
+
 async function ensureUserAvatars(userIds, options = {}) {
-  const { limit = 25, onlyMissing = true } = options;
+  const { limit = 25, onlyMissing = true, wait = false } = options;
   if (!userIds?.length || WEB_ONLY || !bot) {
     return;
   }
 
-  const profiles = readUserProjectProfiles();
-  const targets = [...new Set(userIds.map((id) => String(id)))].filter((userKey) => {
-    if (!/^\d+$/.test(userKey)) {
-      return false;
-    }
-    if (!onlyMissing) {
-      return true;
-    }
-    return !profiles.users?.[userKey]?.meta?.avatarFileId;
-  });
+  const job = async () => {
+    const profiles = readUserProjectProfiles();
+    const targets = [...new Set(userIds.map((id) => String(id)))].filter((userKey) => {
+      if (!/^\d+$/.test(userKey)) {
+        return false;
+      }
+      if (!onlyMissing) {
+        return true;
+      }
+      return !profiles.users?.[userKey]?.meta?.avatarFileId;
+    });
 
-  await Promise.all(targets.slice(0, limit).map((userKey) => enrichUserAvatar(Number(userKey))));
+    for (const userKey of targets.slice(0, limit)) {
+      await enrichUserAvatar(Number(userKey));
+    }
+  };
+
+  if (wait) {
+    await runSerializedAvatarTask(job);
+    return;
+  }
+
+  void runSerializedAvatarTask(job);
 }
 
 function findUserInProfilesByUsername(username) {

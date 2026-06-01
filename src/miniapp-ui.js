@@ -1898,13 +1898,19 @@ function getWinnersPageStyles() {
       overflow-x: clip;
       padding-left: var(--winners-pad-left);
       padding-right: var(--winners-pad-right);
-      opacity: 0;
-      transform: translateY(10px);
-      animation: winners-page-in 0.26s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+      opacity: 1;
+      transform: none;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      body.winners-page .winners-shell {
+        transform: translateY(10px);
+        animation: winners-page-in 0.26s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+      }
     }
 
     @keyframes winners-page-in {
-      to { opacity: 1; transform: translateY(0); }
+      to { transform: translateY(0); }
     }
 
     body.winners-page .winners-header {
@@ -2176,20 +2182,26 @@ function getWinnersPageStyles() {
       border-radius: 12px;
       padding: 10px;
       box-shadow: 0 4px 12px rgba(27, 45, 94, 0.04);
-      opacity: 0;
-      transform: translateY(6px);
-      animation: winners-card-in 0.22s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+      opacity: 1;
+      transform: none;
       min-width: 0;
     }
 
-    body.winners-page .winners-row:nth-child(1) { animation-delay: 0.03s; }
-    body.winners-page .winners-row:nth-child(2) { animation-delay: 0.06s; }
-    body.winners-page .winners-row:nth-child(3) { animation-delay: 0.09s; }
-    body.winners-page .winners-row:nth-child(4) { animation-delay: 0.12s; }
-    body.winners-page .winners-row:nth-child(n+5) { animation-delay: 0.15s; }
+    @media (prefers-reduced-motion: no-preference) {
+      body.winners-page .winners-row {
+        transform: translateY(6px);
+        animation: winners-card-in 0.22s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+      }
+
+      body.winners-page .winners-list .winners-row:nth-child(1) { animation-delay: 0.03s; }
+      body.winners-page .winners-list .winners-row:nth-child(2) { animation-delay: 0.06s; }
+      body.winners-page .winners-list .winners-row:nth-child(3) { animation-delay: 0.09s; }
+      body.winners-page .winners-list .winners-row:nth-child(4) { animation-delay: 0.12s; }
+      body.winners-page .winners-list .winners-row:nth-child(n + 5) { animation-delay: 0.15s; }
+    }
 
     @keyframes winners-card-in {
-      to { opacity: 1; transform: translateY(0); }
+      to { transform: translateY(0); }
     }
 
     body.winners-page .winners-avatar {

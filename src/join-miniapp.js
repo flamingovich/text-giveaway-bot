@@ -1128,6 +1128,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           await loadDrawMeta();
         }
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/session", {});
+        document.getElementById("loading").classList.add("hidden");
         hideMessage();
         handleStep(data.step, data);
       } catch (error) {
@@ -1272,15 +1273,15 @@ function registerJoinMiniApp(app, deps) {
     });
   }
 
-  async function buildJoinDonePayloadWithAvatars(draw, userId, extra = {}) {
+  function scheduleParticipantAvatars(draw, userId) {
+    if (!ensureUserAvatars) {
+      return;
+    }
     const ids = [...(draw.participantIds || [])];
     if (userId) {
       ids.push(userId);
     }
-    if (ensureUserAvatars) {
-      await ensureUserAvatars(ids, { limit: 30 });
-    }
-    return buildJoinDonePayload(draw, userId, extra);
+    ensureUserAvatars(ids, { limit: 8 });
   }
 
   function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
@@ -1299,7 +1300,8 @@ function registerJoinMiniApp(app, deps) {
   async function resolveJoinEntry(draw, userId) {
     if (draw.participantIds.includes(userId)) {
       clearJoinApiSession(userId, draw.id);
-      return buildJoinDonePayloadWithAvatars(draw, userId, {
+      scheduleParticipantAvatars(draw, userId);
+      return buildJoinDonePayload(draw, userId, {
         message: "Вы уже участвуете!",
         alreadyJoined: true,
       });
@@ -1308,7 +1310,8 @@ function registerJoinMiniApp(app, deps) {
     if (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) {
       const result = await addUserToDraw(draw.id, userId);
       clearJoinApiSession(userId, draw.id);
-      return buildJoinDonePayloadWithAvatars(draw, userId, {
+      scheduleParticipantAvatars(draw, userId);
+      return buildJoinDonePayload(draw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       });
@@ -1319,7 +1322,8 @@ function registerJoinMiniApp(app, deps) {
     if (canSkip) {
       const result = await addUserToDraw(draw.id, userId);
       clearJoinApiSession(userId, draw.id);
-      return buildJoinDonePayloadWithAvatars(draw, userId, {
+      scheduleParticipantAvatars(draw, userId);
+      return buildJoinDonePayload(draw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       });
@@ -1387,7 +1391,7 @@ function registerJoinMiniApp(app, deps) {
     }
 
     if (ensureUserAvatars) {
-      await ensureUserAvatars(draw.participantIds, { limit: 12 });
+      ensureUserAvatars(draw.participantIds, { limit: 6 });
     }
     const payload = buildJoinDonePayload(draw, userId);
     res.json({
@@ -1486,8 +1490,9 @@ function registerJoinMiniApp(app, deps) {
     if (!draw.projectId) {
       const result = await addUserToDraw(draw.id, userId);
       clearJoinApiSession(userId, drawId);
+      scheduleParticipantAvatars(draw, userId);
       res.json(
-        await buildJoinDonePayloadWithAvatars(draw, userId, {
+        buildJoinDonePayload(draw, userId, {
           message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
           alreadyJoined: Boolean(result.already),
         }),
@@ -1588,8 +1593,9 @@ function registerJoinMiniApp(app, deps) {
       res.status(404).json({ error: "Розыгрыш недоступен." });
       return;
     }
+    scheduleParticipantAvatars(updatedDraw, userId);
     res.json(
-      await buildJoinDonePayloadWithAvatars(updatedDraw, userId, {
+      buildJoinDonePayload(updatedDraw, userId, {
         message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
         alreadyJoined: Boolean(result.already),
       }),

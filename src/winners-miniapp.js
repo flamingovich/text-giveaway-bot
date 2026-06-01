@@ -101,8 +101,6 @@ function buildParticipantsList(draw, deps) {
 function renderUserRow(user, options = {}) {
   const showPrize = options.showPrize === true;
   const handle = user.username || "без username";
-  const delayStyle =
-    options.animationDelay != null ? ` style="animation-delay:${options.animationDelay}s"` : "";
   const prizeBlock = showPrize
     ? `<div class="winners-row-prize">
         <span class="winners-row-prize-label">Приз:</span>
@@ -110,7 +108,7 @@ function renderUserRow(user, options = {}) {
       </div>`
     : "";
 
-  return `<article class="winners-row${showPrize ? "" : " winners-row-compact"}"${delayStyle}>
+  return `<article class="winners-row${showPrize ? "" : " winners-row-compact"}">
     ${renderAvatar(user)}
     <div class="winners-row-body">
       <div class="winners-row-identity">
@@ -123,18 +121,12 @@ function renderUserRow(user, options = {}) {
   </article>`;
 }
 
-function renderWinnerCard(winner, index) {
-  return renderUserRow(winner, {
-    showPrize: true,
-    animationDelay: Math.min(index * 0.04 + 0.03, 0.24),
-  });
+function renderWinnerCard(winner) {
+  return renderUserRow(winner, { showPrize: true });
 }
 
-function renderParticipantCard(participant, index) {
-  return renderUserRow(participant, {
-    showPrize: false,
-    animationDelay: Math.min(index * 0.03 + 0.02, 0.2),
-  });
+function renderParticipantCard(participant) {
+  return renderUserRow(participant, { showPrize: false });
 }
 
 function renderWinnersStats(winnersCount, participantCount, activeTab = "participants") {
@@ -174,9 +166,9 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
   const participantIds = (draw?.participantIds || []).map(String);
 
   const defaultTab = "winners";
-  const winnersRowsHtml = winnersCount > 0 ? winners.map((w, i) => renderWinnerCard(w, i)).join("") : "";
+  const winnersRowsHtml = winnersCount > 0 ? winners.map((w) => renderWinnerCard(w)).join("") : "";
   const participantsRowsHtml =
-    participantCount > 0 ? participants.map((p, i) => renderParticipantCard(p, i)).join("") : "";
+    participantCount > 0 ? participants.map((p) => renderParticipantCard(p)).join("") : "";
 
   return `<!doctype html>
 <html lang="ru">
@@ -292,6 +284,13 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
         });
       }
 
+      function ensureWinnersRowsVisible(root) {
+        (root || document).querySelectorAll(".winners-row").forEach((row) => {
+          row.style.opacity = "1";
+          row.style.transform = "none";
+        });
+      }
+
       function switchWinnersTab(tab) {
         const winnersPanel = document.getElementById("winnersTabWinners");
         const participantsPanel = document.getElementById("winnersTabParticipants");
@@ -302,6 +301,8 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
           btn.classList.toggle("is-active", isActive);
           btn.setAttribute("aria-pressed", isActive ? "true" : "false");
         });
+        const activePanel = tab === "winners" ? winnersPanel : participantsPanel;
+        requestAnimationFrame(() => ensureWinnersRowsVisible(activePanel));
         bindProfileLinks(document.querySelector(".winners-panel"));
       }
 
@@ -313,6 +314,9 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
       });
 
       bindProfileLinks(document);
+      ensureWinnersRowsVisible(document);
+      requestAnimationFrame(() => ensureWinnersRowsVisible(document));
+      setTimeout(() => ensureWinnersRowsVisible(document), 350);
     })();
   </script>
 </body>
@@ -422,12 +426,12 @@ function registerWinnersMiniApp(app, deps) {
     return buildParticipantsList(draw, viewDeps);
   }
 
-  async function prepareDrawUserAvatars(draw) {
+  function prepareDrawUserAvatars(draw) {
     if (!ensureUserAvatars || !draw) {
       return;
     }
     const ids = [...new Set([...(draw.winnerIds || []), ...(draw.participantIds || [])])];
-    await ensureUserAvatars(ids, { limit: 50 });
+    ensureUserAvatars(ids, { limit: 20 });
   }
 
   app.get("/winners/avatar/:userId", async (req, res) => {
@@ -459,19 +463,19 @@ function registerWinnersMiniApp(app, deps) {
       res.status(404).type("html").send("<h1>Розыгрыш не найден или ещё не завершён</h1>");
       return;
     }
-    await prepareDrawUserAvatars(draw);
+    prepareDrawUserAvatars(draw);
     const winners = buildWinnersList(draw);
     const participants = buildParticipantsForPage(draw);
     res.type("html").send(renderWinnersPage(draw, winners, participants));
   });
 
-  app.get("/api/winners/:drawId", async (req, res) => {
+  app.get("/api/winners/:drawId", (req, res) => {
     const draw = getFinishedDraw(req.params.drawId);
     if (!draw) {
       res.status(404).json({ error: "Розыгрыш не найден или ещё не завершён." });
       return;
     }
-    await prepareDrawUserAvatars(draw);
+    prepareDrawUserAvatars(draw);
     const participants = buildParticipantsForPage(draw);
     res.json({
       drawId: draw.id,
