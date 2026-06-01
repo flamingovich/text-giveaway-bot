@@ -1122,13 +1122,10 @@ function getJoinDirectLink(drawId) {
 }
 
 function getJoinParticipateUrl(drawId) {
-  // Direct Link Mini App (t.me/bot/join?startapp=…) — открывается в Telegram без «Перейти по ссылке».
+  // Только Direct Link (t.me/bot/join?startapp=…). HTTPS /join/<id> в канале открывает браузер — не использовать.
   const directLink = getJoinDirectLink(drawId);
   if (directLink) {
     return directLink;
-  }
-  if (WEB_PUBLIC_URL.startsWith("https://")) {
-    return getJoinWebAppUrl(drawId);
   }
   return getJoinDeepLink(drawId);
 }
@@ -1239,15 +1236,19 @@ async function syncAllOrganizerPanelMenus() {
   }
 }
 
-function getKeyboard(drawId, count) {
+function getKeyboardMarkup(drawId, count) {
   const text = `Участвовать (${count})`;
   // Web App-кнопки в inline-клавиатуре канала запрещены (BUTTON_TYPE_INVALID).
   // Direct Link Mini App: t.me/bot/shortname?startapp=drawId
   const participateUrl = getJoinParticipateUrl(drawId);
   if (participateUrl) {
-    return Markup.inlineKeyboard([Markup.button.url(text, participateUrl)]);
+    return Markup.inlineKeyboard([Markup.button.url(text, participateUrl)]).reply_markup;
   }
-  return Markup.inlineKeyboard([Markup.button.callback(text, `join:${drawId}`)]);
+  return Markup.inlineKeyboard([Markup.button.callback(text, `join:${drawId}`)]).reply_markup;
+}
+
+function getKeyboard(drawId, count) {
+  return { reply_markup: getKeyboardMarkup(drawId, count) };
 }
 
 async function ensureBotUsername() {
@@ -1573,13 +1574,32 @@ async function processWinnerConfirmTimeouts(data) {
   return hasChanges;
 }
 
+async function refreshDrawPostKeyboard(draw) {
+  const markup =
+    draw.status === DRAW_STATUS.FINISHED
+      ? getFinishedKeyboard(draw).reply_markup
+      : getKeyboardMarkup(draw.id, draw.participantIds.length);
+
+  await bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup);
+}
+
 async function syncActiveDrawKeyboards() {
   const data = readData();
   for (const draw of data.draws) {
     if (draw.status !== DRAW_STATUS.ACTIVE || !draw.messageId) {
       continue;
     }
-    scheduleDrawPostUpdate(draw.id, false);
+    const participateUrl = getJoinParticipateUrl(draw.id);
+    try {
+      await refreshDrawPostKeyboard(draw);
+      console.log(`[sync] кнопка «Участвовать» ${draw.id}: ${participateUrl}`);
+    } catch (error) {
+      if (!isIgnorableTelegramEditError(error)) {
+        console.warn(`[sync] reply_markup ${draw.id}: ${error.message} — полное обновление поста`);
+      }
+      scheduleDrawPostUpdate(draw.id, false);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
   }
 }
 
@@ -7360,6 +7380,9 @@ async function bootstrap() {
   });
   await bot.launch();
   console.log("[boot] Telegram bot polling started");
+  console.log(
+    `[boot] participate example: ${getJoinParticipateUrl("draw_example") || "(нет URL — проверьте BOT_USERNAME и JOIN_MINI_APP_SHORT_NAME)"}`,
+  );
   void syncActiveDrawKeyboards();
   await syncAllOrganizerPanelMenus();
   console.log(`Бот запущен: @${BOT_USERNAME}`);
