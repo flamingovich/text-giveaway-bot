@@ -16,6 +16,7 @@ const {
   appendTranscript,
   syncChatUser,
   ensureChatTranscriptFields,
+  readSupportChats,
 } = require("./support-transcripts");
 
 const SUPPORT_BOT_TOKEN = process.env.SUPPORT_BOT_TOKEN;
@@ -129,9 +130,33 @@ function getChatState(chatId) {
       pendingTexts: [],
       statusMessageId: null,
       hasUserMessage: false,
+      adminHold: false,
     });
   }
   return chats.get(key);
+}
+
+function mergeChatStateFromDisk(chatId) {
+  const key = String(chatId);
+  const disk = readSupportChats()[key];
+  const state = getChatState(chatId);
+  if (!disk) {
+    return state;
+  }
+  state.adminHold = Boolean(disk.adminHold);
+  state.pendingTexts = Array.isArray(disk.pendingTexts) ? [...disk.pendingTexts] : state.pendingTexts;
+  if (Array.isArray(disk.messages) && disk.messages.length) {
+    state.messages = disk.messages;
+  }
+  state.lastMessageAt = disk.lastMessageAt || state.lastMessageAt;
+  if (disk.agentName) {
+    state.agentName = disk.agentName;
+  }
+  if (disk.user) {
+    state.user = disk.user;
+  }
+  chats.set(key, ensureChatTranscriptFields(state));
+  return state;
 }
 
 function clearIdleCloseTimer(chatKey) {
@@ -334,6 +359,13 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
     return;
   }
 
+  state = mergeChatStateFromDisk(chatId);
+  if (state.adminHold) {
+    state.pendingTexts = [];
+    saveChats();
+    return;
+  }
+
   state.escalated = false;
   syncChatUser(state, from);
 
@@ -403,7 +435,7 @@ function scheduleReply(bot, chatId, from) {
   const timer = setTimeout(async () => {
     pendingTimers.delete(key);
     clearTypingStartTimer(key);
-    const current = getChatState(key);
+    const current = mergeChatStateFromDisk(key);
     const batch = (current.pendingTexts || []).join("\n\n").trim();
     current.pendingTexts = [];
     saveChats();
@@ -425,6 +457,7 @@ bot.start(async (ctx) => {
   state.agentName = pickRandomAgentName();
   state.history = [];
   state.escalated = false;
+  state.adminHold = false;
   if (!isWithinSupportHours()) {
     const offHoursText = buildOffHoursReply();
     appendTranscript(state, { role: "assistant", content: offHoursText, kind: "off_hours" });
@@ -482,8 +515,15 @@ bot.on("text", async (ctx) => {
 
   const chatId = ctx.chat.id;
   const chatKey = String(chatId);
-  const state = getChatState(chatId);
+  const state = mergeChatStateFromDisk(chatId);
   syncChatUser(state, ctx.from);
+
+  if (state.adminHold) {
+    appendTranscript(state, { role: "user", content: text });
+    state.hasUserMessage = true;
+    saveChats();
+    return;
+  }
 
   if (!isWithinSupportHours()) {
     const now = Date.now();

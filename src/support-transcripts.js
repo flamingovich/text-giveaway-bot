@@ -16,6 +16,59 @@ function readSupportChats() {
   }
 }
 
+function writeSupportChats(raw) {
+  fs.mkdirSync(path.dirname(SUPPORT_CHATS_FILE), { recursive: true });
+  fs.writeFileSync(SUPPORT_CHATS_FILE, JSON.stringify(raw, null, 2));
+}
+
+function createEmptySupportChatState(chatId) {
+  return {
+    agentName: "Оператор",
+    history: [],
+    messages: [],
+    lastMessageAt: null,
+    user: { id: Number(chatId) || chatId },
+    escalated: false,
+    adminHold: false,
+    greeted: true,
+    lastOffHoursNoticeAt: null,
+    pendingTexts: [],
+    statusMessageId: null,
+    hasUserMessage: true,
+  };
+}
+
+function updateSupportChat(chatId, updater) {
+  const raw = readSupportChats();
+  const key = String(chatId);
+  const state = ensureChatTranscriptFields(raw[key] || createEmptySupportChatState(key));
+  updater(state);
+  raw[key] = state;
+  writeSupportChats(raw);
+  return state;
+}
+
+async function sendSupportBotMessage(botToken, chatId, text) {
+  if (!botToken) {
+    throw new Error("SUPPORT_BOT_TOKEN не задан в .env");
+  }
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: String(text).slice(0, 4096),
+      disable_web_page_preview: true,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    const detail = data.description || data.error || `HTTP ${response.status}`;
+    throw new Error(detail);
+  }
+  return data;
+}
+
 function ensureChatTranscriptFields(state) {
   if (!state || typeof state !== "object") {
     return state;
@@ -131,6 +184,9 @@ function formatMessageTime(iso, timezone) {
 module.exports = {
   SUPPORT_CHATS_FILE,
   readSupportChats,
+  writeSupportChats,
+  updateSupportChat,
+  sendSupportBotMessage,
   ensureChatTranscriptFields,
   syncChatUser,
   appendTranscript,

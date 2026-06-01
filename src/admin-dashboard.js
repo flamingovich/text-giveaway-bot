@@ -2,6 +2,9 @@ const crypto = require("crypto");
 const { DateTime } = require("luxon");
 const {
   readSupportChats,
+  updateSupportChat,
+  sendSupportBotMessage,
+  appendTranscript,
   getChatTranscript,
   formatSupportChatUser,
   listSupportChats,
@@ -509,7 +512,7 @@ function renderSupportListPage(chats, timezone) {
   <main class="wrap">
     <section class="panel">
       <h2>Диалоги с ботом поддержки</h2>
-      <p class="hint">Показываются сохранённые переписки из <code>data/support-chats.json</code>. Старые диалоги могут содержать только последние сообщения (до включения полного лога).</p>
+      <p class="hint">Переписки из <code>data/support-chats.json</code>. В диалоге можно отправить ответ пользователю в Telegram.</p>
       <table class="support-table">
         <thead>
           <tr>
@@ -536,21 +539,36 @@ function roleLabel(role, kind) {
   if (kind === "off_hours") return "Вне часов";
   if (kind === "idle_close") return "Закрытие";
   if (kind === "closed") return "Завершён (/stop)";
+  if (kind === "admin") return "Админ (панель)";
   if (kind === "media") return "Медиа";
   if (kind === "error") return "Ошибка AI";
   return "Бот";
 }
 
-function renderSupportChatPage(chatId, state, timezone) {
+function renderSupportChatPage(chatId, state, timezone, options = {}) {
   const transcript = getChatTranscript(state);
   const label = formatSupportChatUser(state, chatId);
   const agentName = state.agentName || "—";
-  const status = "ведёт бот (AI)";
+  const status = state.adminHold ? "ответы из админки (бот AI выключен)" : "ведёт бот (AI)";
+  const flash = options.flash || "";
+  const flashHtml = flash
+    ? `<div class="flash ${flash.type === "error" ? "flash-error" : "flash-ok"}">${escapeHtml(flash.text)}</div>`
+    : "";
 
   const messages = transcript
     .map((msg) => {
-      const role = msg.role === "user" ? "user" : msg.role === "system" ? "system" : "assistant";
-      const css = role === "user" ? "chat-msg-user" : role === "system" ? "chat-msg-system" : "chat-msg-assistant";
+      let role = msg.role === "user" ? "user" : msg.role === "system" ? "system" : "assistant";
+      if (msg.kind === "admin") {
+        role = "admin";
+      }
+      const css =
+        role === "user"
+          ? "chat-msg-user"
+          : role === "admin"
+            ? "chat-msg-admin"
+            : role === "system"
+              ? "chat-msg-system"
+              : "chat-msg-assistant";
       const meta = `${roleLabel(msg.role, msg.kind)} · ${formatMessageTime(msg.at, timezone)}`;
       return `<div class="chat-msg ${css}">${escapeHtml(msg.content)}<span class="chat-msg-meta">${escapeHtml(meta)}</span></div>`;
     })
@@ -579,8 +597,21 @@ function renderSupportChatPage(chatId, state, timezone) {
     .chat-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
     .chat-msg-user { align-self: flex-end; background: #1d4ed8; color: #eff6ff; border-bottom-right-radius: 4px; }
     .chat-msg-assistant { align-self: flex-start; background: #334155; color: #f1f5f9; border-bottom-left-radius: 4px; }
+    .chat-msg-admin { align-self: flex-start; background: #14532d; color: #dcfce7; border-bottom-left-radius: 4px; border: 1px solid #22c55e; }
     .chat-msg-system { align-self: center; background: #422006; color: #fde68a; font-size: 12px; max-width: 95%; text-align: center; }
     .chat-msg-meta { display: block; margin-top: 6px; font-size: 11px; opacity: 0.75; }
+    .chat-compose { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .chat-compose textarea {
+      width: 100%; min-height: 88px; padding: 12px 14px; border-radius: 10px;
+      border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px;
+      font-family: inherit; resize: vertical;
+    }
+    .chat-compose-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .btn-primary { background: #3b82f6; border-color: #3b82f6; color: #fff; cursor: pointer; }
+    .flash { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
+    .flash-ok { background: #14532d; color: #bbf7d0; }
+    .flash-error { background: #450a0a; color: #fecaca; }
+    .compose-hint { font-size: 12px; color: #94a3b8; margin: 0; }
   </style>
 </head>
 <body>
@@ -594,9 +625,28 @@ function renderSupportChatPage(chatId, state, timezone) {
         <span>Статус: <b>${escapeHtml(status)}</b></span>
         <span>Chat ID: <b>${escapeHtml(chatId)}</b></span>
       </div>
-      <div class="chat-log">${messages || '<div class="chat-msg chat-msg-system">Сообщений пока нет</div>'}</div>
+      ${flashHtml}
+      <div class="chat-log" id="chatLog">${messages || '<div class="chat-msg chat-msg-system">Сообщений пока нет</div>'}</div>
+      <form class="chat-compose" method="post" action="/admin/support/${encodeURIComponent(chatId)}/reply">
+        <label class="compose-hint" for="replyText">Сообщение уйдёт пользователю в Telegram от support-бота. Пока вы отвечаете из панели, AI не вмешивается.</label>
+        <textarea id="replyText" name="text" required placeholder="Напишите ответ…"></textarea>
+        <div class="chat-compose-actions">
+          <button type="submit" class="btn btn-primary">Отправить</button>
+        </div>
+      </form>
+      ${
+        state.adminHold
+          ? `<form method="post" action="/admin/support/${encodeURIComponent(chatId)}/release" style="margin-top:8px">
+        <button type="submit" class="btn btn-ghost">Вернуть ответы боту</button>
+      </form>`
+          : ""
+      }
     </section>
   </main>
+  <script>
+    const log = document.getElementById("chatLog");
+    if (log) log.scrollTop = log.scrollHeight;
+  </script>
 </body>
 </html>`;
 }
@@ -674,15 +724,71 @@ function registerAdminDashboard(app, deps) {
     res.type("html").send(renderSupportListPage(chats, deps.timezone));
   });
 
-  app.get("/admin/support/:chatId", requireAuth, (req, res) => {
-    const chatId = String(req.params.chatId || "").trim();
+  function renderSupportChatView(res, chatId, flash) {
     const raw = readSupportChats();
     const state = raw[chatId];
     if (!state) {
       res.status(404).type("html").send(`<!doctype html><html lang="ru"><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:24px"><p>Диалог не найден.</p><p><a href="/admin/support" style="color:#93c5fd">← К списку</a></p></body></html>`);
+      return false;
+    }
+    res.type("html").send(renderSupportChatPage(chatId, state, deps.timezone, { flash }));
+    return true;
+  }
+
+  app.get("/admin/support/:chatId", requireAuth, (req, res) => {
+    const chatId = String(req.params.chatId || "").trim();
+    const flash =
+      req.query.sent === "1"
+        ? { type: "ok", text: "Сообщение отправлено в Telegram." }
+        : req.query.released === "1"
+          ? { type: "ok", text: "Диалог снова ведёт AI-бот." }
+          : null;
+    renderSupportChatView(res, chatId, flash);
+  });
+
+  app.post("/admin/support/:chatId/reply", requireAuth, async (req, res) => {
+    const chatId = String(req.params.chatId || "").trim();
+    const text = String(req.body?.text || "").trim();
+    if (!text) {
+      renderSupportChatView(res, chatId, { type: "error", text: "Введите текст сообщения." });
       return;
     }
-    res.type("html").send(renderSupportChatPage(chatId, state, deps.timezone));
+    if (!deps.supportBotToken) {
+      renderSupportChatView(res, chatId, {
+        type: "error",
+        text: "SUPPORT_BOT_TOKEN не задан в .env — отправка в Telegram недоступна.",
+      });
+      return;
+    }
+
+    try {
+      await sendSupportBotMessage(deps.supportBotToken, chatId, text);
+      updateSupportChat(chatId, (state) => {
+        state.adminHold = true;
+        state.pendingTexts = [];
+        state.hasUserMessage = true;
+        appendTranscript(state, { role: "assistant", content: text, kind: "admin" });
+      });
+      res.redirect(302, `/admin/support/${encodeURIComponent(chatId)}?sent=1`);
+    } catch (error) {
+      renderSupportChatView(res, chatId, {
+        type: "error",
+        text: `Не удалось отправить: ${error.message}`,
+      });
+    }
+  });
+
+  app.post("/admin/support/:chatId/release", requireAuth, (req, res) => {
+    const chatId = String(req.params.chatId || "").trim();
+    const raw = readSupportChats();
+    if (!raw[chatId]) {
+      res.status(404).redirect(302, "/admin/support");
+      return;
+    }
+    updateSupportChat(chatId, (state) => {
+      state.adminHold = false;
+    });
+    res.redirect(302, `/admin/support/${encodeURIComponent(chatId)}?released=1`);
   });
 }
 

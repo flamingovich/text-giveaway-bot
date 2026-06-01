@@ -6839,6 +6839,7 @@ app.use(PANEL_BASE, panelRouter);
 
 registerAdminDashboard(app, {
   botToken: BOT_TOKEN,
+  supportBotToken: process.env.SUPPORT_BOT_TOKEN || "",
   cookieSecure: WEB_PUBLIC_URL.startsWith("https://"),
   timezone: TIMEZONE,
   adminIds: ADMIN_IDS,
