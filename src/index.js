@@ -1122,12 +1122,13 @@ function getJoinDirectLink(drawId) {
 }
 
 function getJoinParticipateUrl(drawId) {
-  if (WEB_PUBLIC_URL.startsWith("https://")) {
-    return getJoinWebAppUrl(drawId);
-  }
+  // Direct Link Mini App (t.me/bot/join?startapp=…) — открывается в Telegram без «Перейти по ссылке».
   const directLink = getJoinDirectLink(drawId);
   if (directLink) {
     return directLink;
+  }
+  if (WEB_PUBLIC_URL.startsWith("https://")) {
+    return getJoinWebAppUrl(drawId);
   }
   return getJoinDeepLink(drawId);
 }
