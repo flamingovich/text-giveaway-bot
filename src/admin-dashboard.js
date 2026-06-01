@@ -4,6 +4,7 @@ const {
   readSupportChats,
   updateSupportChat,
   sendSupportBotMessage,
+  closeSupportChatFromAdmin,
   appendTranscript,
   getChatTranscript,
   formatSupportChatUser,
@@ -466,11 +467,13 @@ function renderSupportListPage(chats, timezone) {
   const rows = chats
     .map((chat) => {
       const time = formatMessageTime(chat.lastMessageAt, timezone);
-      const escalated = '<span class="badge">бот</span>';
+      const statusBadge = chat.sessionClosed
+        ? '<span class="badge badge-warn">завершён</span>'
+        : '<span class="badge">активен</span>';
       return `<tr>
         <td><a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.label)}</a></td>
         <td>${escapeHtml(chat.agentName)}</td>
-        <td>${escalated}</td>
+        <td>${statusBadge}</td>
         <td class="preview-cell">${escapeHtml(chat.preview)}</td>
         <td>${chat.messageCount}</td>
         <td>${escapeHtml(time)}</td>
@@ -549,7 +552,8 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
   const transcript = getChatTranscript(state);
   const label = formatSupportChatUser(state, chatId);
   const agentName = state.agentName || "—";
-  const status = state.adminHold ? "ответы из админки (бот AI выключен)" : "ведёт бот (AI)";
+  const sessionClosed = Boolean(state.sessionClosed);
+  const status = sessionClosed ? "завершён — пользователю нужен /start" : "активен";
   const flash = options.flash || "";
   const flashHtml = flash
     ? `<div class="flash ${flash.type === "error" ? "flash-error" : "flash-ok"}">${escapeHtml(flash.text)}</div>`
@@ -592,7 +596,9 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
     .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .admin-nav { display: flex; gap: 6px; }
     .logout { margin: 0; }
-    .chat-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; font-size: 13px; color: #94a3b8; }
+    .chat-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 13px; color: #94a3b8; }
+    .chat-close-bar { margin: 0 0 12px; }
+    .chat-close-bar .btn-danger { width: 100%; padding: 12px 16px; font-size: 15px; font-weight: 600; }
     .chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 70vh; overflow: auto; padding: 12px; background: #0f172a; border-radius: 12px; border: 1px solid #334155; }
     .chat-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
     .chat-msg-user { align-self: flex-end; background: #1d4ed8; color: #eff6ff; border-bottom-right-radius: 4px; }
@@ -608,6 +614,7 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
     }
     .chat-compose-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .btn-primary { background: #3b82f6; border-color: #3b82f6; color: #fff; cursor: pointer; }
+    .btn-danger { background: #7f1d1d; border-color: #b91c1c; color: #fecaca; cursor: pointer; }
     .flash { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
     .flash-ok { background: #14532d; color: #bbf7d0; }
     .flash-error { background: #450a0a; color: #fecaca; }
@@ -620,6 +627,13 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
     <p><a class="btn btn-ghost" href="/admin/support">← Все диалоги</a></p>
     <section class="panel">
       <h2 style="margin:0 0 8px">${escapeHtml(label)}</h2>
+      ${
+        sessionClosed
+          ? ""
+          : `<form method="post" action="/admin/support/${encodeURIComponent(chatId)}/close" class="chat-close-bar" onsubmit="return confirm('Завершить диалог? Пользователю уйдёт сообщение с /start.');">
+        <button type="submit" class="btn btn-danger">Завершить диалог</button>
+      </form>`
+      }
       <div class="chat-meta">
         <span>Оператор: <b>${escapeHtml(agentName)}</b></span>
         <span>Статус: <b>${escapeHtml(status)}</b></span>
@@ -627,19 +641,17 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
       </div>
       ${flashHtml}
       <div class="chat-log" id="chatLog">${messages || '<div class="chat-msg chat-msg-system">Сообщений пока нет</div>'}</div>
-      <form class="chat-compose" method="post" action="/admin/support/${encodeURIComponent(chatId)}/reply">
-        <label class="compose-hint" for="replyText">Сообщение уйдёт пользователю в Telegram от support-бота. Пока вы отвечаете из панели, AI не вмешивается.</label>
+      ${
+        sessionClosed
+          ? `<p class="compose-hint">Диалог завершён. Пользователь получил сообщение с просьбой нажать /start для нового оператора.</p>`
+          : `<form class="chat-compose" method="post" action="/admin/support/${encodeURIComponent(chatId)}/reply">
+        <label class="compose-hint" for="replyText">Сообщение уйдёт пользователю в Telegram от support-бота. AI-бот продолжает отвечать как обычно.</label>
         <textarea id="replyText" name="text" required placeholder="Напишите ответ…"></textarea>
         <div class="chat-compose-actions">
           <button type="submit" class="btn btn-primary">Отправить</button>
+          <button type="submit" formaction="/admin/support/${encodeURIComponent(chatId)}/close" formmethod="post" class="btn btn-danger" formnovalidate onclick="return confirm('Завершить диалог? Пользователю уйдёт сообщение с /start.');">Завершить диалог</button>
         </div>
-      </form>
-      ${
-        state.adminHold
-          ? `<form method="post" action="/admin/support/${encodeURIComponent(chatId)}/release" style="margin-top:8px">
-        <button type="submit" class="btn btn-ghost">Вернуть ответы боту</button>
       </form>`
-          : ""
       }
     </section>
   </main>
@@ -740,9 +752,9 @@ function registerAdminDashboard(app, deps) {
     const flash =
       req.query.sent === "1"
         ? { type: "ok", text: "Сообщение отправлено в Telegram." }
-        : req.query.released === "1"
-          ? { type: "ok", text: "Диалог снова ведёт AI-бот." }
-          : null;
+        : req.query.closed === "1"
+            ? { type: "ok", text: "Диалог завершён. Пользователю отправлено сообщение с /start." }
+            : null;
     renderSupportChatView(res, chatId, flash);
   });
 
@@ -764,10 +776,12 @@ function registerAdminDashboard(app, deps) {
     try {
       await sendSupportBotMessage(deps.supportBotToken, chatId, text);
       updateSupportChat(chatId, (state) => {
-        state.adminHold = true;
-        state.pendingTexts = [];
+        delete state.adminHold;
         state.hasUserMessage = true;
         appendTranscript(state, { role: "assistant", content: text, kind: "admin" });
+        const history = Array.isArray(state.history) ? state.history : [];
+        history.push({ role: "assistant", content: text });
+        state.history = history.slice(-16);
       });
       res.redirect(302, `/admin/support/${encodeURIComponent(chatId)}?sent=1`);
     } catch (error) {
@@ -778,17 +792,28 @@ function registerAdminDashboard(app, deps) {
     }
   });
 
-  app.post("/admin/support/:chatId/release", requireAuth, (req, res) => {
+  app.post("/admin/support/:chatId/close", requireAuth, async (req, res) => {
     const chatId = String(req.params.chatId || "").trim();
-    const raw = readSupportChats();
-    if (!raw[chatId]) {
-      res.status(404).redirect(302, "/admin/support");
+    if (!deps.supportBotToken) {
+      renderSupportChatView(res, chatId, {
+        type: "error",
+        text: "SUPPORT_BOT_TOKEN не задан в .env — завершение диалога недоступно.",
+      });
       return;
     }
-    updateSupportChat(chatId, (state) => {
-      state.adminHold = false;
-    });
-    res.redirect(302, `/admin/support/${encodeURIComponent(chatId)}?released=1`);
+
+    try {
+      await closeSupportChatFromAdmin(deps.supportBotToken, chatId);
+      res.redirect(302, `/admin/support/${encodeURIComponent(chatId)}?closed=1`);
+    } catch (error) {
+      renderSupportChatView(res, chatId, {
+        type: "error",
+        text:
+          error.code === "not_found"
+            ? "Диалог не найден."
+            : `Не удалось завершить: ${error.message}`,
+      });
+    }
   });
 }
 

@@ -29,7 +29,6 @@ function createEmptySupportChatState(chatId) {
     lastMessageAt: null,
     user: { id: Number(chatId) || chatId },
     escalated: false,
-    adminHold: false,
     greeted: true,
     lastOffHoursNoticeAt: null,
     pendingTexts: [],
@@ -162,6 +161,7 @@ function listSupportChats(raw) {
         agentName: normalized.agentName || "—",
         escalated: Boolean(normalized.escalated),
         greeted: Boolean(normalized.greeted),
+        sessionClosed: Boolean(normalized.sessionClosed),
         lastMessageAt: normalized.lastMessageAt || last?.at || "",
         preview: getLastTranscriptPreview(normalized),
         messageCount: transcript.length,
@@ -181,6 +181,34 @@ function formatMessageTime(iso, timezone) {
   return dt.toFormat("dd.MM.yyyy HH:mm");
 }
 
+function buildSupportStopReply(agentName) {
+  const name = agentName || "оператор";
+  return `Ок, ${name} закончил диалог. Если снова понадобится помощь — нажми /start`;
+}
+
+async function closeSupportChatFromAdmin(botToken, chatId) {
+  const raw = readSupportChats();
+  const key = String(chatId);
+  const state = ensureChatTranscriptFields(raw[key]);
+  if (!state) {
+    const error = new Error("Диалог не найден");
+    error.code = "not_found";
+    throw error;
+  }
+
+  const replyText = buildSupportStopReply(state.agentName);
+  await sendSupportBotMessage(botToken, chatId, replyText);
+
+  state.sessionClosed = true;
+  delete state.adminHold;
+  state.pendingTexts = [];
+  state.closedAt = new Date().toISOString();
+  appendTranscript(state, { role: "assistant", content: replyText, kind: "closed" });
+  raw[key] = state;
+  writeSupportChats(raw);
+  return state;
+}
+
 module.exports = {
   SUPPORT_CHATS_FILE,
   readSupportChats,
@@ -194,4 +222,6 @@ module.exports = {
   formatSupportChatUser,
   listSupportChats,
   formatMessageTime,
+  buildSupportStopReply,
+  closeSupportChatFromAdmin,
 };

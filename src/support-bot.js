@@ -104,6 +104,7 @@ function loadChats() {
     for (const [chatId, state] of Object.entries(raw)) {
       const normalized = ensureChatTranscriptFields(state);
       normalized.escalated = false;
+      delete normalized.adminHold;
       chats.set(chatId, normalized);
     }
   } catch {
@@ -131,7 +132,6 @@ function getChatState(chatId) {
       pendingTexts: [],
       statusMessageId: null,
       hasUserMessage: false,
-      adminHold: false,
     });
   }
   return chats.get(key);
@@ -144,7 +144,7 @@ function mergeChatStateFromDisk(chatId) {
   if (!disk) {
     return state;
   }
-  state.adminHold = Boolean(disk.adminHold);
+  delete state.adminHold;
   state.pendingTexts = Array.isArray(disk.pendingTexts) ? [...disk.pendingTexts] : state.pendingTexts;
   if (Array.isArray(disk.messages) && disk.messages.length) {
     state.messages = disk.messages;
@@ -156,6 +156,10 @@ function mergeChatStateFromDisk(chatId) {
   if (disk.user) {
     state.user = disk.user;
   }
+  if (Array.isArray(disk.history) && disk.history.length) {
+    state.history = disk.history;
+  }
+  state.sessionClosed = Boolean(disk.sessionClosed);
   chats.set(key, ensureChatTranscriptFields(state));
   return state;
 }
@@ -363,12 +367,11 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
   }
 
   state = mergeChatStateFromDisk(chatId);
-  if (state.adminHold) {
+  if (state.sessionClosed) {
     state.pendingTexts = [];
     saveChats();
     return;
   }
-
   state.escalated = false;
   syncChatUser(state, from);
 
@@ -446,6 +449,11 @@ function scheduleReply(bot, chatId, from) {
     pendingTimers.delete(key);
     clearTypingStartTimer(key);
     const current = mergeChatStateFromDisk(key);
+    if (current.sessionClosed) {
+      current.pendingTexts = [];
+      saveChats();
+      return;
+    }
     const batch = (current.pendingTexts || []).join("\n\n").trim();
     current.pendingTexts = [];
     saveChats();
@@ -462,12 +470,16 @@ applyNoLinkPreview(bot.telegram);
 bot.start(async (ctx) => {
   if (ctx.chat?.type !== "private") return;
 
+  const chatKey = String(ctx.chat.id);
+  clearChatTimers(chatKey);
   const state = getChatState(ctx.chat.id);
   syncChatUser(state, ctx.from);
   state.agentName = pickRandomAgentName();
   state.history = [];
   state.escalated = false;
-  state.adminHold = false;
+  state.sessionClosed = false;
+  delete state.adminHold;
+  state.pendingTexts = [];
   if (!isWithinSupportHours()) {
     const offHoursText = buildOffHoursReply();
     appendTranscript(state, { role: "assistant", content: offHoursText, kind: "off_hours" });
@@ -476,7 +488,6 @@ bot.start(async (ctx) => {
     return;
   }
 
-  const chatKey = String(ctx.chat.id);
   const searchMessage = await ctx.reply(buildSearchingOperatorText(0));
   startStatusAnimation(
     bot,
@@ -528,10 +539,8 @@ bot.on("text", async (ctx) => {
   const state = mergeChatStateFromDisk(chatId);
   syncChatUser(state, ctx.from);
 
-  if (state.adminHold) {
-    appendTranscript(state, { role: "user", content: text });
-    state.hasUserMessage = true;
-    saveChats();
+  if (state.sessionClosed) {
+    await ctx.reply("Диалог закрыт. Нажми /start, чтобы снова подключить оператора.");
     return;
   }
 
@@ -570,8 +579,13 @@ bot.on(["photo", "document", "video", "voice", "video_note", "audio", "sticker",
   if (ctx.chat?.type !== "private") return;
 
   const chatId = ctx.chat.id;
-  const state = getChatState(chatId);
+  const state = mergeChatStateFromDisk(chatId);
   syncChatUser(state, ctx.from);
+
+  if (state.sessionClosed) {
+    await ctx.reply("Диалог закрыт. Нажми /start, чтобы снова подключить оператора.");
+    return;
+  }
 
   state.hasUserMessage = true;
   clearIdleCloseTimer(String(chatId));
