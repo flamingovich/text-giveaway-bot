@@ -463,9 +463,7 @@ function renderSupportListPage(chats, timezone) {
   const rows = chats
     .map((chat) => {
       const time = formatMessageTime(chat.lastMessageAt, timezone);
-      const escalated = chat.escalated
-        ? '<span class="badge badge-warn">эскалация</span>'
-        : '<span class="badge">бот</span>';
+      const escalated = '<span class="badge">бот</span>';
       return `<tr>
         <td><a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.label)}</a></td>
         <td>${escapeHtml(chat.agentName)}</td>
@@ -546,7 +544,7 @@ function renderSupportChatPage(chatId, state, timezone) {
   const transcript = getChatTranscript(state);
   const label = formatSupportChatUser(state, chatId);
   const agentName = state.agentName || "—";
-  const status = state.escalated ? "эскалация (живой оператор)" : "ведёт бот";
+  const status = "ведёт бот (AI)";
 
   const messages = transcript
     .map((msg) => {

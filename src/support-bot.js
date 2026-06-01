@@ -32,14 +32,7 @@ const SUPPORT_TYPING_MS_PER_CHAR_MAX = Number(process.env.SUPPORT_TYPING_MS_PER_
 const TYPING_ACTION_INTERVAL_MS = 4_500;
 const SUPPORT_HISTORY_LIMIT = Number(process.env.SUPPORT_HISTORY_LIMIT || 16);
 const SUPPORT_IDLE_CLOSE_MS = Number(process.env.SUPPORT_IDLE_CLOSE_MS || 10 * 60 * 1000);
-const SUPPORT_ADMIN_IDS = (process.env.SUPPORT_ADMIN_IDS || process.env.ADMIN_IDS || "")
-  .split(",")
-  .map((id) => Number(id.trim()))
-  .filter(Number.isFinite);
-
 const AGENT_NAMES = ["Никита", "Алексей", "Мария", "Дарья"];
-const ESCALATION_PATTERN =
-  /(жалоб|обман|скам|scam|мошен|верните|вернуть|оператор|человек|живой|менеджер|админ)/i;
 
 const DATA_DIR = path.join(__dirname, "..", "data");
 const CHATS_FILE = path.join(DATA_DIR, "support-chats.json");
@@ -50,12 +43,6 @@ if (!SUPPORT_BOT_TOKEN || SUPPORT_BOT_TOKEN.includes("your_")) {
 if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY.includes("your_")) {
   throw new Error("Укажите OPENROUTER_API_KEY в .env");
 }
-if (SUPPORT_ADMIN_IDS.length === 0) {
-  throw new Error(
-    "Укажите SUPPORT_ADMIN_IDS или ADMIN_IDS в .env — ваш Telegram ID для эскалаций (@userinfobot)",
-  );
-}
-
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 /** @type {Map<string, object>} */
@@ -108,7 +95,9 @@ function loadChats() {
   try {
     const raw = JSON.parse(fs.readFileSync(CHATS_FILE, "utf8"));
     for (const [chatId, state] of Object.entries(raw)) {
-      chats.set(chatId, ensureChatTranscriptFields(state));
+      const normalized = ensureChatTranscriptFields(state);
+      normalized.escalated = false;
+      chats.set(chatId, normalized);
     }
   } catch {
     // ignore broken file
@@ -166,7 +155,7 @@ function resetChatState(chatId) {
 async function closeIdleSupportChat(bot, chatId) {
   const chatKey = String(chatId);
   const state = chats.get(chatKey);
-  if (!state || state.hasUserMessage || state.escalated) {
+  if (!state || state.hasUserMessage) {
     clearIdleCloseTimer(chatKey);
     return;
   }
@@ -216,15 +205,6 @@ function sleep(ms) {
 
 function trimHistory(history) {
   return history.slice(-SUPPORT_HISTORY_LIMIT);
-}
-
-function formatUserLabel(from) {
-  if (!from) return "Пользователь";
-  const parts = [];
-  if (from.username) parts.push(`@${from.username}`);
-  if (from.first_name) parts.push(from.first_name);
-  parts.push(`id:${from.id}`);
-  return parts.join(" · ");
 }
 
 async function deleteMessageSafe(bot, chatId, messageId) {
@@ -278,27 +258,6 @@ function clearPendingReplyTimer(chatKey) {
   }
 }
 
-async function notifyAdmins(bot, from, text, reason) {
-  const label = formatUserLabel(from);
-  const body = [
-    "🆘 Эскалация поддержки",
-    reason ? `Причина: ${reason}` : "",
-    label,
-    "",
-    text,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  for (const adminId of SUPPORT_ADMIN_IDS) {
-    try {
-      await bot.telegram.sendMessage(adminId, body);
-    } catch {
-      // ignore delivery errors
-    }
-  }
-}
-
 function buildOffHoursReply() {
   return `Сейчас нерабочее время — поддержка на связи с ${SUPPORT_HOURS_START}:00 до ${SUPPORT_HOURS_END}:00 по Москве. Напишите в этот промежуток, мы обязательно ответим.`;
 }
@@ -337,27 +296,12 @@ async function clearStatusMessage(bot, chatId, state) {
 }
 
 async function deliverReply(bot, chatId, state, combinedText, from) {
-  if (state.escalated) {
-    return;
-  }
-
   if (!isWithinSupportHours()) {
     return;
   }
 
-  if (ESCALATION_PATTERN.test(combinedText)) {
-    state.escalated = true;
-    syncChatUser(state, from);
-    await clearStatusMessage(bot, chatId, state);
-    saveChats();
-    await notifyAdmins(bot, from, combinedText, "ключевые слова");
-    const escalationReply =
-      "Понял, сейчас передам старшему специалисту — вернёмся к вам в ближайшее время.";
-    appendTranscript(state, { role: "assistant", content: escalationReply, kind: "escalation" });
-    saveChats();
-    await bot.telegram.sendMessage(chatId, escalationReply);
-    return;
-  }
+  state.escalated = false;
+  syncChatUser(state, from);
 
   try {
     const rawReply = await callOpenRouter({
@@ -395,7 +339,6 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
     appendTranscript(state, { role: "assistant", content: errorReply, kind: "error" });
     saveChats();
     await bot.telegram.sendMessage(chatId, errorReply);
-    await notifyAdmins(bot, from, combinedText, `ошибка AI: ${error.message}`);
   }
 }
 
@@ -407,7 +350,7 @@ function scheduleTypingStart(bot, chatId) {
   const timer = setTimeout(() => {
     typingStartTimers.delete(key);
     const state = getChatState(key);
-    if (!state.pendingTexts?.length || state.escalated) {
+    if (!state.pendingTexts?.length) {
       return;
     }
     startTypingActionLoop(bot, chatId);
@@ -475,27 +418,6 @@ bot.start(async (ctx) => {
   scheduleIdleClose(bot, ctx.chat.id);
 });
 
-bot.command("human", async (ctx) => {
-  if (ctx.chat?.type !== "private") return;
-  const state = getChatState(ctx.chat.id);
-  syncChatUser(state, ctx.from);
-  appendTranscript(state, { role: "user", content: ctx.message?.text || "/human" });
-  state.escalated = true;
-  state.hasUserMessage = true;
-  clearIdleCloseTimer(String(ctx.chat.id));
-  clearPendingReplyTimer(String(ctx.chat.id));
-  clearTypingStartTimer(String(ctx.chat.id));
-  stopTypingAction(String(ctx.chat.id));
-  stopStatusAnimation(String(ctx.chat.id));
-  await clearStatusMessage(bot, ctx.chat.id, state);
-  saveChats();
-  await notifyAdmins(bot, ctx.from, ctx.message?.text || "/human", "команда /human");
-  const humanReply = "Передал ваш вопрос старшему специалисту — скоро вернёмся с ответом.";
-  appendTranscript(state, { role: "assistant", content: humanReply, kind: "escalation" });
-  saveChats();
-  await ctx.reply(humanReply);
-});
-
 bot.on("text", async (ctx) => {
   if (ctx.chat?.type !== "private") {
     await ctx.reply("Напишите мне в личные сообщения — так быстрее поможем.");
@@ -524,16 +446,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  if (state.escalated) {
-    appendTranscript(state, { role: "user", content: text });
-    saveChats();
-    await notifyAdmins(bot, ctx.from, text, "диалог уже эскалирован");
-    const escalatedReply = "Ваше сообщение передано специалисту, мы скоро ответим.";
-    appendTranscript(state, { role: "assistant", content: escalatedReply, kind: "escalation" });
-    saveChats();
-    await ctx.reply(escalatedReply);
-    return;
-  }
+  state.escalated = false;
 
   if (!state.greeted) {
     state.greeted = true;
@@ -581,16 +494,7 @@ bot.on(["photo", "document", "video", "voice", "video_note", "audio", "sticker",
     return;
   }
 
-  if (state.escalated) {
-    appendTranscript(state, { role: "user", content: "[медиа]" });
-    saveChats();
-    await notifyAdmins(bot, ctx.from, "[медиа]", "диалог уже эскалирован");
-    const escalatedReply = "Ваше сообщение передано специалисту, мы скоро ответим.";
-    appendTranscript(state, { role: "assistant", content: escalatedReply, kind: "escalation" });
-    saveChats();
-    await ctx.reply(escalatedReply);
-    return;
-  }
+  state.escalated = false;
 
   appendTranscript(state, { role: "user", content: "[медиа]" });
   const mediaReply = buildMediaDeclineReply();
