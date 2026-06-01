@@ -712,20 +712,33 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       updateProgress(name);
     }
 
-    async function api(path, body) {
-      const res = await fetch(path, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Telegram-Init-Data": initData(),
-        },
-        body: JSON.stringify({ ...body, initData: initData() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.error || "Ошибка запроса");
+    async function api(path, body, options = {}) {
+      const timeoutMs = options.timeoutMs || 20000;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(path, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Telegram-Init-Data": initData(),
+          },
+          body: JSON.stringify({ ...body, initData: initData() }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "Ошибка запроса");
+        }
+        return data;
+      } catch (error) {
+        if (error.name === "AbortError") {
+          throw new Error("Сервер не ответил вовремя. Закройте и откройте участие снова.");
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
       }
-      return data;
     }
 
     function escapeHtml(value) {
@@ -1124,12 +1137,19 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
 
       try {
+        const sessionPromise = api("/api/join/" + encodeURIComponent(drawId) + "/session", {});
+        let data;
         if (PAGE_MODE === "app") {
-          await loadDrawMeta();
+          const results = await Promise.all([loadDrawMeta().catch(() => {}), sessionPromise]);
+          data = results[1];
+        } else {
+          data = await sessionPromise;
         }
-        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/session", {});
         document.getElementById("loading").classList.add("hidden");
         hideMessage();
+        if (!data?.step) {
+          throw new Error("Пустой ответ сервера. Попробуйте ещё раз.");
+        }
         handleStep(data.step, data);
       } catch (error) {
         document.getElementById("loading").classList.add("hidden");
@@ -1207,10 +1227,12 @@ function registerJoinMiniApp(app, deps) {
       return null;
     }
     upsertUserMeta(user);
-    if (enrichUserAvatar) {
-      void enrichUserAvatar(user.id);
-    }
     return user;
+  }
+
+  function drawHasParticipant(draw, userId) {
+    const key = String(userId);
+    return (draw.participantIds || []).some((id) => String(id) === key);
   }
 
   function requireJoinUser(req, res, next) {
@@ -1298,7 +1320,7 @@ function registerJoinMiniApp(app, deps) {
   }
 
   async function resolveJoinEntry(draw, userId) {
-    if (draw.participantIds.includes(userId)) {
+    if (drawHasParticipant(draw, userId)) {
       clearJoinApiSession(userId, draw.id);
       scheduleParticipantAvatars(draw, userId);
       return buildJoinDonePayload(draw, userId, {
@@ -1404,49 +1426,57 @@ function registerJoinMiniApp(app, deps) {
   });
 
   app.post("/api/join/:drawId/session", requireJoinUser, async (req, res) => {
-    const drawId = req.params.drawId;
-    const userId = req.telegramUser.id;
-    const draw = getActiveDraw(drawId);
-    if (!draw) {
-      res.status(404).json({ error: "Розыгрыш недоступен." });
-      return;
-    }
+    try {
+      const drawId = req.params.drawId;
+      const userId = req.telegramUser.id;
+      const draw = getActiveDraw(drawId);
+      if (!draw) {
+        res.status(404).json({ error: "Розыгрыш недоступен." });
+        return;
+      }
 
-    const entry = await resolveJoinEntry(draw, userId);
-    if (entry) {
-      res.json(entry);
-      return;
-    }
+      const entry = await resolveJoinEntry(draw, userId);
+      if (entry) {
+        if (enrichUserAvatar) {
+          void enrichUserAvatar(userId);
+        }
+        res.json(entry);
+        return;
+      }
 
-    let session = getJoinApiSession(userId, drawId);
-    if (!session) {
-      session = {
-        userId,
-        drawId,
-        projectId: draw.projectId,
-        step: "captcha",
-      };
-      setJoinApiSession(userId, drawId, session);
-    }
+      let session = getJoinApiSession(userId, drawId);
+      if (!session) {
+        session = {
+          userId,
+          drawId,
+          projectId: draw.projectId,
+          step: "captcha",
+        };
+        setJoinApiSession(userId, drawId, session);
+      }
 
-    if (session.step === "captcha") {
+      if (session.step === "captcha") {
+        res.json(buildJoinStepResponse("captcha"));
+        return;
+      }
+      if (session.step === "registration" || session.step === "registration_confirm") {
+        res.json(buildJoinStepResponse("registration"));
+        return;
+      }
+      if (session.step === "await_ref_nickname") {
+        res.json(buildJoinStepResponse("trc20"));
+        return;
+      }
+      if (session.step === "await_trc20") {
+        res.json(buildJoinStepResponse("trc20"));
+        return;
+      }
+
       res.json(buildJoinStepResponse("captcha"));
-      return;
+    } catch (error) {
+      console.error("[join] session error:", error);
+      res.status(500).json({ error: "Не удалось открыть участие. Попробуйте ещё раз." });
     }
-    if (session.step === "registration" || session.step === "registration_confirm") {
-      res.json(buildJoinStepResponse("registration"));
-      return;
-    }
-    if (session.step === "await_ref_nickname") {
-      res.json(buildJoinStepResponse("trc20"));
-      return;
-    }
-    if (session.step === "await_trc20") {
-      res.json(buildJoinStepResponse("trc20"));
-      return;
-    }
-
-    res.json(buildJoinStepResponse("captcha"));
   });
 
   app.post("/api/join/:drawId/captcha", requireJoinUser, async (req, res) => {

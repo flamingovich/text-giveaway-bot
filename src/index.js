@@ -11,6 +11,7 @@ const { DateTime } = require("luxon");
 const { createWebAuth, validateInitData, renderLoginPage } = require("./web-auth");
 const { renderOrganizerGatePage, registerJoinMiniApp } = require("./join-miniapp");
 const { registerWinnersMiniApp } = require("./winners-miniapp");
+const { registerAdminDashboard } = require("./admin-dashboard");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const {
@@ -1864,7 +1865,7 @@ async function addUserToDraw(drawId, userId) {
   if (draw.status !== DRAW_STATUS.ACTIVE) {
     return { ok: false, cbMessage: "Розыгрыш не активен." };
   }
-  if (draw.participantIds.includes(userId)) {
+  if (drawHasParticipant(draw, userId)) {
     return { ok: true, cbMessage: "Вы уже участвуете ✅", already: true };
   }
 
@@ -1872,12 +1873,9 @@ async function addUserToDraw(drawId, userId) {
   writeData(data);
 
   void enrichUserAvatar(userId);
-
-  try {
-    await updateDrawPost(draw, false);
-  } catch (error) {
+  void updateDrawPost(draw, false).catch((error) => {
     console.error("Не удалось обновить пост после участия:", error.message);
-  }
+  });
 
   return {
     ok: true,
@@ -1885,6 +1883,11 @@ async function addUserToDraw(drawId, userId) {
     messageHtml: buildParticipationSuccessMessage(draw),
     already: false,
   };
+}
+
+function drawHasParticipant(draw, userId) {
+  const key = String(userId);
+  return (draw.participantIds || []).some((id) => String(id) === key);
 }
 
 function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
@@ -6792,6 +6795,18 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
 });
 
 app.use(PANEL_BASE, panelRouter);
+
+registerAdminDashboard(app, {
+  botToken: BOT_TOKEN,
+  cookieSecure: WEB_PUBLIC_URL.startsWith("https://"),
+  timezone: TIMEZONE,
+  adminIds: ADMIN_IDS,
+  readData,
+  readUserProjectProfiles,
+  readProjects,
+  readKnownChannels,
+  readDelegatedAdmins,
+});
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError || err?.name === "MulterError") {
