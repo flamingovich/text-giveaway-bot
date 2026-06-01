@@ -1872,10 +1872,10 @@ async function addUserToDraw(drawId, userId) {
   draw.participantIds.push(userId);
   writeData(data);
 
-  void enrichUserAvatar(userId);
   void updateDrawPost(draw, false).catch((error) => {
     console.error("Не удалось обновить пост после участия:", error.message);
   });
+  void enrichUserAvatar(userId);
 
   return {
     ok: true,

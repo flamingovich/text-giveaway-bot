@@ -1006,8 +1006,8 @@ function getJoinFlowStyles() {
       border-radius: 16px;
       padding: 16px;
       box-shadow: 0 8px 24px rgba(27, 45, 94, 0.06);
-      opacity: 0;
-      transform: translateX(4px);
+      opacity: 1;
+      transform: none;
       transition: opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
       pointer-events: none;
       visibility: hidden;
@@ -1802,6 +1802,23 @@ function getJoinFlowStyles() {
       color: var(--tg-theme-hint-color, #65708a);
       padding: 32px 16px;
       font-size: 14px;
+    }
+
+    body.join-flow .loading-retry-text {
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    body.join-flow #loadingRetry {
+      text-align: center;
+      padding: 24px 16px;
+    }
+
+    body.join-flow #loadingRetry .join-btn {
+      max-width: 220px;
+      margin: 0 auto;
     }
 
     body.join-flow.app-theme-dark .join-step-card {

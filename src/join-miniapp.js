@@ -359,6 +359,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     ${renderJoinProgressMarkup()}
     <div id="message" class="msg hidden"></div>
     <div id="loading" class="loading">Загрузка...</div>
+    <div id="loadingRetry" class="loading hidden">
+      <p id="loadingRetryText" class="loading-retry-text"></p>
+      <button type="button" class="join-btn join-btn-primary" id="loadingRetryBtn">Повторить</button>
+    </div>
     <div class="join-steps-viewport" id="joinStepsViewport">
 
       ${renderJoinStepCard("captcha", 1, "Проверка", renderRecaptchaWidgetMarkup())}
@@ -682,10 +686,17 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       });
     }
 
+    function hideLoading() {
+      const loading = document.getElementById("loading");
+      if (!loading) return;
+      loading.classList.add("hidden");
+      loading.style.display = "none";
+    }
+
     function showStep(name) {
       const next = document.getElementById("step-" + name);
       if (!next) return;
-      document.getElementById("loading").classList.add("hidden");
+      hideLoading();
       if (activeStep === name) return;
 
       if (activeStep === "done" && name !== "done") {
@@ -1122,7 +1133,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
 
       if (!initData()) {
-        document.getElementById("loading").classList.add("hidden");
+        hideLoading();
         showMessage("Откройте участие через кнопку в Telegram.");
         return;
       }
@@ -1130,14 +1141,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (PAGE_MODE === "app") {
         drawId = resolveDrawIdFromTelegram();
         if (!drawId) {
-          document.getElementById("loading").classList.add("hidden");
+          hideLoading();
           showMessage("Не указан розыгрыш. Нажмите «Участвовать» в посте канала.");
           return;
         }
       }
 
-      try {
-        const sessionPromise = api("/api/join/" + encodeURIComponent(drawId) + "/session", {});
+      async function bootJoin() {
+        const sessionPromise = api("/api/join/" + encodeURIComponent(drawId) + "/session", {}, { timeoutMs: 12000 });
         let data;
         if (PAGE_MODE === "app") {
           const results = await Promise.all([loadDrawMeta().catch(() => {}), sessionPromise]);
@@ -1145,20 +1156,58 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         } else {
           data = await sessionPromise;
         }
-        document.getElementById("loading").classList.add("hidden");
+        hideLoading();
+        const retry = document.getElementById("loadingRetry");
+        if (retry) retry.classList.add("hidden");
         hideMessage();
         if (!data?.step) {
           throw new Error("Пустой ответ сервера. Попробуйте ещё раз.");
         }
         handleStep(data.step, data);
-      } catch (error) {
-        document.getElementById("loading").classList.add("hidden");
-        showMessage(error.message);
       }
+
+      const retryBtn = document.getElementById("loadingRetryBtn");
+      if (retryBtn) {
+        retryBtn.addEventListener("click", () => {
+          document.getElementById("loadingRetry")?.classList.add("hidden");
+          const loading = document.getElementById("loading");
+          if (loading) {
+            loading.classList.remove("hidden");
+            loading.style.display = "block";
+          }
+          bootJoin().catch((error) => {
+            hideLoading();
+            showMessage(error.message);
+          });
+        });
+      }
+
+      const bootTimer = setTimeout(() => {
+        hideLoading();
+        const retry = document.getElementById("loadingRetry");
+        const retryText = document.getElementById("loadingRetryText");
+        if (retry) retry.classList.remove("hidden");
+        if (retryText) {
+          retryText.textContent = "Долго нет ответа от сервера. Нажмите «Повторить» или закройте и откройте участие снова.";
+        }
+      }, 13000);
+
+      bootJoin()
+        .catch((error) => {
+          hideLoading();
+          showMessage(error.message);
+        })
+        .finally(() => clearTimeout(bootTimer));
     })();
   </script>
 </body>
 </html>`;
+}
+
+function sendJoinHtml(res, html) {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.type("html").send(html);
 }
 
 function registerJoinMiniApp(app, deps) {
@@ -1295,31 +1344,33 @@ function registerJoinMiniApp(app, deps) {
     });
   }
 
-  function scheduleParticipantAvatars(draw, userId) {
-    if (!ensureUserAvatars) {
-      return;
+  function scheduleParticipantAvatars(_draw, userId) {
+    if (enrichUserAvatar && userId) {
+      void enrichUserAvatar(userId);
     }
-    const ids = [...(draw.participantIds || [])];
-    if (userId) {
-      ids.push(userId);
-    }
-    ensureUserAvatars(ids, { limit: 8 });
+  }
+
+  function queueAddUserToDraw(drawId, userId) {
+    void addUserToDraw(drawId, userId).catch((error) => {
+      console.error("[join] addUserToDraw:", error.message);
+    });
   }
 
   function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
     if (!projectId) {
       return false;
     }
+    const userKey = String(userId);
     const data = readData();
     return data.draws.some(
       (draw) =>
         draw.projectId === projectId &&
         (excludeDrawId ? draw.id !== excludeDrawId : true) &&
-        (draw.participantIds || []).includes(userId),
+        (draw.participantIds || []).some((id) => String(id) === userKey),
     );
   }
 
-  async function resolveJoinEntry(draw, userId) {
+  function resolveJoinEntry(draw, userId) {
     if (drawHasParticipant(draw, userId)) {
       clearJoinApiSession(userId, draw.id);
       scheduleParticipantAvatars(draw, userId);
@@ -1329,25 +1380,20 @@ function registerJoinMiniApp(app, deps) {
       });
     }
 
-    if (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) {
-      const result = await addUserToDraw(draw.id, userId);
-      clearJoinApiSession(userId, draw.id);
-      scheduleParticipantAvatars(draw, userId);
-      return buildJoinDonePayload(draw, userId, {
-        message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
-        alreadyJoined: Boolean(result.already),
-      });
-    }
-
     const profile = getUserProjectProfile(userId, draw.projectId);
     const canSkip = (profile?.referralVerified || profile?.selfReportedNonReferral) && profile?.trc20Address;
-    if (canSkip) {
-      const result = await addUserToDraw(draw.id, userId);
+    const autoJoin =
+      (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) || canSkip;
+
+    if (autoJoin) {
+      if (!drawHasParticipant(draw, userId)) {
+        queueAddUserToDraw(draw.id, userId);
+      }
       clearJoinApiSession(userId, draw.id);
       scheduleParticipantAvatars(draw, userId);
       return buildJoinDonePayload(draw, userId, {
-        message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
-        alreadyJoined: Boolean(result.already),
+        message: "Вы участвуете!",
+        alreadyJoined: false,
       });
     }
 
@@ -1376,13 +1422,12 @@ function registerJoinMiniApp(app, deps) {
   });
 
   app.get("/join/app", (_req, res) => {
-    res
-      .type("html")
-      .send(
-        renderJoinPage("app", { id: "app", status: DRAW_STATUS.ACTIVE, projectId: null }, null, {
-          recaptchaSiteKey: RECAPTCHA_SITE_KEY,
-        }),
-      );
+    sendJoinHtml(
+      res,
+      renderJoinPage("app", { id: "app", status: DRAW_STATUS.ACTIVE, projectId: null }, null, {
+        recaptchaSiteKey: RECAPTCHA_SITE_KEY,
+      }),
+    );
   });
 
   app.get("/join/:drawId", (req, res) => {
@@ -1396,7 +1441,10 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
     const project = draw.projectId ? getProjectById(draw.projectId) : null;
-    res.type("html").send(renderJoinPage(req.params.drawId, draw, project, { recaptchaSiteKey: RECAPTCHA_SITE_KEY }));
+    sendJoinHtml(
+      res,
+      renderJoinPage(req.params.drawId, draw, project, { recaptchaSiteKey: RECAPTCHA_SITE_KEY }),
+    );
   });
 
   app.post("/api/join/:drawId/live", requireJoinUser, async (req, res) => {
@@ -1435,7 +1483,7 @@ function registerJoinMiniApp(app, deps) {
         return;
       }
 
-      const entry = await resolveJoinEntry(draw, userId);
+      const entry = resolveJoinEntry(draw, userId);
       if (entry) {
         if (enrichUserAvatar) {
           void enrichUserAvatar(userId);
@@ -1488,7 +1536,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = await resolveJoinEntry(draw, userId);
+    const entry = resolveJoinEntry(draw, userId);
     if (entry) {
       res.json(entry);
       return;
@@ -1564,7 +1612,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = await resolveJoinEntry(draw, userId);
+    const entry = resolveJoinEntry(draw, userId);
     if (entry) {
       res.json(entry);
       return;
@@ -1590,7 +1638,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = await resolveJoinEntry(draw, userId);
+    const entry = resolveJoinEntry(draw, userId);
     if (entry) {
       res.json(entry);
       return;
