@@ -824,13 +824,24 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     const DONE_LIVE_POLL_MS = 2500;
     let doneLiveTimer = null;
-    let doneLiveSignature = "";
+    let doneListSignature = "";
+    let doneCountdownEndAt = "";
 
-    function buildDoneLiveSignature(payload) {
-      const ids = (Array.isArray(payload.participants) ? payload.participants : [])
-        .map((participant) => participant.id)
-        .join(",");
-      return String(payload.participantCount || 0) + "|" + ids;
+    function buildParticipantListSignature(participants) {
+      return (Array.isArray(participants) ? participants : [])
+        .map((participant) => {
+          return (
+            String(participant.id || "") +
+            ":" +
+            String(participant.avatarUrl || "") +
+            ":" +
+            String(participant.displayName || "") +
+            ":" +
+            String(participant.username || "") +
+            (participant.isYou ? ":you" : "")
+          );
+        })
+        .join("|");
     }
 
     function stopDoneLivePolling() {
@@ -845,7 +856,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       try {
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/live", {});
         renderDoneStats(data);
-        doneLiveSignature = buildDoneLiveSignature(data);
         if (data.endAt && formatRemaining(data.endAt) === "Завершён") {
           stopDoneLivePolling();
         }
@@ -867,10 +877,21 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     function startDoneLivePolling(initialPayload) {
-      doneLiveSignature = initialPayload ? buildDoneLiveSignature(initialPayload) : "";
+      doneListSignature = initialPayload
+        ? buildParticipantListSignature(initialPayload.participants)
+        : "";
       if (PAGE_MODE === "preview" || activeStep !== "done") return;
       refreshDoneLiveState();
       scheduleDoneLivePoll(DONE_LIVE_POLL_MS);
+    }
+
+    function updateDoneCountdown(endAtISO) {
+      const nextEndAt = endAtISO || "";
+      if (nextEndAt === doneCountdownEndAt) {
+        return;
+      }
+      doneCountdownEndAt = nextEndAt;
+      startDoneCountdown(nextEndAt);
     }
 
     function startDoneCountdown(endAtISO) {
@@ -889,36 +910,161 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
-    function renderDoneParticipant(participant) {
-      const fallbackHtml =
-        '<div class="join-done-avatar-fallback' +
-        (participant.avatarUrl ? " hidden" : "") +
-        '" style="' +
-        escapeHtml(participant.fallbackStyle || "") +
-        '">' +
-        escapeHtml(participant.initial || "?") +
-        "</div>";
-      const avatarInner = participant.avatarUrl
-        ? '<img src="' +
-          escapeHtml(participant.avatarUrl) +
-          '" alt="" class="join-done-avatar-img" loading="lazy" onerror="this.classList.add(\\'hidden\\');var f=this.nextElementSibling;if(f)f.classList.remove(\\'hidden\\')" />' +
-          fallbackHtml
-        : fallbackHtml;
-      const youBadge = participant.isYou ? '<span class="join-done-you">Вы</span>' : "";
-      const handle = participant.username
-        ? escapeHtml(participant.username)
-        : '<span class="join-done-row-handle-muted">без username</span>';
-      return (
-        '<article class="join-done-row' + (participant.isYou ? " join-done-row-you" : "") + '">' +
-        '<div class="join-done-avatar">' + avatarInner + "</div>" +
-        '<div class="join-done-row-body">' +
-        '<div class="join-done-row-text">' +
-        '<span class="join-done-row-name">' + escapeHtml(participant.displayName) + "</span>" +
-        '<span class="join-done-row-handle">' + handle + "</span>" +
-        "</div>" +
-        youBadge +
-        "</div></article>"
-      );
+    function ensureDoneAvatarNodes(avatarEl, participant) {
+      let img = avatarEl.querySelector(".join-done-avatar-img");
+      let fallback = avatarEl.querySelector(".join-done-avatar-fallback");
+      if (!fallback) {
+        fallback = document.createElement("div");
+        fallback.className = "join-done-avatar-fallback";
+        avatarEl.appendChild(fallback);
+      }
+      fallback.textContent = participant.initial || "?";
+      if (participant.fallbackStyle) {
+        fallback.setAttribute("style", participant.fallbackStyle);
+      } else {
+        fallback.removeAttribute("style");
+      }
+
+      const nextUrl = String(participant.avatarUrl || "");
+      const currentUrl = img ? img.getAttribute("src") || "" : "";
+
+      if (!nextUrl) {
+        if (img) {
+          img.remove();
+        }
+        fallback.classList.remove("hidden");
+        return;
+      }
+
+      if (!img) {
+        img = document.createElement("img");
+        img.alt = "";
+        img.className = "join-done-avatar-img";
+        img.loading = "lazy";
+        img.addEventListener("error", () => {
+          img.classList.add("hidden");
+          fallback.classList.remove("hidden");
+        });
+        avatarEl.insertBefore(img, fallback);
+      }
+
+      if (currentUrl !== nextUrl) {
+        img.classList.remove("hidden");
+        fallback.classList.add("hidden");
+        img.setAttribute("src", nextUrl);
+      } else if (!img.classList.contains("hidden")) {
+        fallback.classList.add("hidden");
+      }
+    }
+
+    function updateDoneParticipantRow(row, participant) {
+      const id = String(participant.id || "");
+      if (row.dataset.participantId !== id) {
+        row.dataset.participantId = id;
+      }
+      row.classList.toggle("join-done-row-you", Boolean(participant.isYou));
+
+      const avatarEl = row.querySelector(".join-done-avatar");
+      if (avatarEl) {
+        ensureDoneAvatarNodes(avatarEl, participant);
+      }
+
+      const nameEl = row.querySelector(".join-done-row-name");
+      if (nameEl) {
+        nameEl.textContent = participant.displayName || "";
+      }
+
+      const handleEl = row.querySelector(".join-done-row-handle");
+      if (handleEl) {
+        if (participant.username) {
+          handleEl.textContent = participant.username;
+          handleEl.classList.remove("join-done-row-handle-muted");
+        } else {
+          handleEl.textContent = "без username";
+          handleEl.classList.add("join-done-row-handle-muted");
+        }
+      }
+
+      const youBadge = row.querySelector(".join-done-you");
+      if (participant.isYou) {
+        if (!youBadge) {
+          const badge = document.createElement("span");
+          badge.className = "join-done-you";
+          badge.textContent = "Вы";
+          row.querySelector(".join-done-row-body")?.appendChild(badge);
+        }
+      } else if (youBadge) {
+        youBadge.remove();
+      }
+    }
+
+    function createDoneParticipantRow(participant) {
+      const row = document.createElement("article");
+      row.className = "join-done-row" + (participant.isYou ? " join-done-row-you" : "");
+      row.dataset.participantId = String(participant.id || "");
+
+      const avatarEl = document.createElement("div");
+      avatarEl.className = "join-done-avatar";
+      row.appendChild(avatarEl);
+
+      const body = document.createElement("div");
+      body.className = "join-done-row-body";
+
+      const text = document.createElement("div");
+      text.className = "join-done-row-text";
+
+      const nameEl = document.createElement("span");
+      nameEl.className = "join-done-row-name";
+      text.appendChild(nameEl);
+
+      const handleEl = document.createElement("span");
+      handleEl.className = "join-done-row-handle";
+      text.appendChild(handleEl);
+
+      body.appendChild(text);
+      row.appendChild(body);
+
+      updateDoneParticipantRow(row, participant);
+      return row;
+    }
+
+    function syncDoneParticipantsList(participants) {
+      const list = document.getElementById("joinDoneList");
+      if (!list) return;
+
+      const items = Array.isArray(participants) ? participants : [];
+      if (!items.length) {
+        list.innerHTML = '<p class="join-done-empty">Список участников пока пуст.</p>';
+        return;
+      }
+
+      const empty = list.querySelector(".join-done-empty");
+      if (empty) {
+        empty.remove();
+      }
+
+      const existing = new Map();
+      list.querySelectorAll("[data-participant-id]").forEach((row) => {
+        existing.set(row.dataset.participantId, row);
+      });
+
+      const orderedRows = [];
+      items.forEach((participant) => {
+        const id = String(participant.id || "");
+        let row = existing.get(id);
+        if (!row) {
+          row = createDoneParticipantRow(participant);
+        } else {
+          updateDoneParticipantRow(row, participant);
+          existing.delete(id);
+        }
+        orderedRows.push(row);
+      });
+
+      existing.forEach((row) => row.remove());
+      orderedRows.forEach((row) => {
+        list.appendChild(row);
+      });
     }
 
     function renderDoneStats(payload) {
@@ -934,7 +1080,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
       countEl.textContent = String(participantCount);
       chanceEl.textContent = formatWinChance(payload.winChancePercent);
-      startDoneCountdown(payload.endAt || "");
+      updateDoneCountdown(payload.endAt || "");
 
       if (participantCount > 0 || payload.endAt) {
         stats.classList.remove("hidden");
@@ -944,12 +1090,15 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
       if (participantCount > 0) {
         participantsBlock.classList.remove("hidden");
-        list.innerHTML = participants.length
-          ? participants.map(renderDoneParticipant).join("")
-          : '<p class="join-done-empty">Список участников пока пуст.</p>';
+        const nextListSignature = buildParticipantListSignature(participants);
+        if (nextListSignature !== doneListSignature) {
+          syncDoneParticipantsList(participants);
+          doneListSignature = nextListSignature;
+        }
       } else {
         participantsBlock.classList.add("hidden");
         list.innerHTML = "";
+        doneListSignature = "";
       }
     }
 
