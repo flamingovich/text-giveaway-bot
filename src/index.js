@@ -990,12 +990,9 @@ function getDrawDurationLabel(draw) {
   return "по команде администратора";
 }
 
-function buildDrawParticipateConditionLine(draw) {
-  const participateUrl = getJoinParticipateUrl(draw.id);
-  if (participateUrl) {
-    return `• Нажать на кнопку <a href="${escapeHtml(participateUrl)}"><b>Участвовать</b></a>`;
-  }
-  return "• Нажать на кнопку Участвовать";
+function buildDrawParticipateConditionLine(_draw) {
+  // Без <a href> в тексте — иначе тап по слову «Участвовать» открывает сайт, а не mini-app.
+  return "• Нажать кнопку <b>Участвовать</b> под постом";
 }
 
 function buildDrawMessage(draw, options = {}) {
@@ -1115,10 +1112,11 @@ function getJoinMiniAppBaseUrl() {
 }
 
 function getJoinDirectLink(drawId) {
-  if (!BOT_USERNAME || !JOIN_MINI_APP_SHORT_NAME || !WEB_PUBLIC_URL.startsWith("https://")) {
+  const username = (BOT_USERNAME || process.env.BOT_USERNAME || "").replace("@", "");
+  if (!username || !JOIN_MINI_APP_SHORT_NAME || !WEB_PUBLIC_URL.startsWith("https://")) {
     return "";
   }
-  return `https://t.me/${BOT_USERNAME}/${JOIN_MINI_APP_SHORT_NAME}?startapp=${encodeURIComponent(drawId)}`;
+  return `https://t.me/${username}/${JOIN_MINI_APP_SHORT_NAME}?startapp=${encodeURIComponent(drawId)}`;
 }
 
 function getJoinParticipateUrl(drawId) {
@@ -1583,24 +1581,50 @@ async function refreshDrawPostKeyboard(draw) {
   await bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup);
 }
 
+async function forceRefreshDrawPost(draw) {
+  await refreshDrawPostKeyboard(draw);
+  await updateDrawPost(draw, draw.status === DRAW_STATUS.FINISHED);
+}
+
 async function syncActiveDrawKeyboards() {
   const data = readData();
+  let updated = 0;
+  let failed = 0;
+
   for (const draw of data.draws) {
     if (draw.status !== DRAW_STATUS.ACTIVE || !draw.messageId) {
       continue;
     }
     const participateUrl = getJoinParticipateUrl(draw.id);
-    try {
-      await refreshDrawPostKeyboard(draw);
-      console.log(`[sync] кнопка «Участвовать» ${draw.id}: ${participateUrl}`);
-    } catch (error) {
-      if (!isIgnorableTelegramEditError(error)) {
-        console.warn(`[sync] reply_markup ${draw.id}: ${error.message} — полное обновление поста`);
-      }
-      scheduleDrawPostUpdate(draw.id, false);
+    if (!participateUrl.includes("t.me/")) {
+      console.error(
+        `[sync] ${draw.id}: неверный URL кнопки «${participateUrl}» — проверьте BOT_USERNAME и JOIN_MINI_APP_SHORT_NAME`,
+      );
+      failed += 1;
+      continue;
     }
-    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    let ok = false;
+    for (let attempt = 1; attempt <= 3 && !ok; attempt += 1) {
+      try {
+        await forceRefreshDrawPost(draw);
+        console.log(`[sync] кнопка «Участвовать» ${draw.id}: ${participateUrl}`);
+        updated += 1;
+        ok = true;
+      } catch (error) {
+        if (attempt === 3) {
+          failed += 1;
+          console.error(`[sync] не удалось обновить ${draw.id} (канал ${draw.channelId}): ${error.message}`);
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+        }
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
+
+  console.log(`[sync] клавиатуры постов: обновлено ${updated}, ошибок ${failed}`);
+  return { updated, failed };
 }
 
 function getUserProjectProfile(userId, projectId) {
@@ -7112,6 +7136,18 @@ bot.command("my_draws", async (ctx) => {
   await ctx.reply(lines.join("\n\n"));
 });
 
+bot.command("refresh_posts", async (ctx) => {
+  if (!isPlatformAdmin(ctx.from?.id)) {
+    await ctx.reply("Команда только для администратора платформы.");
+    return;
+  }
+  await ctx.reply("Обновляю кнопки «Участвовать» во всех активных постах…");
+  const { updated, failed } = await syncActiveDrawKeyboards();
+  await ctx.reply(
+    `Готово. Обновлено постов: ${updated}. Ошибок: ${failed}.\nКнопка должна вести на t.me/${BOT_USERNAME || "бот"}/${JOIN_MINI_APP_SHORT_NAME}?startapp=…`,
+  );
+});
+
 bot.on("text", async (ctx) => {
   upsertUserMeta(ctx.from);
 
@@ -7383,7 +7419,7 @@ async function bootstrap() {
   console.log(
     `[boot] participate example: ${getJoinParticipateUrl("draw_example") || "(нет URL — проверьте BOT_USERNAME и JOIN_MINI_APP_SHORT_NAME)"}`,
   );
-  void syncActiveDrawKeyboards();
+  await syncActiveDrawKeyboards();
   await syncAllOrganizerPanelMenus();
   console.log(`Бот запущен: @${BOT_USERNAME}`);
 }
