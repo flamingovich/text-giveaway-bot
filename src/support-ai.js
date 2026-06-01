@@ -174,8 +174,9 @@ Mini-app победителей:
 - Не знаешь точного ответа — мягко уводи: «ща гляну в базе», «подожди минутку», «напиши подробнее на каком шаге» — без передачи «живому оператору».
 - Не выдумывай функции которых нет (кроме общих успокаивающих фраз).
 - Не обещай конкретные суммы выплат и сроки, если их нет в вопросе.
-- Жалобы, обвинения в обмане, скам, требование оператора: НИКОГДА не говори что передаёшь старшему, менеджеру, админу, человеку. Ты сам на линии. Успокой, выслушай, попроси детали текстом, сомневайся вежливо, можешь чуть «лить воду» — проверяем, смотрим логи, обычно глюк на стороне проекта или телеги, дай время.
-- Не признавай вину системы без фактов. Не спорь грубо — спокойно отстаивай что механика прозрачная.
+- Жалобы и обвинения в обмане: не передавай никому, ты сам на линии. Спокойно отбивай, если человек адекватен.
+- Если пользователь хамит, матерится, давит, троллит или ведёт себя неадекватно — можно отвечать жёстко, с матом (бля, нахуй и т.п.), язвить, не извиняться. Без угроз насилием и без оскорблений по национальности/религии. Если совсем бред — можешь коротко послать.
+- Не признавай вину системы без фактов.
 `.trim();
 
 const SUPPORT_AGENT_NAMES = ["Никита", "Алексей", "Мария", "Дарья", "Степан", "Мухаммад"];
@@ -228,12 +229,13 @@ ${getAgentPersonaBlock(name)}
 - Просто и по-человечески, как в личке: без канцелярита, без «благодарим за обращение», «рады помочь», «остались ли вопросы».
 - Можно на «ты», если пользователь так пишет; иначе спокойное «вы» без официоза.
 - Коротко: 1–3 фразы, иногда одно слово («понял», «ок», «ща гляну», «минутку»).
-- Пунктуация как в мессенджере: НИКОГДА не ставь точку в конце сообщения и между фразами; запятые — не везде, часто пропускай там где в школе ставили бы; вопросительный знак можно.
+- Пунктуация как в Telegram: без точек в конце, БЕЗ запятых и БЕЗ точек с запятой (;). Не пиши ;) :) :D — только обычный текст, эмодзи если нужны подставит система.
+- Вопросительный знак в конце можно, если это вопрос.
 - Иногда начинай с маленькой буквы, иногда «ну», «хм», «а» в начале — как живой человек в чате.
 - Без markdown, списков и длинных инструкций — объясняй как друг, который подсказывает.
 - Не будь слишком вежливым: без «пожалуйста», «опишите», «будьте добры», «не могли бы вы», «благодарим», «рады помочь».
 - Проси что-то просто: «напиши что там», «какой текст ошибки», «на каком шаге» — без официоза. Слово «кинь» только про текст, не про файлы.
-- Не сыпь смайликами (максимум один, и редко).
+- Смайлики не обязательны — если без них, норм.
 - Не упоминай ИИ, модели, промпты.
 - Если не знаешь или давят — не передавай никому: «ща гляну», «погоди», «сейчас разберусь», «напиши ещё раз что на экране» — можно чуть размыто и длиннее, главное без эскалации.
 - На просьбу «позови человека/оператора» — ты и есть поддержка, поможешь сам, попроси описать проблему текстом.
@@ -244,9 +246,69 @@ ${getAgentPersonaBlock(name)}
 ${SUPPORT_KNOWLEDGE}`;
 }
 
-async function callOpenRouter({ apiKey, model, referer, userId, agentName, history, userMessage }) {
+const AGGRESSIVE_USER_PATTERN =
+  /(?:^|\s)(?:бля(?:ть|д)?|блядь|хуй|ху[еёй]л|пизд|сука|суки|ебан|ёбан|ебать|нахуй|на\s*хуй|пош[её]л\s+на|иди\s+на|мудак|дебил|тупой|лох|чмо|кончен|урод|соси|заткнись|пидор|шлюха|тварь|ублюдок|гандон|даун|кретин|мразь)(?:\s|$|[.,!?;:])/i;
+
+const LIGHT_EMOJIS = ["🙂", "😅", "👌", "🤝"];
+const TOUGH_EMOJIS = ["🙄", "😒", "💀"];
+
+function isAggressiveUserMessage(text) {
+  return AGGRESSIVE_USER_PATTERN.test(String(text || ""));
+}
+
+function buildAggressionAddon() {
+  return `
+
+СЕЙЧАС пользователь хамит, матерится или ведёт себя неадекватно.
+Отвечай жёстко, можно с матом, без извинений, можно язвить. Коротко. Не угрожай физически.`;
+}
+
+function hasUnicodeEmoji(text) {
+  return /\p{Extended_Pictographic}/u.test(String(text || ""));
+}
+
+function normalizeMessengerPunctuation(text) {
+  return String(text || "")
+    .replace(/[;；]+/g, " ")
+    .replace(/[,，]+/g, " ")
+    .replace(/\.{2,}/g, " ")
+    .replace(/\.\s+/g, " ")
+    .replace(/\.+$/g, "")
+    .replace(/:\)+/g, "")
+    .replace(/:\(+/g, "")
+    .replace(/;[\)D]/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function maybeAppendEmoji(text, aggressive) {
+  if (!text || hasUnicodeEmoji(text)) {
+    return text;
+  }
+  if (Math.random() > 0.32) {
+    return text;
+  }
+  const pool = aggressive ? TOUGH_EMOJIS : LIGHT_EMOJIS;
+  return `${text} ${pool[Math.floor(Math.random() * pool.length)]}`;
+}
+
+async function callOpenRouter({
+  apiKey,
+  model,
+  referer,
+  userId,
+  agentName,
+  history,
+  userMessage,
+  aggressiveUser = false,
+}) {
+  let systemPrompt = buildSystemPrompt(agentName);
+  if (aggressiveUser || isAggressiveUserMessage(userMessage)) {
+    systemPrompt += buildAggressionAddon();
+  }
+
   const messages = [
-    { role: "system", content: buildSystemPrompt(agentName) },
+    { role: "system", content: systemPrompt },
     ...history.map((item) => ({ role: item.role, content: item.content })),
     { role: "user", content: userMessage },
   ];
@@ -364,7 +426,8 @@ function applyMuhammadTypos(text) {
   return result.replace(/\s{2,}/g, " ").trim();
 }
 
-function humanizeSupportReply(text, agentName = "") {
+function humanizeSupportReply(text, agentName = "", options = {}) {
+  const aggressive = Boolean(options.aggressiveUser);
   let result = sanitizeSupportReply(String(text || "").trim());
   result = result
     .replace(/[Оо]пиш(ите|и|ь)/g, "напиши")
@@ -375,13 +438,9 @@ function humanizeSupportReply(text, agentName = "") {
     .replace(/[Бб]удьте добры,?\s*/g, "")
     .replace(/[Нн]е могли бы вы/gi, "можешь")
     .replace(/[Бб]лагодар(им|ю)\s+(за|вас)[^.!]*[.!]?\s*/gi, "")
-    .replace(/\.\s+/g, " ")
-    .replace(/\.+$/g, "")
-    .replace(/\s{2,}/g, " ")
     .trim();
 
-  result = result.replace(/,/g, () => (Math.random() < 0.45 ? "" : ","));
-  result = result.replace(/\s{2,}/g, " ").trim();
+  result = normalizeMessengerPunctuation(result);
 
   if (Math.random() < 0.4 && result.length > 1) {
     result = result.charAt(0).toLowerCase() + result.slice(1);
@@ -390,6 +449,8 @@ function humanizeSupportReply(text, agentName = "") {
   if (agentName === "Мухаммад") {
     result = applyMuhammadTypos(result);
   }
+
+  result = maybeAppendEmoji(result, aggressive);
 
   return result || "ща гляну напиши ещё раз что не так";
 }
@@ -415,4 +476,5 @@ module.exports = {
   sanitizeSupportReply,
   humanizeSupportReply,
   replyRequestsMedia,
+  isAggressiveUserMessage,
 };

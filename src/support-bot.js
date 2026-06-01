@@ -10,6 +10,7 @@ const {
   humanizeSupportReply,
   replyRequestsMedia,
   pickRandomAgentName,
+  isAggressiveUserMessage,
 } = require("./support-ai");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
 const {
@@ -197,7 +198,9 @@ async function endSupportChat(bot, chatId, state, from) {
     syncChatUser(state, from);
     state.pendingTexts = [];
     const replyText = buildStopReply(state.agentName);
-    const outgoing = humanizeSupportReply(replyText, state.agentName);
+    const outgoing = humanizeSupportReply(replyText, state.agentName, {
+      aggressiveUser: isAggressiveUserMessage(replyText),
+    });
     appendTranscript(state, { role: "assistant", content: outgoing, kind: "closed" });
     state.closedAt = new Date().toISOString();
     saveChats();
@@ -370,6 +373,12 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
   syncChatUser(state, from);
 
   try {
+    const aggressiveUser =
+      isAggressiveUserMessage(combinedText) ||
+      (state.history || []).slice(-6).some(
+        (item) => item.role === "user" && isAggressiveUserMessage(item.content),
+      );
+
     const rawReply = await callOpenRouter({
       apiKey: OPENROUTER_API_KEY,
       model: OPENROUTER_MODEL,
@@ -378,13 +387,14 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
       agentName: state.agentName,
       history: state.history,
       userMessage: combinedText,
+      aggressiveUser,
     });
 
     if (replyRequestsMedia(rawReply)) {
       console.warn("[support-bot] AI запросил медиа — ответ заменён:", rawReply.slice(0, 160));
     }
 
-    const reply = humanizeSupportReply(rawReply, state.agentName);
+    const reply = humanizeSupportReply(rawReply, state.agentName, { aggressiveUser });
 
     await simulateTyping(bot, chatId, reply);
     stopTypingAction(String(chatId));
