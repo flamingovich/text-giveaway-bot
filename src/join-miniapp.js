@@ -1287,6 +1287,7 @@ function registerJoinMiniApp(app, deps) {
   function requireJoinUser(req, res, next) {
     const user = resolveTelegramUser(req);
     if (!user) {
+      console.warn(`[join] auth failed ${req.method} ${req.originalUrl}`);
       res.status(401).json({ error: "Откройте через Telegram." });
       return;
     }
@@ -1402,6 +1403,20 @@ function registerJoinMiniApp(app, deps) {
 
   app.use("/assets", express.static(deps.ASSETS_DIR));
 
+  app.get("/api/join/health", (_req, res) => {
+    res.json({ ok: true, ts: new Date().toISOString() });
+  });
+
+  app.use("/api/join", (req, res, next) => {
+    const started = Date.now();
+    res.on("finish", () => {
+      console.log(
+        `[join] ${req.method} ${req.originalUrl} → ${res.statusCode} (${Date.now() - started}ms)`,
+      );
+    });
+    next();
+  });
+
   app.get("/api/join/:drawId/meta", (req, res) => {
     const draw = getActiveDraw(req.params.drawId);
     if (!draw) {
@@ -1455,7 +1470,7 @@ function registerJoinMiniApp(app, deps) {
       res.status(404).json({ error: "Розыгрыш недоступен." });
       return;
     }
-    if (!(draw.participantIds || []).includes(userId)) {
+    if (!drawHasParticipant(draw, userId)) {
       res.status(403).json({ error: "Вы не участвуете в этом розыгрыше." });
       return;
     }
@@ -1474,11 +1489,13 @@ function registerJoinMiniApp(app, deps) {
   });
 
   app.post("/api/join/:drawId/session", requireJoinUser, async (req, res) => {
+    const started = Date.now();
     try {
       const drawId = req.params.drawId;
       const userId = req.telegramUser.id;
       const draw = getActiveDraw(drawId);
       if (!draw) {
+        console.warn(`[join] session draw unavailable drawId=${drawId} userId=${userId}`);
         res.status(404).json({ error: "Розыгрыш недоступен." });
         return;
       }
@@ -1488,6 +1505,9 @@ function registerJoinMiniApp(app, deps) {
         if (enrichUserAvatar) {
           void enrichUserAvatar(userId);
         }
+        console.log(
+          `[join] session auto-entry drawId=${drawId} userId=${userId} step=${entry.step} (${Date.now() - started}ms)`,
+        );
         res.json(entry);
         return;
       }
@@ -1504,6 +1524,7 @@ function registerJoinMiniApp(app, deps) {
       }
 
       if (session.step === "captcha") {
+        console.log(`[join] session captcha drawId=${drawId} userId=${userId} (${Date.now() - started}ms)`);
         res.json(buildJoinStepResponse("captcha"));
         return;
       }
@@ -1520,6 +1541,7 @@ function registerJoinMiniApp(app, deps) {
         return;
       }
 
+      console.log(`[join] session captcha(fallback) drawId=${drawId} userId=${userId} (${Date.now() - started}ms)`);
       res.json(buildJoinStepResponse("captcha"));
     } catch (error) {
       console.error("[join] session error:", error);
