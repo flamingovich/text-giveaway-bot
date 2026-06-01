@@ -4,7 +4,13 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const fs = require("fs");
 const { Telegraf } = require("telegraf");
 const { DateTime } = require("luxon");
-const { callOpenRouter, verifyOpenRouterKey, humanizeSupportReply, replyRequestsMedia } = require("./support-ai");
+const {
+  callOpenRouter,
+  verifyOpenRouterKey,
+  humanizeSupportReply,
+  replyRequestsMedia,
+  pickRandomAgentName,
+} = require("./support-ai");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
 const {
   appendTranscript,
@@ -32,7 +38,6 @@ const SUPPORT_TYPING_MS_PER_CHAR_MAX = Number(process.env.SUPPORT_TYPING_MS_PER_
 const TYPING_ACTION_INTERVAL_MS = 4_500;
 const SUPPORT_HISTORY_LIMIT = Number(process.env.SUPPORT_HISTORY_LIMIT || 16);
 const SUPPORT_IDLE_CLOSE_MS = Number(process.env.SUPPORT_IDLE_CLOSE_MS || 10 * 60 * 1000);
-const AGENT_NAMES = ["Никита", "Алексей", "Мария", "Дарья"];
 
 const DATA_DIR = path.join(__dirname, "..", "data");
 const CHATS_FILE = path.join(DATA_DIR, "support-chats.json");
@@ -113,7 +118,7 @@ function getChatState(chatId) {
   const key = String(chatId);
   if (!chats.has(key)) {
     chats.set(key, {
-      agentName: AGENT_NAMES[Math.floor(Math.random() * AGENT_NAMES.length)],
+      agentName: pickRandomAgentName(),
       history: [],
       messages: [],
       lastMessageAt: null,
@@ -318,7 +323,7 @@ async function deliverReply(bot, chatId, state, combinedText, from) {
       console.warn("[support-bot] AI запросил медиа — ответ заменён:", rawReply.slice(0, 160));
     }
 
-    const reply = humanizeSupportReply(rawReply);
+    const reply = humanizeSupportReply(rawReply, state.agentName);
 
     await simulateTyping(bot, chatId, reply);
     stopTypingAction(String(chatId));
@@ -388,6 +393,9 @@ bot.start(async (ctx) => {
 
   const state = getChatState(ctx.chat.id);
   syncChatUser(state, ctx.from);
+  state.agentName = pickRandomAgentName();
+  state.history = [];
+  state.escalated = false;
   if (!isWithinSupportHours()) {
     const offHoursText = buildOffHoursReply();
     appendTranscript(state, { role: "assistant", content: offHoursText, kind: "off_hours" });
@@ -425,7 +433,9 @@ bot.on("text", async (ctx) => {
   }
 
   const text = String(ctx.message.text || "").trim();
-  if (!text || text.startsWith("/")) return;
+  if (!text) return;
+  if (/^\/human\b/i.test(text)) return;
+  if (text.startsWith("/")) return;
 
   const chatId = ctx.chat.id;
   const chatKey = String(chatId);
@@ -522,6 +532,11 @@ async function boot() {
   }
 
   await bot.launch();
+  try {
+    await bot.telegram.setMyCommands([{ command: "start", description: "Начать чат с поддержкой" }]);
+  } catch (error) {
+    console.warn("[support-bot] не удалось обновить команды бота:", error.message);
+  }
   console.log(
     `[support-bot] Telegram запущен · ${SUPPORT_HOURS_START}:00–${SUPPORT_HOURS_END}:00 ${TIMEZONE}`,
   );

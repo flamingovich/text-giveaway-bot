@@ -178,8 +178,43 @@ Mini-app победителей:
 - Не признавай вину системы без фактов. Не спорь грубо — спокойно отстаивай что механика прозрачная.
 `.trim();
 
+const SUPPORT_AGENT_NAMES = ["Никита", "Алексей", "Мария", "Дарья", "Степан", "Мухаммад"];
+
+function pickRandomAgentName() {
+  return SUPPORT_AGENT_NAMES[Math.floor(Math.random() * SUPPORT_AGENT_NAMES.length)];
+}
+
+function getAgentPersonaBlock(agentName) {
+  switch (agentName) {
+    case "Мария":
+      return "Ты Мария — спокойная, чуть мягче формулировки.";
+    case "Дарья":
+      return "Ты Дарья — коротко и по-дружески, можно «ну», «окей».";
+    case "Алексей":
+      return "Ты Алексей — прямой, без лишней воды.";
+    case "Степан":
+      return "Ты Степан — разговорный, иногда «короче», «блин», не грубо.";
+    case "Мухаммад":
+      return [
+        "Ты Мухаммад — грамотность почти ноль, как быстро печатаешь с телефона:",
+        "опечатки, без запятых, «што» вместо «что», «щас», слова иногда слипаются.",
+        "Тёплый прямой тон, иногда «брат», лёгкий бытовой кавказский колорит в чате — без мата и без шуток про народы.",
+        "Смысл должен быть понятен.",
+      ].join(" ");
+    case "Никита":
+    default:
+      return "Ты Никита — спокойный, нейтральный тон поддержки.";
+  }
+}
+
 function buildSystemPrompt(agentName) {
-  return `Ты ${agentName}, из поддержки RollerBot в Telegram. Обычный живой человек в чате, не корпоративный бот и не нейросеть.
+  const name = SUPPORT_AGENT_NAMES.includes(agentName) ? agentName : "Никита";
+
+  return `Ты ${name}, из поддержки RollerBot в Telegram. Обычный живой человек в чате, не корпоративный бот и не нейросеть.
+
+${getAgentPersonaBlock(name)}
+
+ВАЖНО: тебя зовут ${name}. Всегда отвечай от этого имени. Не называй себя другим именем (не «Никита», если ты не Никита).
 
 КРИТИЧЕСКОЕ ПРАВИЛО — МЕДИА (важнее всего остального):
 - Ты НЕ МОЖЕШЬ принимать медиа и НИКОГДА не просишь их прислать.
@@ -299,7 +334,37 @@ function sanitizeSupportReply(text) {
   return text;
 }
 
-function humanizeSupportReply(text) {
+function applyMuhammadTypos(text) {
+  let result = String(text || "");
+  const swaps = [
+    [/\bчто\b/gi, "што"],
+    [/\bсейчас\b/gi, "щас"],
+    [/\bсмотрю\b/gi, "смтарю"],
+    [/\bнапиши\b/gi, "напиш"],
+    [/\bподожди\b/gi, "падожди"],
+    [/\bхорошо\b/gi, "харашо"],
+    [/\bпонял\b/gi, "поня"],
+  ];
+
+  for (const [pattern, replacement] of swaps) {
+    if (Math.random() < 0.55) {
+      result = result.replace(pattern, replacement);
+    }
+  }
+
+  if (Math.random() < 0.25 && !/брат/i.test(result)) {
+    result = `брат ${result}`;
+  }
+
+  result = result.replace(/,/g, "");
+  if (Math.random() < 0.35) {
+    result = result.replace(/\s+([а-яё]{4,})\s+/gi, " $1");
+  }
+
+  return result.replace(/\s{2,}/g, " ").trim();
+}
+
+function humanizeSupportReply(text, agentName = "") {
   let result = sanitizeSupportReply(String(text || "").trim());
   result = result
     .replace(/[Оо]пиш(ите|и|ь)/g, "напиши")
@@ -322,6 +387,10 @@ function humanizeSupportReply(text) {
     result = result.charAt(0).toLowerCase() + result.slice(1);
   }
 
+  if (agentName === "Мухаммад") {
+    result = applyMuhammadTypos(result);
+  }
+
   return result || "ща гляну напиши ещё раз что не так";
 }
 
@@ -338,6 +407,8 @@ async function verifyOpenRouterKey(apiKey) {
 }
 
 module.exports = {
+  SUPPORT_AGENT_NAMES,
+  pickRandomAgentName,
   buildSystemPrompt,
   callOpenRouter,
   verifyOpenRouterKey,
