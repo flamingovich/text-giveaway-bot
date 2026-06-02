@@ -72,7 +72,10 @@ const { bot, boot, stop } = createSupportBot({
     const dots = ["", ".", "..", "..."][frame % 4];
     return `Подключаем модератора${dots}`;
   },
-  buildGreeting: () => "ВИП поддержка на связи, чем помочь?",
+  buildGreeting: (agentName) => {
+    const nick = String(agentName || "модератор").trim();
+    return `вип поддержка на связи, чем помочь? подключился ${nick}`;
+  },
   buildStopReply: (_agentName, meta = {}) => {
     if (meta.reason === "aggression") {
       return "Диалог закрыт из-за оскорблений. Чтобы снова написать — /start";
