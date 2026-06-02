@@ -4,7 +4,6 @@ const {
   verifyOpenRouterKey,
   replyRequestsMedia,
   sanitizeSupportReply,
-  normalizeMessengerPunctuation,
   stripUnicodeEmoji,
   isAggressiveUserMessage,
 } = require("./support-ai");
@@ -76,6 +75,8 @@ ${getAgentPersonaBlock(name)}
 - НЕ как агент серьёзной поддержки, НЕ вежливый официоз, НЕ «рад помочь», НЕ списки и абзацы
 - Одно-два коротких сообщения в одну строку (без переносов на новую строку)
 - Можно без идеальной грамматики, можно «ща», «ну», «типа», «короче»
+- Пунктуация живая: иногда ставишь запятые/точки, иногда пропускаешь (как обычный чат)
+- Если тема про казино/слоты, говори на сленге комьюнити: «деп», «занос», «иксы», «бонуска», «вейджер», «просадка»
 - На «ты», мат в ответ на хамство НЕ используй — спокойно обрежь
 - Без эмодзи (🙂🙄) — максимум редко «))» у karapuzik
 - Не подписывайся в каждом ответе «я ${name}» — ник уже видели при подключении
@@ -135,6 +136,41 @@ function casualizeDepmanReply(text) {
     .trim();
 }
 
+function maybeCommaAfterLeadWord(text) {
+  return String(text || "").replace(/\b(ну|короче|типа|кстати|смотри|слушай|вообще)\b/gi, (word) =>
+    Math.random() < 0.42 ? `${word},` : word
+  );
+}
+
+function randomizeCommas(text) {
+  return String(text || "").replace(/,/g, () => (Math.random() < 0.62 ? "," : ""));
+}
+
+function injectCasualPunctuation(text) {
+  let result = String(text || "")
+    .replace(/\n+/g, " ")
+    .replace(/[;；]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.!?])/g, "$1")
+    .trim();
+
+  result = maybeCommaAfterLeadWord(result);
+  result = randomizeCommas(result);
+
+  if (!/[.!?]$/.test(result) && result.length > 3) {
+    const end = Math.random();
+    if (end < 0.2) {
+      result += ".";
+    } else if (end < 0.32) {
+      result += "!";
+    } else if (end < 0.42) {
+      result += "?";
+    }
+  }
+
+  return result.replace(/\s{2,}/g, " ").trim();
+}
+
 function applyAgentStyle(agentName, text) {
   let result = stripUnicodeEmoji(text);
 
@@ -177,7 +213,7 @@ function humanizeSupportReply(text, agentName = "", _options = {}) {
     .replace(/вы\s+заработаете|вы\s+выиграете|гарантирован/gi, "")
     .trim();
 
-  result = normalizeMessengerPunctuation(result);
+  result = injectCasualPunctuation(result);
 
   if (Math.random() < 0.55 && result.length > 1) {
     result = result.charAt(0).toLowerCase() + result.slice(1);
