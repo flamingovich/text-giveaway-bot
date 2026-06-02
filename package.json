@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "support": "node src/support-bot.js",
+    "depman-support": "node src/depman-support-bot.js",
     "dev": "node --watch src/index.js",
     "dev:design": "node --env-file=.env --env-file=.env.design src/index.js"
   },

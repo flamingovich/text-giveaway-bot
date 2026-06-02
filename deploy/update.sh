@@ -18,7 +18,7 @@ sudo -u "${APP_USER}" npm install --omit=dev
 cp "${APP_DIR}/deploy/ecosystem.config.cjs" /etc/giveaway-bot.ecosystem.config.cjs
 sudo -u "${APP_USER}" pm2 startOrRestart /etc/giveaway-bot.ecosystem.config.cjs
 sudo -u "${APP_USER}" pm2 save
-echo "Обновлено (giveaway-bot + support-bot)."
+echo "Обновлено (giveaway-bot + support-bot + depman-support-bot)."
 echo ""
 echo "Логи (от пользователя giveaway):"
 echo "  sudo -u giveaway pm2 logs giveaway-bot --lines 30 --nostream"

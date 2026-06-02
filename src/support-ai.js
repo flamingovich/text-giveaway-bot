@@ -539,6 +539,7 @@ async function verifyOpenRouterKey(apiKey) {
 }
 
 module.exports = {
+  SUPPORT_KNOWLEDGE,
   SUPPORT_AGENT_NAMES,
   pickRandomAgentName,
   buildSystemPrompt,
@@ -548,4 +549,6 @@ module.exports = {
   humanizeSupportReply,
   replyRequestsMedia,
   isAggressiveUserMessage,
+  normalizeMessengerPunctuation,
+  stripUnicodeEmoji,
 };
