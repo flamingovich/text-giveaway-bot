@@ -1011,14 +1011,29 @@ function formatExpiredZeroPrize(draw, originalLabel) {
 
 function buildWinnerWinMessageHtml(draw, payoutPrize, options = {}) {
   const expired = options.expired === true;
+  const antiFraud = options.antiFraud === true;
   const postLink = buildDrawPostLink(draw);
   const giveawayWord = postLink
     ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
     : "розыгрыше";
-  const prizeLabel = resolveWinnerPrizeLabel(draw, payoutPrize);
+  const prizeLabel = antiFraud
+    ? resolveWinnerPrizeLabel(draw, getPerWinnerPrizeText(draw))
+    : resolveWinnerPrizeLabel(draw, payoutPrize);
   const prizeHtml = expired
     ? `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}`
-    : `🏆 Приз: ${escapeHtml(prizeLabel)}`;
+    : antiFraud
+      ? `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> <b>${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}</b>`
+      : `🏆 Приз: ${escapeHtml(prizeLabel)}`;
+
+  if (antiFraud) {
+    return [
+      `<b>😔 Вы выиграли в ${giveawayWord}... Но...</b>`,
+      prizeHtml,
+      "🛡️ Ваш приз сгорел, так как система антифрод заподозорила Вас в мошенничестве и мультиаккинге.",
+      "",
+      "Если это не так, или Вы считаете, что произошла ошибка, то пишите в поддержку - @rollerbot_support_bot",
+    ].join("\n");
+  }
 
   return [`<b>🎉 Вы выиграли в ${giveawayWord}.</b>`, prizeHtml].join("\n");
 }
@@ -1556,7 +1571,9 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
   const message = await bot.telegram.sendMessage(
     userId,
     [
-      buildWinnerWinMessageHtml(draw, payoutPrize),
+      buildWinnerWinMessageHtml(draw, payoutPrize, {
+        antiFraud: antiFraud.hasFraudFlag,
+      }),
       "",
       "Пройди проверку для подтверждения и получения приза 👇",
       `${task.a} + ${task.b} = ?`,
@@ -1581,6 +1598,7 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     expiresAt,
     status: "pending",
     payoutPrize,
+      antiFraudFlag: antiFraud.hasFraudFlag,
     trc20Address: trc,
     lastMessageId: message.message_id,
     captchaAnswer: task.correct,
@@ -1652,7 +1670,10 @@ async function markWinnerNotificationExpired(draw, userId) {
         userId,
         notify.lastMessageId,
         undefined,
-        buildWinnerWinMessageHtml(draw, payoutPrize, { expired: true }),
+        buildWinnerWinMessageHtml(draw, payoutPrize, {
+          expired: true,
+          antiFraud: Boolean(notify.antiFraudFlag),
+        }),
         {
           parse_mode: "HTML",
           reply_markup: { inline_keyboard: [] },
@@ -2783,7 +2804,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     trcAddress !== "Не указан"
       ? `<button type="button" class="winner-copy-btn" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
       : "";
-  const payButton = isPaid || isExpired
+  const payButton = isPaid || isExpired || antiFraud.hasFraudFlag
     ? ""
     : `<div class="winner-card-actions">
         <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
