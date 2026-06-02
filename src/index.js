@@ -678,7 +678,124 @@ function getPrizeSplitCount(draw) {
   return Math.max(1, Number(draw.winnersCount) || 1);
 }
 
-function getWinnerPayoutAmount(draw, projectData) {
+function normalizeWalletAddress(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function getDrawParticipantMeta(draw, userId) {
+  if (!draw?.participantMeta) {
+    return null;
+  }
+  return draw.participantMeta[String(userId)] || null;
+}
+
+function collectDrawParticipantSignals(draw, userProfiles) {
+  const byIp = new Map();
+  const byDevice = new Map();
+  const byWallet = new Map();
+
+  for (const participantId of draw.participantIds || []) {
+    const participantMeta = getDrawParticipantMeta(draw, participantId);
+    if (participantMeta?.ipHash) {
+      byIp.set(participantMeta.ipHash, (byIp.get(participantMeta.ipHash) || 0) + 1);
+    }
+    if (participantMeta?.deviceHash) {
+      byDevice.set(participantMeta.deviceHash, (byDevice.get(participantMeta.deviceHash) || 0) + 1);
+    }
+
+    const { projectData } = getUserProfileBundle(userProfiles, participantId, draw.projectId);
+    const wallet = normalizeWalletAddress(projectData?.trc20Address);
+    if (wallet) {
+      byWallet.set(wallet, (byWallet.get(wallet) || 0) + 1);
+    }
+  }
+
+  return { byIp, byDevice, byWallet };
+}
+
+function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = null, notifyInfo = null) {
+  const labels = [];
+  const participantMeta = getDrawParticipantMeta(draw, winnerId);
+  const signals = precomputedSignals || collectDrawParticipantSignals(draw, userProfiles);
+
+  if (participantMeta?.ipHash && (signals.byIp.get(participantMeta.ipHash) || 0) > 1) {
+    labels.push("Бот по IP");
+  }
+  if (participantMeta?.deviceHash && (signals.byDevice.get(participantMeta.deviceHash) || 0) > 1) {
+    labels.push("Бот по девайсу");
+  }
+
+  const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+  const wallet = normalizeWalletAddress(projectData?.trc20Address);
+  if (wallet && (signals.byWallet.get(wallet) || 0) > 1) {
+    labels.push("Мультиаккаунт");
+  }
+  if (notifyInfo?.channelSubscribed === false) {
+    labels.push("Не подписан");
+  }
+
+  return {
+    labels,
+    hasFraudFlag: labels.length > 0,
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSubscribedStatus(status) {
+  return status === "member" || status === "administrator" || status === "creator";
+}
+
+async function checkChannelSubscriptionWithRetry(draw, userId, options = {}) {
+  const maxAttempts = Math.max(1, Number(options.maxAttempts) || 3);
+  const delaysMs = Array.isArray(options.delaysMs) && options.delaysMs.length > 0
+    ? options.delaysMs
+    : [300, 900, 1800];
+  const channelId = draw?.channelId;
+  if (!channelId) {
+    return {
+      ok: false,
+      subscribed: false,
+      status: "unknown",
+      error: "channel_id_missing",
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const member = await bot.telegram.getChatMember(channelId, userId);
+      return {
+        ok: true,
+        subscribed: isSubscribedStatus(member?.status),
+        status: String(member?.status || "unknown"),
+        checkedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        const delay = delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] || 500;
+        await sleep(delay);
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    subscribed: false,
+    status: "unknown",
+    error: lastError?.message || "subscription_check_failed",
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function getWinnerPayoutAmount(draw, projectData, options = {}) {
+  if (options.hasFraudFlag) {
+    return 0;
+  }
   if (!isMoneyPrizeType(draw.prizeType)) {
     return 0;
   }
@@ -752,23 +869,27 @@ function getPerWinnerPrizeText(draw) {
   return formatMoneyAmount(perWinner, draw.prizeType);
 }
 
-function getWinnerPayoutText(draw, projectData) {
+function getWinnerPayoutText(draw, projectData, options = {}) {
   const base = getPerWinnerPrizeText(draw);
+  if (options.hasFraudFlag && isMoneyPrizeType(draw.prizeType)) {
+    const zeroAmount = draw.prizeType === "money_usd" ? formatUsdAmount(0) : formatRubAmount(0);
+    return zeroAmount || base || draw.prize || "—";
+  }
   if (!projectData?.selfReportedNonReferral || !isMoneyPrizeType(draw.prizeType)) {
     return base || draw.prize || "—";
   }
 
-  const amount = getWinnerPayoutAmount(draw, projectData);
+  const amount = getWinnerPayoutAmount(draw, projectData, options);
   return formatMoneyAmount(amount, draw.prizeType) || base || draw.prize || "—";
 }
 
-function getWinnerPayoutPanelHtml(draw, projectData) {
-  const payoutText = getWinnerPayoutText(draw, projectData);
+function getWinnerPayoutPanelHtml(draw, projectData, options = {}) {
+  const payoutText = getWinnerPayoutText(draw, projectData, options);
   if (draw.prizeType !== "money_rub") {
     return escapeHtml(payoutText);
   }
 
-  const amount = getWinnerPayoutAmount(draw, projectData);
+  const amount = getWinnerPayoutAmount(draw, projectData, options);
   if (!Number.isFinite(amount) || amount <= 0) {
     return escapeHtml(payoutText);
   }
@@ -777,9 +898,9 @@ function getWinnerPayoutPanelHtml(draw, projectData) {
   return `${escapeHtml(payoutText)} <span class="winner-payout-usdt">(${escapeHtml(usdtText)} USDT)</span>`;
 }
 
-function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired }) {
+function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired, hasFraudFlag = false }) {
   if (isPaid) {
-    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData);
+    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag });
     return {
       icon: "check",
       iconClass: " winner-card-row-icon-paid",
@@ -799,7 +920,7 @@ function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired }) {
     };
   }
 
-  const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData);
+  const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag });
   return {
     icon: "prize",
     iconClass: "",
@@ -1414,11 +1535,18 @@ async function finishDraw(draw) {
   await notifyWinnersOnFinish(draw);
 }
 
-async function sendWinnerVerificationNotification(draw, userId, sentBy) {
+async function sendWinnerVerificationNotification(draw, userId, sentBy, subscriptionCheck = null) {
   const userProfiles = readUserProjectProfiles();
+  const notifyExisting = draw.winnerNotifications?.[String(userId)] || {};
   const { projectData } = getUserProfileBundle(userProfiles, userId, draw.projectId);
+  const antiFraud = getWinnerAntiFraud(draw, userId, userProfiles, null, {
+    ...notifyExisting,
+    ...(subscriptionCheck?.ok ? { channelSubscribed: subscriptionCheck.subscribed } : {}),
+  });
   const trc = projectData.trc20Address || "не указан";
-  const payoutPrize = getWinnerPayoutText(draw, projectData);
+  const payoutPrize = getWinnerPayoutText(draw, projectData, {
+    hasFraudFlag: antiFraud.hasFraudFlag,
+  });
   const task = buildCaptchaTask();
   const windowCfg = getWinnerConfirmWindow(draw);
   const expiresAt = windowCfg
@@ -1456,6 +1584,10 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy) {
     trc20Address: trc,
     lastMessageId: message.message_id,
     captchaAnswer: task.correct,
+    channelSubscribed: subscriptionCheck?.ok ? Boolean(subscriptionCheck.subscribed) : notifyExisting.channelSubscribed,
+    channelStatus: subscriptionCheck?.status || notifyExisting.channelStatus || null,
+    channelCheckedAt: subscriptionCheck?.checkedAt || notifyExisting.channelCheckedAt || null,
+    channelCheckError: subscriptionCheck?.ok ? null : (subscriptionCheck?.error || notifyExisting.channelCheckError || null),
   };
 
   winnerVerificationSessions.set(winnerVerificationSessionKey(userId, draw.id), {
@@ -1470,7 +1602,10 @@ async function notifyWinnersOnFinish(draw) {
   for (const winnerId of draw.winnerIds || []) {
     try {
       await enrichUserAvatar(winnerId);
-      await sendWinnerVerificationNotification(draw, winnerId, "auto_finish");
+      const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, winnerId, {
+        maxAttempts: 3,
+      });
+      await sendWinnerVerificationNotification(draw, winnerId, "auto_finish", subscriptionCheck);
     } catch (error) {
       if (!draw.winnerNotifications) {
         draw.winnerNotifications = {};
@@ -1481,6 +1616,7 @@ async function notifyWinnersOnFinish(draw) {
         verifiedAt: null,
         status: "failed",
         error: error.message,
+        channelCheckError: error.message,
       };
     }
   }
@@ -1943,7 +2079,38 @@ async function safeDeleteMessage(chatId, messageId) {
   }
 }
 
-async function addUserToDraw(drawId, userId) {
+function hashFingerprintValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 20);
+}
+
+function upsertDrawParticipantMeta(draw, userId, participationMeta = {}) {
+  if (!draw.participantMeta) {
+    draw.participantMeta = {};
+  }
+  const userKey = String(userId);
+  const current = draw.participantMeta[userKey] || {};
+  const next = { ...current };
+  const ipHash = hashFingerprintValue(participationMeta.ipAddress);
+  const deviceHash = hashFingerprintValue(participationMeta.deviceFingerprint);
+
+  if (ipHash) {
+    next.ipHash = ipHash;
+  }
+  if (deviceHash) {
+    next.deviceHash = deviceHash;
+  }
+  if (ipHash || deviceHash) {
+    next.updatedAt = new Date().toISOString();
+  }
+
+  draw.participantMeta[userKey] = next;
+}
+
+async function addUserToDraw(drawId, userId, participationMeta = null) {
   const data = readData();
   const draw = data.draws.find((item) => item.id === drawId);
   if (!draw) {
@@ -1953,10 +2120,17 @@ async function addUserToDraw(drawId, userId) {
     return { ok: false, cbMessage: "Розыгрыш не активен." };
   }
   if (drawHasParticipant(draw, userId)) {
+    if (participationMeta) {
+      upsertDrawParticipantMeta(draw, userId, participationMeta);
+      writeData(data);
+    }
     return { ok: true, cbMessage: "Вы уже участвуете ✅", already: true };
   }
 
   draw.participantIds.push(userId);
+  if (participationMeta) {
+    upsertDrawParticipantMeta(draw, userId, participationMeta);
+  }
   writeData(data);
 
   scheduleDrawPostUpdate(draw.id, false);
@@ -2566,7 +2740,7 @@ function getTelegramUserProfileUrl(userId, username) {
   return `tg://user?id=${userId}`;
 }
 
-function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
+function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals) {
   const { meta, projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
   const fullName = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
   const displayName = fullName || (meta.username ? `@${meta.username}` : `ID ${winnerId}`);
@@ -2586,7 +2760,12 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
   const isVerified = Boolean(notifyInfo?.verifiedAt);
   const notifySent = Boolean(notifyInfo?.sentAt);
   const isExpired = isWinnerNotificationExpired(notifyInfo);
-  const payoutRow = getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired });
+  const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
+  const payoutRow = getWinnerPayoutRowHtml(draw, projectData, {
+    isPaid,
+    isExpired,
+    hasFraudFlag: antiFraud.hasFraudFlag,
+  });
   const refBadge = projectData.selfReportedNonReferral
     ? `<span class="winner-badge winner-badge-warn">Не реф</span>`
     : `<span class="winner-badge winner-badge-ok">Реф</span>`;
@@ -2597,6 +2776,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
       : notifySent
         ? `<span class="winner-badge">Уведомлён</span>`
         : `<span class="winner-badge">Ожидает</span>`;
+  const antiFraudBadges = antiFraud.labels
+    .map((label) => `<span class="winner-badge winner-badge-danger">${escapeHtml(label)}</span>`)
+    .join("");
   const copyBtn =
     trcAddress !== "Не указан"
       ? `<button type="button" class="winner-copy-btn" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
@@ -2621,7 +2803,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications) {
             ${profileBtn}
           </div>
           ${usernameMetaHtml}
-          <div class="winner-card-badges">${refBadge}${statusBadge}</div>
+          <div class="winner-card-badges">${refBadge}${statusBadge}${antiFraudBadges}</div>
         </div>
       </div>
       <div class="winner-card-row${payoutRow.rowClass}">
@@ -2648,15 +2830,18 @@ function getOwnerDraws(ownerId) {
 
 function buildPanelLiveFingerprint(draws, userProfiles) {
   const payload = draws.map((draw) => {
+    const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
     const winnerStates = (draw.winnerIds || []).map((winnerId) => {
       const notify = draw.winnerNotifications?.[String(winnerId)] || {};
       const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+      const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notify);
       return {
         winnerId,
         notify,
         referralVerified: Boolean(projectData.referralVerified),
         selfReportedNonReferral: Boolean(projectData.selfReportedNonReferral),
         trc20Address: projectData.trc20Address || "",
+        antiFraudLabels: antiFraud.labels,
       };
     });
     return {
@@ -2686,9 +2871,12 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
       const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED;
       const canFinishNow = draw.status === DRAW_STATUS.ACTIVE;
       const winnerNotifications = draw.winnerNotifications || {};
+      const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
       const coverPreview = renderHistoryCoverSide(draw.imagePath);
       const winnerRows = (draw.winnerIds || [])
-        .map((winnerId) => renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications))
+        .map((winnerId) =>
+          renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals)
+        )
         .join("");
 
       return `
@@ -6821,7 +7009,10 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
   await enrichUserAvatar(userId);
 
   try {
-    await sendWinnerVerificationNotification(draw, userId, ownerId);
+    const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
+      maxAttempts: 3,
+    });
+    await sendWinnerVerificationNotification(draw, userId, ownerId, subscriptionCheck);
   } catch (error) {
     redirectWithMessage(
       res,
@@ -6856,9 +7047,49 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     return;
   }
 
+  if (!draw.winnerNotifications) {
+    draw.winnerNotifications = {};
+  }
+  if (!draw.winnerNotifications[String(userId)]) {
+    draw.winnerNotifications[String(userId)] = {};
+  }
+
+  const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
+    maxAttempts: 3,
+  });
+  if (subscriptionCheck.ok) {
+    draw.winnerNotifications[String(userId)].channelSubscribed = Boolean(subscriptionCheck.subscribed);
+  }
+  draw.winnerNotifications[String(userId)].channelStatus = subscriptionCheck.status || null;
+  draw.winnerNotifications[String(userId)].channelCheckedAt = subscriptionCheck.checkedAt || new Date().toISOString();
+  draw.winnerNotifications[String(userId)].channelCheckError = subscriptionCheck.ok
+    ? null
+    : (subscriptionCheck.error || "subscription_check_failed");
+
+  if (!subscriptionCheck.ok) {
+    writeData(data);
+    redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.");
+    return;
+  }
+
+  if (!subscriptionCheck.subscribed) {
+    writeData(data);
+    redirectWithMessage(res, "Победитель не подписан на канал. Выплата недоступна.");
+    return;
+  }
+
   const userProfiles = readUserProjectProfiles();
   const { projectData } = getUserProfileBundle(userProfiles, userId, draw.projectId);
-  const payoutText = getWinnerPayoutText(draw, projectData);
+  const antiFraud = getWinnerAntiFraud(
+    draw,
+    userId,
+    userProfiles,
+    null,
+    draw.winnerNotifications[String(userId)],
+  );
+  const payoutText = getWinnerPayoutText(draw, projectData, {
+    hasFraudFlag: antiFraud.hasFraudFlag,
+  });
 
   try {
     await bot.telegram.sendMessage(userId, `✅ Ваш приз ${payoutText} выплачен!`);
@@ -6867,12 +7098,6 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     return;
   }
 
-  if (!draw.winnerNotifications) {
-    draw.winnerNotifications = {};
-  }
-  if (!draw.winnerNotifications[String(userId)]) {
-    draw.winnerNotifications[String(userId)] = {};
-  }
   draw.winnerNotifications[String(userId)].paidAt = new Date().toISOString();
   draw.winnerNotifications[String(userId)].paidBy = ownerId;
   writeData(data);

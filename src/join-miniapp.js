@@ -1459,6 +1459,62 @@ function registerJoinMiniApp(app, deps) {
     }
   }
 
+  function extractTransactionCount(payload) {
+    const candidates = [
+      payload?.totalTransactionCount,
+      payload?.totaltransactioncount,
+      payload?.transactionCount,
+      payload?.total,
+      payload?.count,
+      payload?.data?.totalTransactionCount,
+      payload?.data?.totaltransactioncount,
+      payload?.data?.transactionCount,
+      payload?.data?.total,
+      payload?.meta?.total,
+      payload?.rangeTotal,
+    ];
+    for (const candidate of candidates) {
+      const value = Number(candidate);
+      if (Number.isFinite(value) && value >= 0) {
+        return Math.floor(value);
+      }
+    }
+    return null;
+  }
+
+  async function fetchTronAddressTransactionCount(address) {
+    const accountUrl = `https://apilist.tronscanapi.com/api/account?address=${encodeURIComponent(address)}`;
+    const accountRes = await fetch(accountUrl, { signal: AbortSignal.timeout(10_000) });
+    if (accountRes.ok) {
+      const payload = await accountRes.json().catch(() => ({}));
+      const count = extractTransactionCount(payload);
+      if (count !== null) {
+        return count;
+      }
+    }
+
+    const txUrl = `https://apilist.tronscanapi.com/api/transaction?sort=-timestamp&count=true&limit=1&start=0&address=${encodeURIComponent(address)}`;
+    const txRes = await fetch(txUrl, { signal: AbortSignal.timeout(10_000) });
+    if (!txRes.ok) {
+      throw new Error(`HTTP ${txRes.status}`);
+    }
+    const payload = await txRes.json().catch(() => ({}));
+    const count = extractTransactionCount(payload);
+    if (count === null) {
+      throw new Error("Не удалось прочитать количество транзакций");
+    }
+    return count;
+  }
+
+  async function checkWalletHasTransactions(address) {
+    try {
+      const txCount = await fetchTronAddressTransactionCount(address);
+      return { ok: true, txCount, hasTransactions: txCount > 0 };
+    } catch (error) {
+      return { ok: false, txCount: null, hasTransactions: false, error: error.message };
+    }
+  }
+
   function joinSessionKey(userId, drawId) {
     return `${userId}:${drawId}`;
   }
@@ -1486,6 +1542,42 @@ function registerJoinMiniApp(app, deps) {
     return user;
   }
 
+  function extractClientIp(req) {
+    const forwarded = String(req.headers["x-forwarded-for"] || "")
+      .split(",")
+      .map((value) => value.trim())
+      .find(Boolean);
+    const candidates = [
+      forwarded,
+      req.headers["cf-connecting-ip"],
+      req.headers["x-real-ip"],
+      req.ip,
+      req.socket?.remoteAddress,
+    ];
+    for (const candidate of candidates) {
+      const value = String(candidate || "").trim();
+      if (value) {
+        return value;
+      }
+    }
+    return "";
+  }
+
+  function buildDeviceFingerprint(req) {
+    const ua = String(req.headers["user-agent"] || "").trim();
+    const secUa = String(req.headers["sec-ch-ua"] || "").trim();
+    const platform = String(req.headers["sec-ch-ua-platform"] || "").trim();
+    const lang = String(req.headers["accept-language"] || "").trim();
+    return [ua, secUa, platform, lang].filter(Boolean).join("|");
+  }
+
+  function getJoinParticipationMeta(req) {
+    return {
+      ipAddress: extractClientIp(req),
+      deviceFingerprint: buildDeviceFingerprint(req),
+    };
+  }
+
   function drawHasParticipant(draw, userId) {
     const key = String(userId);
     return (draw.participantIds || []).some((id) => String(id) === key);
@@ -1499,6 +1591,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
     req.telegramUser = user;
+    req.joinParticipationMeta = getJoinParticipationMeta(req);
     next();
   }
 
@@ -1558,8 +1651,8 @@ function registerJoinMiniApp(app, deps) {
     }
   }
 
-  function queueAddUserToDraw(drawId, userId) {
-    void addUserToDraw(drawId, userId).catch((error) => {
+  function queueAddUserToDraw(drawId, userId, participationMeta = null) {
+    void addUserToDraw(drawId, userId, participationMeta).catch((error) => {
       console.error("[join] addUserToDraw:", error.message);
     });
   }
@@ -1578,7 +1671,7 @@ function registerJoinMiniApp(app, deps) {
     );
   }
 
-  function resolveJoinEntry(draw, userId) {
+  function resolveJoinEntry(draw, userId, participationMeta = null) {
     if (drawHasParticipant(draw, userId)) {
       clearJoinApiSession(userId, draw.id);
       scheduleParticipantAvatars(draw, userId);
@@ -1595,7 +1688,7 @@ function registerJoinMiniApp(app, deps) {
 
     if (autoJoin) {
       if (!drawHasParticipant(draw, userId)) {
-        queueAddUserToDraw(draw.id, userId);
+        queueAddUserToDraw(draw.id, userId, participationMeta);
       }
       clearJoinApiSession(userId, draw.id);
       scheduleParticipantAvatars(draw, userId);
@@ -1715,7 +1808,7 @@ function registerJoinMiniApp(app, deps) {
         return;
       }
 
-      const entry = resolveJoinEntry(draw, userId);
+      const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
       if (entry) {
         if (enrichUserAvatar) {
           void enrichUserAvatar(userId);
@@ -1773,7 +1866,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = resolveJoinEntry(draw, userId);
+    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
     if (entry) {
       res.json(entry);
       return;
@@ -1803,7 +1896,7 @@ function registerJoinMiniApp(app, deps) {
     }
 
     if (!draw.projectId) {
-      const result = await addUserToDraw(draw.id, userId);
+      const result = await addUserToDraw(draw.id, userId, req.joinParticipationMeta);
       clearJoinApiSession(userId, drawId);
       scheduleParticipantAvatars(draw, userId);
       res.json(
@@ -1849,7 +1942,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = resolveJoinEntry(draw, userId);
+    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
     if (entry) {
       res.json(entry);
       return;
@@ -1875,7 +1968,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = resolveJoinEntry(draw, userId);
+    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
     if (entry) {
       res.json(entry);
       return;
@@ -1893,14 +1986,23 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
+    const walletCheck = await checkWalletHasTransactions(address);
+    const forceNonReferralByWallet = walletCheck.ok && walletCheck.hasTransactions;
+
     setUserProjectProfile(userId, session.projectId, {
-      referralVerified: session.skipReferralCheck ? false : true,
-      selfReportedNonReferral: Boolean(session.skipReferralCheck),
+      referralVerified: forceNonReferralByWallet ? false : session.skipReferralCheck ? false : true,
+      selfReportedNonReferral: forceNonReferralByWallet ? true : Boolean(session.skipReferralCheck),
       trc20Address: address,
       verifiedBy: "miniapp",
+      walletTxCheckedAt: new Date().toISOString(),
+      walletTxCount: walletCheck.txCount,
+      walletHasTransactions: forceNonReferralByWallet,
+      ...(forceNonReferralByWallet
+        ? { nonReferralReason: "wallet_has_transactions" }
+        : { nonReferralReason: null }),
     });
 
-    const result = await addUserToDraw(drawId, userId);
+    const result = await addUserToDraw(drawId, userId, req.joinParticipationMeta);
     clearJoinApiSession(userId, drawId);
 
     const updatedDraw = getActiveDraw(drawId);
