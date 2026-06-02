@@ -399,7 +399,7 @@ function createSupportBot(options) {
 
       await bot.telegram.sendMessage(chatId, reply);
     } catch (err) {
-      error("OpenRouter error:", err.message);
+      error(`OpenRouter error (model=${openRouterModel}):`, err.message);
       stopTypingAction(String(chatId));
       await clearStatusMessage(bot, chatId, state);
       const errorReply = "Что-то подвисло. Напиши ещё раз через пару минут.";
@@ -628,7 +628,24 @@ function createSupportBot(options) {
     if (!keyCheck.ok) {
       error("OPENROUTER_API_KEY не работает:", keyCheck.error);
     } else {
-      log("OpenRouter OK · модель", openRouterModel);
+      log("OpenRouter ключ OK");
+    }
+
+    if (ai.verifyOpenRouterModel) {
+      const modelCheck = await ai.verifyOpenRouterModel(
+        openRouterApiKey,
+        openRouterModel,
+        webPublicUrl,
+      );
+      if (!modelCheck.ok) {
+        error(
+          `Модель ${openRouterModel} недоступна:`,
+          modelCheck.error,
+          "→ задайте OPENROUTER_MODEL=google/gemini-2.5-flash в .env",
+        );
+      } else {
+        log("OpenRouter модель OK ·", openRouterModel);
+      }
     }
 
     await bot.launch();

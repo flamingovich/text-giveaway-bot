@@ -365,6 +365,7 @@ async function callOpenRouter({
       temperature: AGENT_TEMPERATURE[agentName] ?? 0.8,
       user: userId ? String(userId) : undefined,
     }),
+    signal: AbortSignal.timeout(90_000),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -526,6 +527,8 @@ function humanizeSupportReply(text, agentName = "", options = {}) {
   return result || (name === "Мухаммад" ? "ща напиш ещё раз што не так" : "ща гляну напиши ещё раз");
 }
 
+const DEFAULT_OPENROUTER_MODEL = "google/gemini-2.5-flash";
+
 async function verifyOpenRouterKey(apiKey) {
   const response = await fetch("https://openrouter.ai/api/v1/auth/key", {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -538,13 +541,47 @@ async function verifyOpenRouterKey(apiKey) {
   return { ok: true, data: data?.data || data };
 }
 
+async function verifyOpenRouterModel(apiKey, model, referer) {
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": referer || "https://rollerbot.pro",
+        "X-Title": "Support Bot Check",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: "ответь ок" }],
+        max_tokens: 16,
+        temperature: 0.2,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
+      return { ok: false, error: detail };
+    }
+    if (!String(data?.choices?.[0]?.message?.content || "").trim()) {
+      return { ok: false, error: "Пустой ответ модели" };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 module.exports = {
   SUPPORT_KNOWLEDGE,
+  DEFAULT_OPENROUTER_MODEL,
   SUPPORT_AGENT_NAMES,
   pickRandomAgentName,
   buildSystemPrompt,
   callOpenRouter,
   verifyOpenRouterKey,
+  verifyOpenRouterModel,
   sanitizeSupportReply,
   humanizeSupportReply,
   replyRequestsMedia,

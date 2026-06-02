@@ -213,6 +213,7 @@ async function callOpenRouter({
       temperature: AGENT_TEMPERATURE[agentName] ?? 0.78,
       user: userId ? String(userId) : undefined,
     }),
+    signal: AbortSignal.timeout(90_000),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -228,12 +229,15 @@ async function callOpenRouter({
   return text;
 }
 
+const { verifyOpenRouterModel } = require("./support-ai");
+
 module.exports = {
   DEPMAN_AGENT_NAMES,
   pickRandomAgentName,
   buildSystemPrompt,
   callOpenRouter,
   verifyOpenRouterKey,
+  verifyOpenRouterModel,
   humanizeSupportReply,
   replyRequestsMedia,
   isAggressiveUserMessage,
