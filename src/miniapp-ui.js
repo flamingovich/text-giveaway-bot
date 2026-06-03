@@ -2075,6 +2075,28 @@ function getJoinFlowStyles() {
       cursor: pointer;
     }
 
+    body.join-flow .join-boost-link-notice {
+      margin: 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.35;
+      text-align: center;
+      border: 1px solid transparent;
+    }
+
+    body.join-flow .join-boost-link-notice.is-ok {
+      background: color-mix(in srgb, #1f6a3c 10%, var(--tg-theme-secondary-bg-color, #fff));
+      color: #1f6a3c;
+      border-color: color-mix(in srgb, #a7e6bc 40%, transparent);
+    }
+
+    body.join-flow .join-boost-link-notice.is-error {
+      background: color-mix(in srgb, #a12626 10%, var(--tg-theme-secondary-bg-color, #fff));
+      color: #c62828;
+      border-color: color-mix(in srgb, #ffcaca 40%, transparent);
+    }
+
     body.join-flow .msg {
       padding: 11px 13px;
       border-radius: 12px;

@@ -44,7 +44,8 @@ function computeJoinWinChance(draw, userId) {
     participantCount > 0 ? Math.min(100, (winnersCount / participantCount) * 100) : 0;
   const inviteCount = Math.min(REFERRAL_MAX_INVITES, getReferralInviteCount(draw, userId));
   const referralBoostPercent = inviteCount * REFERRAL_BOOST_PERCENT;
-  const winChancePercent = Math.min(100, baseChance + referralBoostPercent);
+  // Реальный шанс в розыгрыше — только baseChance. referralBoostPercent — чисто визуальный прогресс.
+  const winChancePercent = Number(baseChance.toFixed(2));
 
   return {
     participantCount,

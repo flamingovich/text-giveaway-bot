@@ -475,11 +475,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <button type="button" class="join-done-info-backdrop" id="joinDoneChanceInfoBackdrop" aria-label="Закрыть"></button>
             <div class="join-done-info-card">
               <h4 id="joinDoneChanceInfoTitle" class="join-done-info-title">Как считается шанс</h4>
-              <p class="join-done-info-text">Базовый процент — ваша доля при <b>текущем</b> числе участников и призовых местах. Каждый приглашённый друг добавляет <b>+50%</b> к шансу (например, 5% + 50% = 55%, а не 7,5%). При новых участниках база уменьшается; бонус за друзей сохраняется.</p>
+              <p class="join-done-info-text">Процент «шанс» — это призовые места ÷ участники при <b>текущем</b> составе. Новые участники уменьшают этот %. Приглашение друзей <b>не меняет</b> этот процент — даёт только визуальный бонус +50% в окне «Пригласить друзей».</p>
               <button type="button" class="join-btn join-btn-primary join-done-info-close" id="joinDoneChanceInfoClose">Понятно</button>
             </div>
           </div>
-          <button type="button" class="join-btn join-btn-gradient join-done-boost-btn" id="joinDoneBoostBtn">✨ Увеличить шансы</button>
+          <button type="button" class="join-btn join-btn-gradient join-done-boost-btn" id="joinDoneBoostBtn">✨ Пригласить друзей</button>
           <div class="join-done-tips">
             <div class="join-done-tip">
               <span class="join-done-tip-icon">${JOIN_DONE_BELL_ICON}</span>
@@ -506,11 +506,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     <div class="join-boost-card">
       <button type="button" class="join-boost-close" id="joinBoostCloseBtn" aria-label="Закрыть">×</button>
       <div class="join-boost-badge" id="joinBoostBadge">+0% ${JOIN_BOOST_ARROW_ICON}</div>
-      <h3 class="join-boost-title" id="joinBoostTitle">Увеличить шансы на победу</h3>
+      <h3 class="join-boost-title" id="joinBoostTitle">Пригласи друзей</h3>
       <p class="join-boost-counter" id="joinBoostCounter">Приглашено друзей: 0/10</p>
-      <p class="join-boost-text">Пригласите друзей и получите дополнительные билеты! Каждый приглашённый друг даёт вам дополнительный билет и <b>+50%</b> к шансу на победу (добавляется к вашему проценту).</p>
+      <p class="join-boost-text">Поделитесь ссылкой с друзьями. За каждого, кто присоединится к розыгрышу по вашей ссылке, начисляется <b>+50%</b> к визуальному бонусу (счётчик выше). На реальный шанс в блоке «шанс» это <b>не влияет</b> — розыгрыш остаётся случайным среди всех участников.</p>
       <div class="join-boost-actions">
         <p class="join-boost-link-preview hidden" id="joinBoostLinkPreview"></p>
+        <p class="join-boost-link-notice hidden" id="joinBoostLinkNotice" role="status"></p>
         <button type="button" class="join-btn join-btn-gradient" id="joinBoostGenerateBtn">✨ Сгенерировать ссылку</button>
       </div>
     </div>
@@ -817,6 +818,22 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       } catch (_error) {
         // ignore
       }
+    }
+
+    function showJoinBoostLinkNotice(text, type) {
+      hideMessage();
+      const notice = document.getElementById("joinBoostLinkNotice");
+      if (!notice) return;
+      notice.textContent = String(text || "").trim();
+      notice.className = "join-boost-link-notice" + (type === "error" ? " is-error" : " is-ok");
+      notice.classList.remove("hidden");
+    }
+
+    function hideJoinBoostLinkNotice() {
+      const notice = document.getElementById("joinBoostLinkNotice");
+      if (!notice) return;
+      notice.textContent = "";
+      notice.classList.add("hidden");
     }
 
     const JOIN_STEPS = ${JSON.stringify(JOIN_FLOW_STEPS)};
@@ -1343,6 +1360,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
 
       joinBoostOpen = false;
+      hideJoinBoostLinkNotice();
       backdrop.classList.remove("is-open");
       sheet.classList.remove("is-open");
       backdrop.setAttribute("aria-hidden", "true");
@@ -1608,9 +1626,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         }
         if (data.link) {
           const copied = await copyTextToClipboard(data.link);
-          showMessage(
+          showJoinBoostLinkNotice(
             copied
-              ? "Ссылка скопирована в буфер обмена."
+              ? "Ссылка скопирована в буфер обмена — можно отправлять друзьям."
               : "Ссылка готова — нажмите на неё и скопируйте вручную.",
             "ok",
           );
@@ -1623,7 +1641,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           }
         }
       } catch (error) {
-        showMessage(error.message);
+        showJoinBoostLinkNotice(error.message, "error");
       } finally {
         if (btn) btn.disabled = false;
       }
@@ -1685,7 +1703,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
                 message: "Вы участвуете!",
                 alreadyJoined: false,
                 participantCount: 8,
-                winChancePercent: 55,
+                winChancePercent: 5,
                 baseWinChancePercent: 5,
                 referralBoostPercent: 50,
                 referralInviteCount: 1,
