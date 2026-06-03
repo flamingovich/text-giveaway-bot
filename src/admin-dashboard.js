@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const { DateTime } = require("luxon");
 const { inferReferralOwnerId, normalizeProjectBrandName } = require("./project-profile-bridge");
+const { buildUserProjectActivityIndex, getUserProjectActivity } = require("./admin-user-stats");
 const {
   readSupportChats,
   updateSupportChat,
@@ -337,7 +338,11 @@ function filterAdminUserProjectRows(rows, filters) {
       return false;
     }
     if (q) {
-      const haystack = `${row.userId} ${row.userLabel} ${row.projectName} ${row.referralOwnerLabel}`.toLowerCase();
+      const fraudHaystack = (row.fraudDetails || [])
+        .map((detail) => `${detail.displayText || ""} ${(detail.linkedUserIds || []).join(" ")}`)
+        .join(" ");
+      const haystack =
+        `${row.userId} ${row.userLabel} ${row.projectName} ${row.referralOwnerLabel} ${(row.fraudLabels || []).join(" ")} ${fraudHaystack}`.toLowerCase();
       if (!haystack.includes(q)) {
         return false;
       }
@@ -369,6 +374,22 @@ function renderRefStatusBadge(refStatus) {
   return '<span class="badge badge-muted">—</span>';
 }
 
+function renderAntiFraudCell(row) {
+  if (!row.hasFraud) {
+    return '<span class="badge badge-ok">Чисто</span>';
+  }
+
+  const badges = row.fraudLabels
+    .map((label) => `<span class="badge badge-danger">${escapeHtml(label)}</span>`)
+    .join("");
+
+  const details = row.fraudDetails
+    .map((detail) => `<li>${escapeHtml(detail.displayText)}</li>`)
+    .join("");
+
+  return `<div class="fraud-badges">${badges}</div>${details ? `<ul class="fraud-details">${details}</ul>` : ""}`;
+}
+
 function renderUsersPage(deps, viewModel) {
   const { rows, page, totalPages, totalFiltered, totalAll, filters, brands, refOwners, stats } =
     viewModel;
@@ -393,9 +414,14 @@ function renderUsersPage(deps, viewModel) {
         <td>${escapeHtml(row.userLabel)}<div class="mono">${escapeHtml(row.userId)}</div></td>
         <td>${escapeHtml(row.projectName)}</td>
         <td>${renderRefStatusBadge(row.refStatus)}</td>
+        <td>${renderAntiFraudCell(row)}</td>
         <td>${escapeHtml(row.referralOwnerLabel)}${row.referralOwnerId ? `<div class="mono">${escapeHtml(row.referralOwnerId)}</div>` : ""}</td>
         <td>${escapeHtml(row.projectOwnerLabel)}</td>
         <td>${row.hasWallet ? '<span class="badge badge-ok">Есть</span>' : '<span class="badge badge-muted">Нет</span>'}</td>
+        <td>${row.participations}</td>
+        <td>${row.wins}</td>
+        <td>${escapeHtml(row.winningsText)}</td>
+        <td>${escapeHtml(row.payoutsText)}</td>
       </tr>`,
     )
     .join("");
@@ -425,7 +451,7 @@ function renderUsersPage(deps, viewModel) {
 </head>
 <body>
   ${renderAdminTop("Юзеры и рефы", "users")}
-  <main class="wrap">
+  <main class="wrap wrap-wide">
     <div class="grid">
       <div class="stat"><span>Пользователей в базе</span><b>${stats.usersTotal}</b></div>
       <div class="stat"><span>Привязок к проектам</span><b>${stats.bindingsTotal}</b></div>
@@ -470,19 +496,26 @@ function renderUsersPage(deps, viewModel) {
 
     <section class="panel">
       <h2>Записи (${totalFiltered}${totalFiltered !== totalAll ? ` из ${totalAll}` : ""})</h2>
+      <div class="users-table-wrap">
       <table>
         <thead>
           <tr>
             <th>Пользователь</th>
             <th>Проект</th>
-            <th>Статус</th>
+            <th>Реф</th>
+            <th>Антифрод</th>
             <th>Реф организатора</th>
             <th>Владелец проекта</th>
             <th>Кошелёк</th>
+            <th>Участий</th>
+            <th>Побед</th>
+            <th>Выигрыши</th>
+            <th>Выплаты</th>
           </tr>
         </thead>
-        <tbody>${tableRows || "<tr><td colspan='6'>Нет записей по выбранным фильтрам</td></tr>"}</tbody>
+        <tbody>${tableRows || "<tr><td colspan='11'>Нет записей по выбранным фильтрам</td></tr>"}</tbody>
       </table>
+      </div>
       <div class="pager">
         <span>Страница ${page} из ${totalPages}</span>
         ${prevHref ? `<a class="btn btn-ghost" href="${prevHref}">← Назад</a>` : ""}
@@ -548,8 +581,14 @@ function getAdminBaseStyles() {
     .badge-ok { background: #14532d; color: #bbf7d0; }
     .badge-warn { background: #713f12; color: #fde68a; }
     .badge-muted { background: #334155; color: #cbd5e1; }
+    .badge-danger { background: #7f1d1d; color: #fecaca; }
     .pager { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; font-size: 13px; color: #94a3b8; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .wrap-wide { max-width: 1600px; }
+    .users-table-wrap { overflow-x: auto; }
+    .fraud-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+    .fraud-details { margin: 4px 0 0; padding-left: 16px; color: #94a3b8; font-size: 12px; max-width: 360px; }
+    .fraud-details li { margin-bottom: 2px; }
   `;
 }
 
@@ -974,7 +1013,13 @@ function registerAdminDashboard(app, deps) {
 
     const projectsList = deps.readProjects().projects || [];
     const profiles = deps.readUserProjectProfiles();
-    const allRows = buildAdminUserProjectRows(deps);
+    const activityIndex = buildUserProjectActivityIndex(deps, profiles, (userId) =>
+      labelForUser(userId, profiles),
+    );
+    const allRows = buildAdminUserProjectRows(deps).map((row) => ({
+      ...row,
+      ...getUserProjectActivity(activityIndex, row.userId, row.projectId),
+    }));
     const filteredRows = filterAdminUserProjectRows(allRows, filters);
     const totalPages = Math.max(1, Math.ceil(filteredRows.length / USERS_PAGE_SIZE));
     const safePage = Math.min(page, totalPages);

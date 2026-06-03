@@ -7254,6 +7254,15 @@ registerAdminDashboard(app, {
   readProjects,
   readKnownChannels,
   readDelegatedAdmins,
+  getUserProfileBundle,
+  getDrawParticipantMeta,
+  collectDrawParticipantSignals,
+  getWinnerAntiFraud,
+  getWinnerPayoutAmount,
+  isMoneyPrizeType,
+  normalizeWalletAddress,
+  formatRubAmount,
+  formatUsdAmount,
 });
 
 app.use((err, req, res, next) => {
