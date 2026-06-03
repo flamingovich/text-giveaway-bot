@@ -778,6 +778,47 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       document.getElementById("message").classList.add("hidden");
     }
 
+    async function copyTextToClipboard(text) {
+      const value = String(text || "").trim();
+      if (!value) return false;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(value);
+          return true;
+        }
+      } catch (_error) {
+        // Telegram WebApp часто блокирует Clipboard API — пробуем fallback.
+      }
+      try {
+        const textarea = document.createElement("textarea");
+        textarea.value = value;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        return copied;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function selectJoinBoostLinkPreview() {
+      const preview = document.getElementById("joinBoostLinkPreview");
+      if (!preview?.textContent) return;
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(preview);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      } catch (_error) {
+        // ignore
+      }
+    }
+
     const JOIN_STEPS = ${JSON.stringify(JOIN_FLOW_STEPS)};
     let activeStep = null;
     let stepAnimTimer = null;
@@ -1565,20 +1606,31 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           preview.textContent = data.link;
           preview.classList.remove("hidden");
         }
-        if (data.link && navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(data.link);
-          showMessage("Ссылка скопирована в буфер обмена.", "ok");
-        } else if (data.link) {
-          showMessage("Ссылка готова — скопируйте её из поля ниже.", "ok");
-        }
-        if (data.link && tg?.shareUrl) {
-          tg.shareUrl(data.link, "Приглашение в розыгрыш");
+        if (data.link) {
+          const copied = await copyTextToClipboard(data.link);
+          showMessage(
+            copied
+              ? "Ссылка скопирована в буфер обмена."
+              : "Ссылка готова — нажмите на неё и скопируйте вручную.",
+            "ok",
+          );
+          if (tg?.shareUrl) {
+            try {
+              tg.shareUrl(data.link, "Приглашение в розыгрыш");
+            } catch (_shareError) {
+              // share sheet необязателен
+            }
+          }
         }
       } catch (error) {
         showMessage(error.message);
       } finally {
         if (btn) btn.disabled = false;
       }
+    });
+
+    document.getElementById("joinBoostLinkPreview")?.addEventListener("click", () => {
+      selectJoinBoostLinkPreview();
     });
 
     (async () => {

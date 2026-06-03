@@ -301,7 +301,114 @@ function getUserProjectActivity(activityIndex, userId, projectId) {
   return activityIndex.get(activityKey(userId, projectId)) || fallback;
 }
 
+const SUPPORT_ANTIFRAUD_HINTS = {
+  "Бот по IP":
+    "в одном розыгрыше с этого аккаунта участвовали другие Telegram-аккаунты с той же IP-сети (Wi‑Fi или мобильный интернет)",
+  "Бот по девайсу":
+    "в одном розыгрыше участвовали несколько аккаунтов с одного устройства (отпечаток mini-app)",
+  Мультиаккаунт:
+    "в одном розыгрыше указан тот же TRC-20 кошелёк что у другого участника",
+  "Не подписан": "на момент проверки аккаунт не был подписан на канал розыгрыша",
+};
+
+function buildUserAntiFraudSupportContext(deps, userId, userProfiles, formatUserLabel) {
+  const userKey = String(userId);
+  if (!userKey) {
+    return "";
+  }
+
+  const data = deps.readData();
+  const projects = deps.readProjects?.()?.projects || [];
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const incidents = [];
+  const seen = new Set();
+
+  for (const draw of data.draws || []) {
+    const participated = (draw.participantIds || []).some((id) => String(id) === userKey);
+    const won = (draw.winnerIds || []).some((id) => String(id) === userKey);
+    if (!participated && !won) {
+      continue;
+    }
+
+    const projectName = projectById.get(draw.projectId)?.name || "";
+    const drawTitle = String(draw.title || draw.id || "—").trim();
+    const signals = deps.collectDrawParticipantSignals(draw, userProfiles);
+
+    for (const link of collectDrawFraudLinks(draw, userKey, userProfiles, signals, deps)) {
+      const dedupeKey = `${link.kind}:${draw.id}:${link.label}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      incidents.push({
+        won,
+        drawTitle,
+        projectName,
+        label: link.label,
+        kind: link.kind,
+        linkedUsersText: formatLinkedUsers(link.linkedUserIds, formatUserLabel),
+        hint: SUPPORT_ANTIFRAUD_HINTS[link.label] || link.reason,
+      });
+    }
+
+    if (won) {
+      const notify = draw.winnerNotifications?.[userKey];
+      const antiFraud = deps.getWinnerAntiFraud(draw, userKey, userProfiles, signals, notify);
+      if (antiFraud.labels.includes("Не подписан")) {
+        const dedupeKey = `subscription:${draw.id}:Не подписан`;
+        if (!seen.has(dedupeKey)) {
+          seen.add(dedupeKey);
+          incidents.push({
+            won: true,
+            drawTitle,
+            projectName,
+            label: "Не подписан",
+            kind: "subscription",
+            linkedUsersText: "",
+            hint: SUPPORT_ANTIFRAUD_HINTS["Не подписан"],
+          });
+        }
+      }
+    }
+  }
+
+  if (!incidents.length) {
+    return "";
+  }
+
+  incidents.sort((left, right) => {
+    if (left.won !== right.won) {
+      return left.won ? -1 : 1;
+    }
+    return left.drawTitle.localeCompare(right.drawTitle, "ru");
+  });
+
+  const lines = [
+    "=== ДАННЫЕ АНТИФРОДА ДЛЯ ЭТОГО ПОЛЬЗОВАТЕЛЯ (Telegram ID " + userKey + ") ===",
+    "Это автоматические срабатывания системы по розыгрышам. Используй чтобы объяснить человеку ПОЧЕМУ приз мог быть заблокирован.",
+    "Не говори «админка» «логи» «база данных» — формулируй «система автоматически увидела...»",
+    "Сначала объясни причину простыми словами. Если спросит «с каким аккаунтом совпало» — можно назвать username/ID из строки «Совпало с».",
+    "Не обещай вернуть приз и не говори что блокировку уже сняли.",
+    "",
+  ];
+
+  for (const incident of incidents) {
+    const scope = incident.won ? "был победителем" : "участвовал без победы";
+    const projectPart = incident.projectName ? `, проект ${incident.projectName}` : "";
+    lines.push(`Розыгрыш «${incident.drawTitle}»${projectPart} (${scope}):`);
+    lines.push(`- Тип: ${incident.label}`);
+    lines.push(`- Суть: ${incident.hint}`);
+    if (incident.linkedUsersText) {
+      lines.push(`- Совпало с: ${incident.linkedUsersText}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n").trim();
+}
+
 module.exports = {
   buildUserProjectActivityIndex,
   getUserProjectActivity,
+  buildUserAntiFraudSupportContext,
 };

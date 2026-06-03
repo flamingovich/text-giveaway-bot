@@ -2071,6 +2071,8 @@ function getJoinFlowStyles() {
       color: var(--tg-theme-hint-color, #65708a);
       background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 6%, var(--tg-theme-secondary-bg-color, #fff));
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      user-select: all;
+      cursor: pointer;
     }
 
     body.join-flow .msg {

@@ -138,9 +138,11 @@ Mini-app победителей:
 
 Как отвечать в поддержке:
 - Спокойно, без признания вины системы и без обещания «вернём приз».
+- Если ниже в промпте есть блок «ДАННЫЕ АНТИФРОДА ДЛЯ ЭТОГО ПОЛЬЗОВАТЕЛЯ» — опирайся на него: объясни конкретную причину (IP, устройство, общий кошелёк, подписка) простыми словами.
+- Если блока нет — человек мог не попадать под антифрод или пишет до итогов; уточни текстом что именно написал основной бот.
 - Попроси текстом: username, примерно когда выиграл, один ли аккаунт, с одного ли телефона участвовал, не давал ли кошелёк другу.
 - Можно сказать что проверка автоматическая по IP/устройству/кошельку в рамках розыгрыша; если уверен что ошибка — опиши ситуацию, «посмотрим» / «ща гляну» без гарантии исхода.
-- Support-бот не видит внутренние логи антифрода и не отменяет блокировку сам — не выдумывай что «уже сняли» или «точно ошибка».
+- Support-бот не отменяет блокировку сам — не выдумывай что «уже сняли» или «точно ошибка».
 - На агрессию после отказа — по общим правилам (можно жёстче), но не обещай выплату.
 
 === ТИПИЧНЫЕ ПРОБЛЕМЫ И ОТВЕТЫ ===
@@ -288,9 +290,10 @@ function buildChatUserContextBlock(user = {}) {
   return `\nСобеседник в Telegram: ${displayName}. Имя из профиля Telegram — держи в голове на весь диалог, можешь иногда обратиться по имени (не в каждом сообщении). Не выдумывай другое имя.`;
 }
 
-function buildSystemPrompt(agentName, chatUser = null) {
+function buildSystemPrompt(agentName, chatUser = null, extraContext = "") {
   const name = SUPPORT_AGENT_NAMES.includes(agentName) ? agentName : "Никита";
   const userContext = buildChatUserContextBlock(chatUser);
+  const antifraudContext = String(extraContext || "").trim();
 
   return `Ты ${name}, из поддержки RollerBot в Telegram. Обычный живой человек в чате, не корпоративный бот и не нейросеть.
 ${userContext}
@@ -322,7 +325,7 @@ ${getAgentPersonaBlock(name)}
 
 Представляйся по имени только если спросили кто ты, или если уместно в первом ответе.
 
-${SUPPORT_KNOWLEDGE}`;
+${SUPPORT_KNOWLEDGE}${antifraudContext ? `\n\n${antifraudContext}` : ""}`;
 }
 
 const AGGRESSIVE_USER_PATTERN =
@@ -383,11 +386,12 @@ async function callOpenRouter({
   userId,
   agentName,
   chatUser = null,
+  extraContext = "",
   history,
   userMessage,
   aggressiveUser = false,
 }) {
-  let systemPrompt = buildSystemPrompt(agentName, chatUser);
+  let systemPrompt = buildSystemPrompt(agentName, chatUser, extraContext);
   if (aggressiveUser || isAggressiveUserMessage(userMessage)) {
     systemPrompt += buildAggressionAddon(agentName);
   }

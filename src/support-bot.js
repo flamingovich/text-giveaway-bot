@@ -5,6 +5,7 @@ const { createSupportBot } = require("./create-support-bot");
 const { createSupportChatsStore } = require("./create-support-chats-store");
 const { STORE_KEYS } = require("./storage");
 const rollerAi = require("./support-ai");
+const { buildSupportAntiFraudContextBlock } = require("./support-antifraud-context");
 
 const SUPPORT_BOT_TOKEN = process.env.SUPPORT_BOT_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -60,6 +61,7 @@ const { bot, boot, stop } = createSupportBot({
   },
   buildMediaDeclineReply: () =>
     "Фото и файлы пока не берём — напиши текстом, на каком шаге проблема и что на экране.",
+  resolveExtraSystemContext: (from) => buildSupportAntiFraudContextBlock(from?.id),
 });
 
 boot().catch((error) => {

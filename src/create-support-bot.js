@@ -34,6 +34,7 @@ function createSupportBot(options) {
     buildOffHoursReply = () => "Сейчас нерабочее время. Напишите позже.",
     buildMediaDeclineReply = () => "Медиа не принимаем — напиши текстом что на экране и на каком шаге",
     evaluateUserMessage = () => ({ action: "continue" }),
+    resolveExtraSystemContext = () => "",
     bootLogLine = () => "",
   } = options;
 
@@ -363,6 +364,8 @@ function createSupportBot(options) {
           (item) => item.role === "user" && ai.isAggressiveUserMessage?.(item.content),
         );
 
+      const extraContext = resolveExtraSystemContext(from, state) || "";
+
       const rawReply = await ai.callOpenRouter({
         apiKey: openRouterApiKey,
         model: openRouterModel,
@@ -370,6 +373,7 @@ function createSupportBot(options) {
         userId: from?.id,
         agentName: state.agentName,
         chatUser: state.user,
+        extraContext,
         history: state.history,
         userMessage: combinedText,
         aggressiveUser,
