@@ -155,9 +155,11 @@ function buildDrawPostCaptionPayload(data) {
   b.addEmoji("people", { custom: useCustom });
   b.append(` Призовых мест: ${winnersCount}\n`);
   b.addEmoji("clock", { custom: useCustom });
-  b.append(` Итоги через ${durationLabel}`);
+  b.append(" Итоги через ");
+  b.addBold(durationLabel);
 
-  b.append(`\n\n${DRAW_POST_EMOJI.down.alt} Жми кнопку, для участия ${DRAW_POST_EMOJI.down.alt}`);
+  b.append("\n\n");
+  b.addBold(`${DRAW_POST_EMOJI.down.alt} Жми кнопку, для участия ${DRAW_POST_EMOJI.down.alt}`);
 
   return {
     mode: "entities",

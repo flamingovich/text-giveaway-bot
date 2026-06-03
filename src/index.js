@@ -1181,7 +1181,7 @@ function buildDrawMessageFinished(draw) {
     ...conditions,
     "",
     `${e("people")} Призовых мест: ${draw.winnersCount}`,
-    `${e("clock")} Итоги через ${escapeHtml(durationLabel)}`,
+    `${e("clock")} Итоги через <b>${escapeHtml(durationLabel)}</b>`,
   ].filter((line) => line !== null && line !== undefined);
 
   const userProfiles = readUserProjectProfiles();
@@ -1531,39 +1531,6 @@ async function publishDraw(draw) {
   }
 
   draw.status = DRAW_STATUS.ACTIVE;
-}
-
-function findDrawForSuperPreview(data, drawId, requesterId) {
-  if (isSuperAdmin(requesterId)) {
-    return data.draws.find((item) => item.id === drawId) || null;
-  }
-  return findOwnedDrawInData(data, drawId, requesterId);
-}
-
-async function sendDrawPostPreviewToChat(draw, chatId) {
-  const includeWinners = draw.status === DRAW_STATUS.FINISHED;
-  const keyboard = includeWinners
-    ? getFinishedKeyboard(draw).reply_markup
-    : getKeyboard(draw.id, draw.participantIds.length).reply_markup;
-
-  await bot.telegram.sendMessage(
-    chatId,
-    "🔎 <b>Превью поста розыгрыша</b> (ниже — как в канале, в личке для проверки emoji):",
-    { parse_mode: "HTML" },
-  );
-
-  if (draw.imagePath && fs.existsSync(draw.imagePath)) {
-    const photoOpts = applyDrawPostContentToTelegramOpts(
-      draw,
-      { forCaption: true, includeWinners },
-      { reply_markup: keyboard },
-    );
-    await bot.telegram.sendPhoto(chatId, { source: fs.createReadStream(draw.imagePath) }, photoOpts);
-    return;
-  }
-
-  const textOpts = applyDrawPostContentToTelegramOpts(draw, { includeWinners }, { reply_markup: keyboard });
-  await bot.telegram.sendMessage(chatId, buildDrawMessage(draw, { includeWinners }), textOpts);
 }
 
 const DRAW_POST_UPDATE_DEBOUNCE_MS = Number(process.env.DRAW_POST_UPDATE_DEBOUNCE_MS || 8000);
@@ -2998,8 +2965,7 @@ function buildPanelLiveFingerprint(draws, userProfiles) {
   return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
 }
 
-function renderDrawHistoryBlocks(draws, projects, userProfiles, options = {}) {
-  const showSendPreview = Boolean(options.showSendPreview);
+function renderDrawHistoryBlocks(draws, projects, userProfiles) {
   return draws
     .map((draw) => {
       const project = projects.find((item) => item.id === draw.projectId);
@@ -3123,11 +3089,6 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, options = {}) {
                 ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/finish-now"><button type="submit" class="history-action-btn history-action-danger">Завершить сейчас</button></form>`
                 : ""
             }
-            ${
-              showSendPreview
-                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/send-preview"><button type="submit" class="history-action-btn history-action-preview">Отправить в чат</button></form>`
-                : ""
-            }
           </div>
         </article>
       `;
@@ -3135,9 +3096,9 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, options = {}) {
     .join("");
 }
 
-function renderPanelLiveHtml(draws, projects, userProfiles, options = {}) {
+function renderPanelLiveHtml(draws, projects, userProfiles) {
   const drawsStats = computeDrawStats(draws, userProfiles);
-  const drawBlocks = renderDrawHistoryBlocks(draws, projects, userProfiles, options);
+  const drawBlocks = renderDrawHistoryBlocks(draws, projects, userProfiles);
   return `
       <section class="card history-section">
         <h2 class="create-title draw-history-title">
@@ -3210,9 +3171,7 @@ function renderWebPage(draws, message, webUser) {
     })
     .join("");
   const panelLiveVersion = buildPanelLiveFingerprint(draws, userProfiles);
-  const panelLiveHtml = renderPanelLiveHtml(draws, projects, userProfiles, {
-    showSendPreview: showAccessPanel,
-  });
+  const panelLiveHtml = renderPanelLiveHtml(draws, projects, userProfiles);
 
   const projectsBlocks = projects.map((project) => renderProjectCard(project)).join("");
   const channelBlocks = knownChannels.map((channel) => renderChannelCard(channel)).join("");
@@ -5454,21 +5413,6 @@ ${getPanelFluidTypographyVars()}
       background: #d73a49;
       filter: brightness(1.06);
     }
-    .history-action-preview {
-      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 12%, #fff);
-      color: var(--tg-theme-button-color, var(--primary));
-      border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 35%, transparent);
-    }
-    .history-action-preview:hover,
-    .history-action-preview:focus-visible {
-      background: color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 20%, #fff);
-      filter: none;
-    }
-    body.app-theme-dark .history-action-preview {
-      background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 18%, transparent);
-      color: var(--tg-theme-button-color, #5b8cff);
-      border-color: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 40%, transparent);
-    }
     .status-active { background: #eaffef; color: #21754a; border-color: #b7edc9; }
     .status-scheduled { background: #eef3ff; color: #2d56cc; border-color: #d4dfff; }
     .status-finished { background: #f3f4f8; color: #555f76; border-color: #dde1ea; }
@@ -6654,9 +6598,7 @@ panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res)
   const projects = filterByOwner(readProjects().projects || [], ownerId);
   res.json({
     version: buildPanelLiveFingerprint(draws, userProfiles),
-    html: renderPanelLiveHtml(draws, projects, userProfiles, {
-      showSendPreview: isSuperAdmin(ownerId),
-    }),
+    html: renderPanelLiveHtml(draws, projects, userProfiles),
   });
 });
 
@@ -7093,30 +7035,6 @@ panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer
     redirectWithMessage(res, `Не удалось опубликовать: ${error.message}`);
   }
 });
-
-panelRouter.post(
-  "/draws/:id/send-preview",
-  webAuth.requireAuth,
-  requireOrganizer,
-  requireSuperAdmin,
-  async (req, res) => {
-    const data = readData();
-    const draw = findDrawForSuperPreview(data, req.params.id, req.webUser.id);
-
-    if (!draw) {
-      redirectWithMessage(res, "Розыгрыш не найден.");
-      return;
-    }
-
-    try {
-      await sendDrawPostPreviewToChat(draw, req.webUser.id);
-      redirectWithMessage(res, "Превью поста отправлено вам в Telegram.");
-    } catch (error) {
-      console.error("Ошибка отправки превью розыгрыша:", error);
-      redirectWithMessage(res, `Не удалось отправить превью: ${error.message}`);
-    }
-  },
-);
 
 panelRouter.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const data = readData();
