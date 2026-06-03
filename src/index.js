@@ -20,6 +20,13 @@ const {
   convertRubToUsdt,
 } = require("./rub-usdt-rate");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
+const {
+  tgCustomEmojiHtml,
+  formatRubPrizeForPost,
+  formatUsdPrizeForPost,
+} = require("./draw-post-emojis");
+
+const DRAW_POST_PREMIUM_EMOJI = process.env.DRAW_POST_PREMIUM_EMOJI !== "false";
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
@@ -1040,7 +1047,11 @@ function buildWinnerWinMessageHtml(draw, payoutPrize, options = {}) {
 
 function buildWinnerExpiredText(draw) {
   const windowLabel = formatWinnerConfirmWindowAfterResults(draw);
-  return `⏰ Ваш приз сгорел, так как вы не отметились вовремя (<i>${escapeHtml(windowLabel)} после итогов</i>).`;
+  return [
+    `⏰ Ваш приз сгорел, так как вы не отметились вовремя (<i>${escapeHtml(windowLabel)} после итогов</i>).`,
+    "",
+    "Если вы считаете, что произошла ошибка, пишите в поддержку — @rollerbot_support_bot",
+  ].join("\n");
 }
 
 function buildDrawPostLink(draw) {
@@ -1131,10 +1142,28 @@ function buildDrawParticipateConditionLine(_draw) {
   return "• Нажать кнопку <b>Участвовать</b> под постом";
 }
 
+function formatDrawPrizeForPost(draw) {
+  if (draw.prizeType === "money_rub") {
+    const amount = getDrawPrizeAmount(draw) || parseRubAmountFromText(draw.prize);
+    if (Number.isFinite(amount) && amount > 0) {
+      return formatRubPrizeForPost(amount);
+    }
+  }
+  if (draw.prizeType === "money_usd") {
+    const amount = getDrawPrizeAmount(draw) || parseRubAmountFromText(draw.prize);
+    if (Number.isFinite(amount) && amount > 0) {
+      return formatUsdPrizeForPost(amount);
+    }
+  }
+  return escapeHtml(String(draw.prize || "").trim());
+}
+
 function buildDrawMessage(draw, options = {}) {
   const { includeWinners = false, forCaption = false } = options;
   const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const durationLabel = getDrawDurationLabel(draw);
+  const e = (key) => tgCustomEmojiHtml(key, DRAW_POST_PREMIUM_EMOJI);
+  const prizeLabel = formatDrawPrizeForPost(draw);
 
   const conditions = [];
   if (project) {
@@ -1142,18 +1171,18 @@ function buildDrawMessage(draw, options = {}) {
       project.refLink
         ? `<a href="${escapeHtml(project.refLink)}"><b>${escapeHtml(project.name)}</b></a>`
         : escapeHtml(project.name);
-    conditions.push(`• Быть рефералом на ${projectLink}`);
+    conditions.push(`• ${e("point")} Быть рефералом на ${projectLink}`);
   }
   conditions.push(buildDrawParticipateConditionLine(draw));
 
   const base = [
-    `<b>🎁 РОЗЫГРЫШ НА ${escapeHtml(draw.prize)}</b>`,
+    `<b>${e("gift")} РОЗЫГРЫШ НА ${prizeLabel}</b>`,
     "",
-    "<b>📌 Условия участия</b>",
+    `<b>${e("warn")} Условие участия:</b>`,
     ...conditions,
     "",
-    `👥 Призовых мест: ${draw.winnersCount}`,
-    `⏰ Итоги через ${escapeHtml(durationLabel)}`,
+    `${e("people")} Призовых мест: ${draw.winnersCount}`,
+    `${e("clock")} Итоги через ${escapeHtml(durationLabel)}`,
   ].filter((line) => line !== null && line !== undefined);
 
   if (includeWinners) {
@@ -1170,7 +1199,7 @@ function buildDrawMessage(draw, options = {}) {
     );
     base.push("", `<b>⚠️ Кто выйграл, отметьтесь! ${escapeHtml(botHandle)}</b>`);
   } else {
-    base.push("", "<b>Жми кнопку ниже, для участия 👇</b>");
+    base.push("", `<b>👇 Жми кнопку, для участия 👇</b>`);
   }
 
   const text = base.join("\n");
@@ -1370,15 +1399,19 @@ async function syncAllOrganizerPanelMenus() {
   }
 }
 
-function getKeyboardMarkup(drawId, count) {
+function buildParticipateInlineButton(drawId, count) {
   const text = `Участвовать (${count})`;
   // Web App-кнопки в inline-клавиатуре канала запрещены (BUTTON_TYPE_INVALID).
   // Direct Link Mini App: t.me/bot/shortname?startapp=drawId
   const participateUrl = getJoinParticipateUrl(drawId);
   if (participateUrl) {
-    return Markup.inlineKeyboard([Markup.button.url(text, participateUrl)]).reply_markup;
+    return { text, url: participateUrl, style: "danger" };
   }
-  return Markup.inlineKeyboard([Markup.button.callback(text, `join:${drawId}`)]).reply_markup;
+  return { text, callback_data: `join:${drawId}`, style: "danger" };
+}
+
+function getKeyboardMarkup(drawId, count) {
+  return { inline_keyboard: [[buildParticipateInlineButton(drawId, count)]] };
 }
 
 function getKeyboard(drawId, count) {
@@ -1412,10 +1445,10 @@ function getFinishedKeyboard(draw) {
   const shortPrize = prizeText.length > 24 ? `${prizeText.slice(0, 24)}...` : prizeText;
   const text = `Розыгрыш на ${shortPrize || "приз"} завершен`;
   const url = getWinnersChannelUrl(draw.id);
-  if (url) {
-    return Markup.inlineKeyboard([Markup.button.url(text, url)]);
-  }
-  return Markup.inlineKeyboard([Markup.button.callback(text, `winners:${draw.id}`)]);
+  const button = url
+    ? { text, url, style: "success" }
+    : { text, callback_data: `winners:${draw.id}`, style: "success" };
+  return { reply_markup: { inline_keyboard: [[button]] } };
 }
 
 async function publishDraw(draw) {
@@ -2296,9 +2329,9 @@ async function startJoinFlow(ctx, drawId) {
 
   const participateUrl = getJoinParticipateUrl(drawId);
   if (participateUrl.startsWith("https://")) {
-    await ctx.reply(
-      Markup.inlineKeyboard([[Markup.button.url("🎁 Участвовать", participateUrl)]]),
-    );
+    await ctx.reply("Нажмите кнопку ниже 👇", {
+      reply_markup: { inline_keyboard: [[{ text: "🎁 Участвовать", url: participateUrl, style: "danger" }]] },
+    });
     return;
   }
 
