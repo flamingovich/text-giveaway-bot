@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const { DateTime } = require("luxon");
+const { inferReferralOwnerId, normalizeProjectBrandName } = require("./project-profile-bridge");
 const {
   readSupportChats,
   updateSupportChat,
@@ -243,20 +244,313 @@ function buildStats(deps, ownerFilter = "") {
   };
 }
 
-const ADMIN_NAV = `
-  <nav class="admin-nav">
-    <a class="btn btn-ghost" href="/admin/dashboard">Статистика</a>
-    <a class="btn btn-ghost" href="/admin/support">Поддержка</a>
-  </nav>`;
+const USERS_PAGE_SIZE = 100;
+
+function collectBrandOptions(projectsList) {
+  const byBrand = new Map();
+  for (const project of projectsList || []) {
+    const key = normalizeProjectBrandName(project.name);
+    if (!key) continue;
+    if (!byBrand.has(key)) {
+      byBrand.set(key, project.name);
+    }
+  }
+  return [...byBrand.entries()]
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+}
+
+function buildAdminUserProjectRows(deps) {
+  const { readUserProjectProfiles, readProjects, readData } = deps;
+  const profiles = readUserProjectProfiles();
+  const projectsList = readProjects().projects || [];
+  const projectById = new Map(projectsList.map((project) => [project.id, project]));
+  const rows = [];
+
+  for (const [userKey, userNode] of Object.entries(profiles.users || {})) {
+    const userId = userKey;
+    const userLabel = labelForUser(userId, profiles);
+
+    for (const [projectId, projectData] of Object.entries(userNode.projects || {})) {
+      const project = projectById.get(projectId);
+      if (!project) {
+        continue;
+      }
+
+      const isRef = Boolean(projectData.referralVerified);
+      const isNonRef = Boolean(projectData.selfReportedNonReferral);
+      let refStatus = "unknown";
+      if (isRef) {
+        refStatus = "ref";
+      } else if (isNonRef) {
+        refStatus = "non-ref";
+      }
+
+      const referralOwnerId = inferReferralOwnerId(userId, projectId, projectData, readData);
+      rows.push({
+        userId,
+        userLabel,
+        projectId,
+        projectName: project.name,
+        brandKey: normalizeProjectBrandName(project.name),
+        refStatus,
+        referralOwnerId: referralOwnerId ? String(referralOwnerId) : "",
+        referralOwnerLabel: referralOwnerId ? labelForUser(String(referralOwnerId), profiles) : "—",
+        projectOwnerId: project.ownerId != null ? String(project.ownerId) : "",
+        projectOwnerLabel:
+          project.ownerId != null ? labelForUser(String(project.ownerId), profiles) : "—",
+        hasWallet: Boolean(projectData.trc20Address),
+      });
+    }
+  }
+
+  rows.sort((left, right) => {
+    const nameCmp = left.projectName.localeCompare(right.projectName, "ru");
+    if (nameCmp !== 0) {
+      return nameCmp;
+    }
+    return left.userLabel.localeCompare(right.userLabel, "ru");
+  });
+
+  return rows;
+}
+
+function filterAdminUserProjectRows(rows, filters) {
+  const q = String(filters.q || "")
+    .trim()
+    .toLowerCase();
+  const brand = String(filters.brand || "").trim();
+  const refOwnerId = String(filters.refOwnerId || "").trim();
+  const refFilter = String(filters.ref || "").trim();
+
+  return rows.filter((row) => {
+    if (brand && row.brandKey !== brand) {
+      return false;
+    }
+    if (refOwnerId && row.referralOwnerId !== refOwnerId) {
+      return false;
+    }
+    if (refFilter === "ref" && row.refStatus !== "ref") {
+      return false;
+    }
+    if (refFilter === "non-ref" && row.refStatus !== "non-ref") {
+      return false;
+    }
+    if (q) {
+      const haystack = `${row.userId} ${row.userLabel} ${row.projectName} ${row.referralOwnerLabel}`.toLowerCase();
+      if (!haystack.includes(q)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function collectReferralOwnerOptions(rows, userProfiles) {
+  const map = new Map();
+  for (const row of rows) {
+    if (!row.referralOwnerId) {
+      continue;
+    }
+    map.set(row.referralOwnerId, row.referralOwnerLabel);
+  }
+  return [...map.entries()]
+    .map(([id, label]) => ({ id, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+}
+
+function renderRefStatusBadge(refStatus) {
+  if (refStatus === "ref") {
+    return '<span class="badge badge-ok">Реф</span>';
+  }
+  if (refStatus === "non-ref") {
+    return '<span class="badge badge-warn">Не реф</span>';
+  }
+  return '<span class="badge badge-muted">—</span>';
+}
+
+function renderUsersPage(deps, viewModel) {
+  const { rows, page, totalPages, totalFiltered, totalAll, filters, brands, refOwners, stats } =
+    viewModel;
+
+  const brandOptions = brands
+    .map(
+      (brand) =>
+        `<option value="${escapeHtml(brand.key)}"${brand.key === filters.brand ? " selected" : ""}>${escapeHtml(brand.label)}</option>`,
+    )
+    .join("");
+
+  const refOwnerOptions = refOwners
+    .map(
+      (owner) =>
+        `<option value="${escapeHtml(owner.id)}"${owner.id === filters.refOwnerId ? " selected" : ""}>${escapeHtml(owner.label)}</option>`,
+    )
+    .join("");
+
+  const tableRows = rows
+    .map(
+      (row) => `<tr>
+        <td>${escapeHtml(row.userLabel)}<div class="mono">${escapeHtml(row.userId)}</div></td>
+        <td>${escapeHtml(row.projectName)}</td>
+        <td>${renderRefStatusBadge(row.refStatus)}</td>
+        <td>${escapeHtml(row.referralOwnerLabel)}${row.referralOwnerId ? `<div class="mono">${escapeHtml(row.referralOwnerId)}</div>` : ""}</td>
+        <td>${escapeHtml(row.projectOwnerLabel)}</td>
+        <td>${row.hasWallet ? '<span class="badge badge-ok">Есть</span>' : '<span class="badge badge-muted">Нет</span>'}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const queryBase = new URLSearchParams();
+  if (filters.brand) queryBase.set("brand", filters.brand);
+  if (filters.refOwnerId) queryBase.set("refOwnerId", filters.refOwnerId);
+  if (filters.ref) queryBase.set("ref", filters.ref);
+  if (filters.q) queryBase.set("q", filters.q);
+
+  const prevPage = page > 1 ? page - 1 : null;
+  const nextPage = page < totalPages ? page + 1 : null;
+  const prevHref = prevPage
+    ? `/admin/users?${new URLSearchParams({ ...Object.fromEntries(queryBase), page: String(prevPage) }).toString()}`
+    : "";
+  const nextHref = nextPage
+    ? `/admin/users?${new URLSearchParams({ ...Object.fromEntries(queryBase), page: String(nextPage) }).toString()}`
+    : "";
+
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Юзеры — Admin</title>
+  <style>${getAdminBaseStyles()}</style>
+</head>
+<body>
+  ${renderAdminTop("Юзеры и рефы", "users")}
+  <main class="wrap">
+    <div class="grid">
+      <div class="stat"><span>Пользователей в базе</span><b>${stats.usersTotal}</b></div>
+      <div class="stat"><span>Привязок к проектам</span><b>${stats.bindingsTotal}</b></div>
+      <div class="stat"><span>Рефов</span><b>${stats.refsTotal}</b></div>
+      <div class="stat"><span>Не реф</span><b>${stats.nonRefsTotal}</b></div>
+    </div>
+
+    <section class="panel">
+      <h2>Фильтры</h2>
+      <p class="hint">Показывает, на каком проекте (бренде) пользователь чей реф. Данные из <code>user-project-profiles.json</code>.</p>
+      <form class="filters" method="get" action="/admin/users">
+        <label>
+          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Бренд / проект</span>
+          <select name="brand">
+            <option value="">Все</option>
+            ${brandOptions}
+          </select>
+        </label>
+        <label>
+          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Реф организатора</span>
+          <select name="refOwnerId">
+            <option value="">Все</option>
+            ${refOwnerOptions}
+          </select>
+        </label>
+        <label>
+          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Статус</span>
+          <select name="ref">
+            <option value=""${filters.ref === "" ? " selected" : ""}>Все</option>
+            <option value="ref"${filters.ref === "ref" ? " selected" : ""}>Только рефы</option>
+            <option value="non-ref"${filters.ref === "non-ref" ? " selected" : ""}>Только не рефы</option>
+          </select>
+        </label>
+        <label>
+          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Поиск</span>
+          <input type="search" name="q" value="${escapeHtml(filters.q)}" placeholder="ID, имя, @username" />
+        </label>
+        <button type="submit" class="btn btn-primary">Применить</button>
+        <a class="btn btn-ghost" href="/admin/users">Сбросить</a>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Записи (${totalFiltered}${totalFiltered !== totalAll ? ` из ${totalAll}` : ""})</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Пользователь</th>
+            <th>Проект</th>
+            <th>Статус</th>
+            <th>Реф организатора</th>
+            <th>Владелец проекта</th>
+            <th>Кошелёк</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows || "<tr><td colspan='6'>Нет записей по выбранным фильтрам</td></tr>"}</tbody>
+      </table>
+      <div class="pager">
+        <span>Страница ${page} из ${totalPages}</span>
+        ${prevHref ? `<a class="btn btn-ghost" href="${prevHref}">← Назад</a>` : ""}
+        ${nextHref ? `<a class="btn btn-ghost" href="${nextHref}">Вперёд →</a>` : ""}
+      </div>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+const ADMIN_NAV_ITEMS = [
+  { id: "stats", href: "/admin/dashboard", label: "Статистика" },
+  { id: "users", href: "/admin/users", label: "Юзеры" },
+  { id: "support", href: "/admin/support", label: "Поддержка" },
+];
+
+function renderAdminNav(active = "stats") {
+  const links = ADMIN_NAV_ITEMS.map((item) => {
+    const cls = item.id === active ? "btn btn-ghost btn-nav-active" : "btn btn-ghost";
+    return `<a class="${cls}" href="${item.href}">${escapeHtml(item.label)}</a>`;
+  }).join("");
+  return `<nav class="admin-nav">${links}</nav>`;
+}
 
 function renderAdminTop(title, active = "stats") {
   return `<header class="top">
     <h1>${escapeHtml(title)}</h1>
     <div class="top-actions">
-      ${ADMIN_NAV}
+      ${renderAdminNav(active)}
       <form method="post" action="/admin/logout" class="logout"><button type="submit" class="btn btn-ghost">Выйти</button></form>
     </div>
   </header>`;
+}
+
+function getAdminBaseStyles() {
+  return `
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
+    .top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #334155; background: #1e293b; }
+    .top h1 { margin: 0; font-size: 20px; }
+    .wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .stat { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; }
+    .stat b { display: block; font-size: 24px; margin-top: 4px; }
+    .stat span { font-size: 12px; color: #94a3b8; }
+    .panel { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    .panel h2 { margin: 0 0 12px; font-size: 16px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+    select, .btn, input[type="search"], input[type="text"] { padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; }
+    .btn { text-decoration: none; display: inline-block; cursor: pointer; }
+    .btn-primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+    .btn-ghost { background: transparent; }
+    .btn-nav-active { background: #334155; border-color: #64748b; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; vertical-align: top; }
+    th { color: #94a3b8; font-weight: 600; }
+    .logout { margin: 0; }
+    .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .admin-nav { display: flex; gap: 6px; }
+    .hint { color: #94a3b8; font-size: 13px; margin: 0 0 14px; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; white-space: nowrap; }
+    .badge-ok { background: #14532d; color: #bbf7d0; }
+    .badge-warn { background: #713f12; color: #fde68a; }
+    .badge-muted { background: #334155; color: #cbd5e1; }
+    .pager { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; font-size: 13px; color: #94a3b8; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  `;
 }
 
 function renderLoginPage(error = "") {
@@ -358,25 +652,7 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RollerBot — Admin</title>
   <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
-    .top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #334155; background: #1e293b; }
-    .top h1 { margin: 0; font-size: 20px; }
-    .wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
-    .stat { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; }
-    .stat b { display: block; font-size: 24px; margin-top: 4px; }
-    .stat span { font-size: 12px; color: #94a3b8; }
-    .panel { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-    .panel h2 { margin: 0 0 12px; font-size: 16px; }
-    .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
-    select, .btn { padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; }
-    .btn { text-decoration: none; display: inline-block; cursor: pointer; }
-    .btn-primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
-    .btn-ghost { background: transparent; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; }
-    th { color: #94a3b8; font-weight: 600; }
+    ${getAdminBaseStyles()}
     .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; }
     .tag-active { background: #14532d; color: #bbf7d0; }
     .tag-finished { background: #1e3a5f; color: #bfdbfe; }
@@ -384,28 +660,10 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; min-width: 0; }
     .bar { width: 100%; max-width: 28px; border-radius: 6px 6px 0 0; min-height: 4px; }
     .bar-wrap span { font-size: 10px; color: #64748b; margin-top: 4px; }
-    .logout { margin: 0; }
-    .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .admin-nav { display: flex; gap: 6px; }
-    .support-table a { color: #93c5fd; text-decoration: none; }
-    .support-table a:hover { text-decoration: underline; }
-    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; }
-    .badge-warn { background: #713f12; color: #fde68a; }
-    .chat-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; font-size: 13px; color: #94a3b8; }
-    .chat-log {
-      display: flex; flex-direction: column; gap: 10px;
-      max-height: 70vh; overflow: auto; padding: 12px; background: #0f172a; border-radius: 12px; border: 1px solid #334155;
-    }
-    .chat-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
-    .chat-msg-user { align-self: flex-end; background: #1d4ed8; color: #eff6ff; border-bottom-right-radius: 4px; }
-    .chat-msg-assistant { align-self: flex-start; background: #334155; color: #f1f5f9; border-bottom-left-radius: 4px; }
-    .chat-msg-system { align-self: center; background: #422006; color: #fde68a; font-size: 12px; max-width: 95%; text-align: center; }
-    .chat-msg-meta { display: block; margin-top: 6px; font-size: 11px; opacity: 0.75; }
-    .preview-cell { max-width: 320px; color: #cbd5e1; }
   </style>
 </head>
 <body>
-  ${renderAdminTop("RollerBot Admin")}
+  ${renderAdminTop("RollerBot Admin", "stats")}
   <main class="wrap">
     <div class="grid">
       <div class="stat"><span>Пользователей</span><b>${stats.totals.users}</b></div>
@@ -488,30 +746,14 @@ function renderSupportListPage(chats, timezone) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Поддержка — Admin</title>
   <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
-    .top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #334155; background: #1e293b; }
-    .top h1 { margin: 0; font-size: 20px; }
-    .wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
-    .panel { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; }
-    .panel h2 { margin: 0 0 12px; font-size: 16px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; vertical-align: top; }
-    th { color: #94a3b8; font-weight: 600; }
-    .btn { padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; text-decoration: none; display: inline-block; cursor: pointer; }
-    .btn-ghost { background: transparent; }
-    .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .admin-nav { display: flex; gap: 6px; }
+    ${getAdminBaseStyles()}
     .support-table a { color: #93c5fd; text-decoration: none; }
-    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; }
-    .badge-warn { background: #713f12; color: #fde68a; }
+    .support-table a:hover { text-decoration: underline; }
     .preview-cell { max-width: 320px; color: #cbd5e1; }
-    .logout { margin: 0; }
-    .hint { color: #94a3b8; font-size: 13px; margin: 0 0 14px; }
   </style>
 </head>
 <body>
-  ${renderAdminTop("Поддержка")}
+  ${renderAdminTop("Поддержка", "support")}
   <main class="wrap">
     <section class="panel">
       <h2>Диалоги с ботом поддержки</h2>
@@ -585,17 +827,8 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(label)} — Поддержка</title>
   <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
-    .top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #334155; background: #1e293b; }
-    .top h1 { margin: 0; font-size: 20px; }
-    .wrap { padding: 20px; max-width: 900px; margin: 0 auto; }
-    .panel { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; }
-    .btn { padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; text-decoration: none; display: inline-block; }
-    .btn-ghost { background: transparent; }
-    .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .admin-nav { display: flex; gap: 6px; }
-    .logout { margin: 0; }
+    ${getAdminBaseStyles()}
+    .wrap { max-width: 900px; }
     .chat-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 13px; color: #94a3b8; }
     .chat-close-bar { margin: 0 0 12px; }
     .chat-close-bar .btn-danger { width: 100%; padding: 12px 16px; font-size: 15px; font-weight: 600; }
@@ -622,7 +855,7 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
   </style>
 </head>
 <body>
-  ${renderAdminTop("Диалог")}
+  ${renderAdminTop("Диалог", "support")}
   <main class="wrap">
     <p><a class="btn btn-ghost" href="/admin/support">← Все диалоги</a></p>
     <section class="panel">
@@ -728,6 +961,46 @@ function registerAdminDashboard(app, deps) {
     );
     const stats = buildStats(deps, selectedOwner);
     res.type("html").send(renderDashboardPage(deps, stats, organizers, selectedOwner, profiles));
+  });
+
+  app.get("/admin/users", requireAuth, (req, res) => {
+    const filters = {
+      brand: String(req.query.brand || "").trim(),
+      refOwnerId: String(req.query.refOwnerId || "").trim(),
+      ref: String(req.query.ref || "").trim(),
+      q: String(req.query.q || "").trim(),
+    };
+    const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
+
+    const projectsList = deps.readProjects().projects || [];
+    const profiles = deps.readUserProjectProfiles();
+    const allRows = buildAdminUserProjectRows(deps);
+    const filteredRows = filterAdminUserProjectRows(allRows, filters);
+    const totalPages = Math.max(1, Math.ceil(filteredRows.length / USERS_PAGE_SIZE));
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * USERS_PAGE_SIZE;
+    const pageRows = filteredRows.slice(offset, offset + USERS_PAGE_SIZE);
+
+    const stats = {
+      usersTotal: Object.keys(profiles.users || {}).length,
+      bindingsTotal: allRows.length,
+      refsTotal: allRows.filter((row) => row.refStatus === "ref").length,
+      nonRefsTotal: allRows.filter((row) => row.refStatus === "non-ref").length,
+    };
+
+    res.type("html").send(
+      renderUsersPage(deps, {
+        rows: pageRows,
+        page: safePage,
+        totalPages,
+        totalFiltered: filteredRows.length,
+        totalAll: allRows.length,
+        filters,
+        brands: collectBrandOptions(projectsList),
+        refOwners: collectReferralOwnerOptions(allRows, profiles),
+        stats,
+      }),
+    );
   });
 
   app.get("/admin/support", requireAuth, (_req, res) => {
