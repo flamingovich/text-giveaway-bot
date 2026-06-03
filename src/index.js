@@ -1196,6 +1196,7 @@ function applyDrawPostContentToTelegramOpts(draw, options, telegramOpts) {
       telegramOpts.caption = content.text;
       telegramOpts.caption_entities = content.caption_entities;
     } else {
+      telegramOpts.text = content.text;
       telegramOpts.entities = content.caption_entities;
     }
     return telegramOpts;
@@ -1475,33 +1476,130 @@ function getFinishedKeyboard(draw) {
 }
 
 async function publishDraw(draw) {
-  if (draw.imagePath) {
+  const organizerId = Number(draw.ownerId || draw.createdBy);
+  if (!Number.isInteger(organizerId)) {
+    throw new Error("Не удалось определить организатора розыгрыша.");
+  }
+
+  await sendDrawDraftToOrganizer(draw, organizerId);
+  draw.messageId = null;
+  draw.awaitingChannelPost = true;
+  draw.status = DRAW_STATUS.ACTIVE;
+}
+
+async function sendDrawDraftToOrganizer(draw, organizerId) {
+  const keyboard = getKeyboard(draw.id, draw.participantIds.length);
+  const hasImage = Boolean(draw.imagePath && fs.existsSync(draw.imagePath));
+
+  if (hasImage) {
     const photoOpts = applyDrawPostContentToTelegramOpts(
       draw,
       { forCaption: true },
-      { ...getKeyboard(draw.id, draw.participantIds.length) },
+      { ...keyboard },
     );
-    const message = await bot.telegram.sendPhoto(
-      draw.channelId,
+    await bot.telegram.sendPhoto(
+      organizerId,
       { source: fs.createReadStream(draw.imagePath) },
       photoOpts,
     );
     draw.messageType = "photo";
-    draw.messageId = message.message_id;
   } else {
-    const textOpts = applyDrawPostContentToTelegramOpts(draw, {}, {
-      ...getKeyboard(draw.id, draw.participantIds.length),
-    });
-    const message = await bot.telegram.sendMessage(
-      draw.channelId,
-      buildDrawMessage(draw),
-      textOpts,
-    );
+    const textOpts = applyDrawPostContentToTelegramOpts(draw, {}, { ...keyboard });
+    await bot.telegram.sendMessage(organizerId, buildDrawMessage(draw), textOpts);
     draw.messageType = "text";
-    draw.messageId = message.message_id;
   }
 
-  draw.status = DRAW_STATUS.ACTIVE;
+  const channelLabel = formatDrawChannelLabel(draw.channelId);
+  await bot.telegram.sendMessage(
+    organizerId,
+    [
+      "📣 Пост готов — перешлите сообщение выше в канал:",
+      channelLabel,
+      "",
+      "Кнопка «Участвовать» и premium emoji сохранятся при пересылке.",
+      "После публикации розыгрыш активируется автоматически.",
+    ].join("\n"),
+    { link_preview_options: { is_disabled: true } },
+  );
+}
+
+function formatDrawChannelLabel(channelId) {
+  const known = findKnownChannel(String(channelId || ""));
+  if (known?.title) {
+    const username = known.username ? `@${known.username.replace(/^@/, "")}` : "";
+    return username ? `${known.title} (${username})` : known.title;
+  }
+  return String(channelId || "канал");
+}
+
+function extractDrawIdFromParticipateMarkup(replyMarkup) {
+  const rows = replyMarkup?.inline_keyboard || [];
+  for (const row of rows) {
+    for (const btn of row) {
+      const url = String(btn.url || "");
+      const startAppMatch = url.match(/startapp=([^&/?#]+)/);
+      if (startAppMatch) {
+        return decodeURIComponent(startAppMatch[1]);
+      }
+      const deepLinkMatch = url.match(/[?&]start=join_([^&/?#]+)/);
+      if (deepLinkMatch) {
+        return decodeURIComponent(deepLinkMatch[1]);
+      }
+    }
+  }
+  return "";
+}
+
+function channelIdsMatch(storedChannelId, postChat) {
+  const stored = String(storedChannelId || "").trim();
+  const postId = String(postChat?.id || "");
+  if (!stored || !postId) {
+    return false;
+  }
+  if (stored === postId) {
+    return true;
+  }
+  const postUsername = String(postChat?.username || "").replace(/^@/, "");
+  if (stored.startsWith("@") && postUsername) {
+    return stored.toLowerCase() === `@${postUsername}`.toLowerCase();
+  }
+  return false;
+}
+
+async function linkDrawChannelPost(draw, post) {
+  if (!draw || draw.messageId || !post?.message_id) {
+    return false;
+  }
+  if (!channelIdsMatch(draw.channelId, post.chat)) {
+    return false;
+  }
+
+  draw.messageId = post.message_id;
+  draw.messageType = post.photo ? "photo" : "text";
+  draw.awaitingChannelPost = false;
+  return true;
+}
+
+async function tryLinkDrawFromChannelPost(post) {
+  const drawId = extractDrawIdFromParticipateMarkup(post.reply_markup);
+  if (!drawId) {
+    return false;
+  }
+
+  const data = readData();
+  const draw = data.draws.find((item) => item.id === drawId);
+  if (!draw) {
+    return false;
+  }
+
+  const linked = await linkDrawChannelPost(draw, post);
+  if (!linked) {
+    return false;
+  }
+
+  writeData(data);
+  console.log(`[draw] пост в канале привязан: ${drawId} → message ${post.message_id}`);
+  return true;
 }
 
 const DRAW_POST_UPDATE_DEBOUNCE_MS = Number(process.env.DRAW_POST_UPDATE_DEBOUNCE_MS || 8000);
@@ -2445,8 +2543,12 @@ async function schedulerTick() {
   }
 }
 
-function redirectWithMessage(res, message) {
-  res.redirect(`${PANEL_BASE}?msg=${encodeURIComponent(message)}`);
+function redirectWithMessage(res, message, options = {}) {
+  const params = new URLSearchParams({ msg: message });
+  if (options.openBot) {
+    params.set("openBot", "1");
+  }
+  res.redirect(`${PANEL_BASE}?${params.toString()}`);
 }
 
 function renderLandingPage() {
@@ -2999,12 +3101,14 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
   return draws
     .map((draw) => {
       const project = projects.find((item) => item.id === draw.projectId);
-      const statusLabel = {
-        draft: "Черновик",
-        scheduled: "Запланирован",
-        active: "Активен",
-        finished: "Завершен",
-      }[draw.status] || draw.status;
+      const statusLabel = draw.awaitingChannelPost && !draw.messageId
+        ? "Ждёт пост в канале"
+        : {
+            draft: "Черновик",
+            scheduled: "Запланирован",
+            active: "Активен",
+            finished: "Завершен",
+          }[draw.status] || draw.status;
       const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED;
       const canFinishNow = draw.status === DRAW_STATUS.ACTIVE;
       const winnerNotifications = draw.winnerNotifications || {};
@@ -6329,6 +6433,24 @@ ${getPanelFluidTypographyVars()}
       });
     }
 
+    function setupOpenBotAfterCreate() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("openBot") !== "1") return;
+      const botUrl = ${JSON.stringify(BOT_USERNAME ? `https://t.me/${BOT_USERNAME}` : "")};
+      if (!botUrl) return;
+      const tg = window.Telegram?.WebApp;
+      window.setTimeout(() => {
+        if (tg?.openTelegramLink) {
+          tg.openTelegramLink(botUrl);
+        } else {
+          window.open(botUrl, "_blank");
+        }
+      }, 400);
+      params.delete("openBot");
+      const qs = params.toString();
+      window.history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : ""));
+    }
+
     function setupTelegramFormAuth() {
       const tg = window.Telegram?.WebApp;
       if (!tg?.initData) return;
@@ -6442,6 +6564,7 @@ ${getPanelFluidTypographyVars()}
     setupAdminPanels();
     setupPanelAutoRefresh();
     setupFlashMessages();
+    setupOpenBotAfterCreate();
     setupTelegramFormAuth();
   </script>
 </body>
@@ -6633,6 +6756,9 @@ panelRouter.get("/", async (req, res) => {
     const params = new URLSearchParams();
     if (req.query.msg) {
       params.set("msg", String(req.query.msg));
+    }
+    if (req.query.openBot) {
+      params.set("openBot", String(req.query.openBot));
     }
     const qs = params.toString();
     res.redirect(303, `${PANEL_BASE}${qs ? `?${qs}` : ""}`);
@@ -7069,8 +7195,9 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
     redirectWithMessage(
       res,
       publishMode === "now"
-        ? "Розыгрыш создан и опубликован сразу."
-        : "Розыгрыш создан и будет опубликован по расписанию."
+        ? "Розыгрыш создан. Пост отправлен в личку бота — перешлите его в канал."
+        : "Розыгрыш создан и будет опубликован по расписанию.",
+      publishMode === "now" ? { openBot: true } : {},
     );
   } catch (error) {
     console.error("Ошибка создания розыгрыша через веб:", error);
@@ -7095,7 +7222,9 @@ panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer
   try {
     await publishDraw(draw);
     writeData(data);
-    redirectWithMessage(res, "Розыгрыш опубликован.");
+    redirectWithMessage(res, "Розыгрыш опубликован. Пост отправлен в личку бота — перешлите его в канал.", {
+      openBot: true,
+    });
   } catch (error) {
     console.error("Ошибка публикации через веб:", error);
     redirectWithMessage(res, `Не удалось опубликовать: ${error.message}`);
@@ -7345,6 +7474,11 @@ bot.on("channel_post", async (ctx) => {
   const known = findKnownChannel(String(ctx.chat.id));
   if (known) {
     upsertKnownChannel(ctx.chat);
+  }
+  try {
+    await tryLinkDrawFromChannelPost(ctx.channelPost || ctx.update?.channel_post);
+  } catch (error) {
+    console.error("Ошибка привязки поста розыгрыша в канале:", error.message);
   }
 });
 

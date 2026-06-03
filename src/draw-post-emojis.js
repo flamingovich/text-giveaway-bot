@@ -4,7 +4,7 @@
 
 const DRAW_POST_EMOJI = {
   gift: { id: "5203996991054432397", alt: "🎁" },
-  warn: { id: "5274099962655816924", alt: "‼️" },
+  diamond: { id: "5471952986970267163", alt: "💎" },
   point: { id: "5465198403573012261", alt: "👉" },
   people: { id: "5372926953978341366", alt: "👥" },
   clock: { id: "5413704112220949842", alt: "⏰" },
@@ -103,7 +103,6 @@ function formatUsdPrizeForPost(amount) {
 }
 
 /**
- * Текст поста как в эталоне (без лишних буллетов и строки «Нажать Участвовать»).
  * @returns {{ mode: 'entities', caption: string, caption_entities: object[] } | { mode: 'html', caption: string }}
  */
 function buildDrawPostCaptionPayload(data) {
@@ -125,25 +124,30 @@ function buildDrawPostCaptionPayload(data) {
   const { amount, currency } = splitPrizeLabel(prizeLabel);
   const useCustom = Boolean(usePremiumEmoji);
 
-  // 🎁 РОЗЫГРЫШ НА 1.ООО₽ — bold как в эталоне
+  // 🎁 РОЗЫГРЫШ НА 1.ООО₽ 🎁
   b.addEmoji("gift", { custom: useCustom, bold: true });
-  const headerPrefix = " РОЗЫГРЫШ НА ";
-  const firstAmountChar = amount ? amount.charAt(0) : "";
-  const restAmount = amount.length > 1 ? amount.slice(1) : "";
-  b.addBold(`${headerPrefix}${firstAmountChar}`);
-  if (restAmount) {
-    b.addBold(restAmount);
+  const dotIdx = amount.indexOf(".");
+  const beforeDot = dotIdx >= 0 ? amount.slice(0, dotIdx) : amount;
+  const afterDot = dotIdx >= 0 ? amount.slice(dotIdx + 1) : "";
+  b.addBold(` РОЗЫГРЫШ НА ${beforeDot}`);
+  if (dotIdx >= 0) {
+    b.append(".");
   }
-  b.append(currency);
+  if (afterDot || currency) {
+    b.addBold(`${afterDot}${currency}`);
+  }
+  b.append(" ");
+  b.addEmoji("gift", { custom: useCustom, bold: true });
 
+  // 💎 НУЖНО 👉 Быть рефом на Покердом
   b.append("\n\n");
-  b.addEmoji("warn", { custom: useCustom });
-  b.addBold(" Условие участия:");
-
+  b.addEmoji("diamond", { custom: useCustom });
+  b.append(" ");
+  b.addBold("НУЖНО");
+  b.append(" ");
+  b.addEmoji("point", { custom: useCustom });
+  b.append(" Быть рефом на ");
   if (projectName) {
-    b.append("\n");
-    b.addEmoji("point", { custom: useCustom });
-    b.append(" Быть рефералом на ");
     if (projectRefLink) {
       b.addTextLink(projectName, projectRefLink, { bold: true });
     } else {
@@ -159,7 +163,8 @@ function buildDrawPostCaptionPayload(data) {
   b.addBold(durationLabel);
 
   b.append("\n\n");
-  b.addBold(`${DRAW_POST_EMOJI.down.alt} Жми кнопку, для участия ${DRAW_POST_EMOJI.down.alt}`);
+  const downAlt = DRAW_POST_EMOJI.down.alt;
+  b.addBold(`${downAlt} Жми кнопку, для участия ${downAlt}`);
 
   return {
     mode: "entities",
