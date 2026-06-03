@@ -376,6 +376,7 @@ function createSupportBot(options) {
         referer: webPublicUrl,
         userId: from?.id,
         agentName: state.agentName,
+        chatUser: state.user,
         history: state.history,
         userMessage: combinedText,
         aggressiveUser,

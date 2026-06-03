@@ -14,8 +14,10 @@ const {
   JOIN_FLOW_STEPS,
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
+const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
 
 const NON_REFERRAL_CHANCE = 0.35;
+const JOIN_BOOST_ARROW_ICON = `<svg class="join-boost-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 19V5"/><path d="m7 10 5-5 5 5"/></svg>`;
 
 function escapeHtml(value) {
   return String(value || "")
@@ -300,6 +302,12 @@ function renderJoinStepCard(stepId, stepNum, title, bodyHtml, extraClass = "") {
   </div>`;
 }
 
+function renderJoinChannelStepCard(bodyHtml) {
+  return `<div id="step-channel" class="card join-step-card join-step join-channel-card hidden" data-step="channel">
+    <div class="join-step-body">${bodyHtml}</div>
+  </div>`;
+}
+
 function renderJoinPage(drawId, draw, project, options = {}) {
   const isPreview = drawId === "preview";
   const recaptchaSiteKey = options.recaptchaSiteKey || "";
@@ -367,6 +375,27 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     <div class="join-steps-viewport" id="joinStepsViewport">
 
       ${renderJoinStepCard("captcha", 1, "Проверка", renderRecaptchaWidgetMarkup())}
+
+      ${renderJoinChannelStepCard(
+        `<div class="join-channel-panel">
+          <p class="join-channel-lead">Чтобы участвовать в розыгрыше, нужно быть подписанным на канал:</p>
+          <div class="join-channel-hero">
+            <div class="join-channel-avatar-wrap">
+              <img id="joinChannelAvatar" class="join-channel-avatar hidden" alt="" />
+              <span id="joinChannelAvatarFallback" class="join-channel-avatar-fallback" aria-hidden="true">📢</span>
+            </div>
+            <p class="join-channel-name" id="joinChannelTitle">Канал</p>
+          </div>
+          <div class="join-channel-actions join-actions">
+            <a class="join-btn join-btn-secondary" id="joinChannelOpenBtn" href="#" target="_blank" rel="noopener">
+              <span class="join-btn-label">Открыть канал</span>
+            </a>
+            <button type="button" class="join-btn join-btn-primary" id="joinChannelCheckBtn">
+              <span class="join-btn-label">Я подписался</span>
+            </button>
+          </div>
+        </div>`,
+      )}
 
       ${renderJoinStepCard(
         "registration",
@@ -440,10 +469,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <button type="button" class="join-done-info-backdrop" id="joinDoneChanceInfoBackdrop" aria-label="Закрыть"></button>
             <div class="join-done-info-card">
               <h4 id="joinDoneChanceInfoTitle" class="join-done-info-title">Как считается шанс</h4>
-              <p class="join-done-info-text">Процент показывает вашу долю при <b>текущем</b> числе участников и количестве призовых мест. Если к розыгрышу присоединятся новые люди — шанс уменьшится. Цифра не фиксируется до конца розыгрыша и обновляется по мере роста списка участников.</p>
+              <p class="join-done-info-text">Базовый процент — ваша доля при <b>текущем</b> числе участников и призовых местах. Каждый приглашённый друг добавляет <b>+50%</b> к шансу (например, 5% + 50% = 55%, а не 7,5%). При новых участниках база уменьшается; бонус за друзей сохраняется.</p>
               <button type="button" class="join-btn join-btn-primary join-done-info-close" id="joinDoneChanceInfoClose">Понятно</button>
             </div>
           </div>
+          <button type="button" class="join-btn join-btn-gradient join-done-boost-btn" id="joinDoneBoostBtn">✨ Увеличить шансы</button>
           <div class="join-done-tips">
             <div class="join-done-tip">
               <span class="join-done-tip-icon">${JOIN_DONE_BELL_ICON}</span>
@@ -465,8 +495,24 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     </div>
   </div>
 
+  <div id="joinBoostBackdrop" class="join-boost-backdrop hidden" aria-hidden="true"></div>
+  <aside id="joinBoostSheet" class="join-boost-sheet hidden" role="dialog" aria-modal="true" aria-labelledby="joinBoostTitle">
+    <div class="join-boost-card">
+      <button type="button" class="join-boost-close" id="joinBoostCloseBtn" aria-label="Закрыть">×</button>
+      <div class="join-boost-badge" id="joinBoostBadge">+0% ${JOIN_BOOST_ARROW_ICON}</div>
+      <h3 class="join-boost-title" id="joinBoostTitle">Увеличить шансы на победу</h3>
+      <p class="join-boost-counter" id="joinBoostCounter">Приглашено друзей: 0/10</p>
+      <p class="join-boost-text">Пригласите друзей и получите дополнительные билеты! Каждый приглашённый друг даёт вам дополнительный билет и <b>+50%</b> к шансу на победу (добавляется к вашему проценту).</p>
+      <div class="join-boost-actions">
+        <p class="join-boost-link-preview hidden" id="joinBoostLinkPreview"></p>
+        <button type="button" class="join-btn join-btn-gradient" id="joinBoostGenerateBtn">✨ Сгенерировать ссылку</button>
+      </div>
+    </div>
+  </aside>
+
   <script>
     ${getMiniAppInitScript({ authSession: false, previewShell: true })}
+    ${getMiniAppProfileNavigateScript()}
     const PAGE_MODE = ${JSON.stringify(drawId === "app" ? "app" : drawId === "preview" ? "preview" : "draw")};
     const PAGE_BUILD = ${JSON.stringify(JOIN_PAGE_BUILD)};
     const API_BASE = ${JSON.stringify(apiBase)};
@@ -490,16 +536,43 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
+    let joinReferrerId = null;
+
+    function parseJoinStartParamClient(raw) {
+      const value = String(raw || "").trim();
+      if (!value) return { drawId: "", referrerId: null };
+      const sep = "__ref__";
+      const idx = value.indexOf(sep);
+      if (idx < 0) return { drawId: value, referrerId: null };
+      const referrerRaw = value.slice(idx + sep.length).trim();
+      const referrerId = /^\\d+$/.test(referrerRaw) ? Number(referrerRaw) : null;
+      return { drawId: value.slice(0, idx).trim(), referrerId };
+    }
+
+    function applyJoinStartParam(raw) {
+      const parsed = parseJoinStartParamClient(raw);
+      if (parsed.referrerId) joinReferrerId = parsed.referrerId;
+      return parsed.drawId;
+    }
+
     function resolveDrawIdFromTelegram() {
-      if (PAGE_MODE === "draw") return drawId;
+      if (PAGE_MODE === "draw") {
+        const params = new URLSearchParams(window.location.search || "");
+        const raw = String(
+          params.get("tgWebAppStartParam") || params.get("startapp") || "",
+        ).trim();
+        if (raw) applyJoinStartParam(raw);
+        return drawId;
+      }
       const fromUnsafe = String(tg?.initDataUnsafe?.start_param || "").trim();
-      if (fromUnsafe) return fromUnsafe;
+      if (fromUnsafe) return applyJoinStartParam(fromUnsafe);
       const fromInitData = parseStartParamFromInitData(initData());
-      if (fromInitData) return fromInitData;
+      if (fromInitData) return applyJoinStartParam(fromInitData);
       const params = new URLSearchParams(window.location.search || "");
-      return String(
+      const raw = String(
         params.get("tgWebAppStartParam") || params.get("startapp") || params.get("drawId") || "",
       ).trim();
+      return applyJoinStartParam(raw);
     }
 
     function applyProjectMeta(meta) {
@@ -533,6 +606,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     const JOIN_BTN_CHECK = ${JSON.stringify(JOIN_BTN_CHECK)};
     const JOIN_REF_STATUS_ERROR_ICON = ${JSON.stringify(JOIN_REF_STATUS_ERROR_ICON)};
     const JOIN_REF_STATUS_OK_ICON = ${JSON.stringify(JOIN_REF_STATUS_OK_ICON)};
+    const JOIN_BOOST_ARROW_HTML = ${JSON.stringify(JOIN_BOOST_ARROW_ICON)};
 
     function showRefStatus(kind, message) {
       const status = document.getElementById("refConfirmStatus");
@@ -729,6 +803,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (activeStep === "done" && name !== "done") {
         stopDoneLivePolling();
         stopDoneCountdown();
+        cancelJoinBoostAutoOpen();
+        closeJoinBoostSheet();
       }
 
       const current = activeStep ? document.getElementById("step-" + activeStep) : null;
@@ -763,7 +839,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             "Content-Type": "application/json",
             "X-Telegram-Init-Data": initData(),
           },
-          body: JSON.stringify({ ...body, initData: initData() }),
+          body: JSON.stringify({
+            ...body,
+            initData: initData(),
+            ...(joinReferrerId ? { referrerId: joinReferrerId } : {}),
+          }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -856,6 +936,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       try {
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/live", {});
         renderDoneStats(data);
+        updateJoinBoostUi(data);
         if (data.endAt && formatRemaining(data.endAt) === "Завершён") {
           stopDoneLivePolling();
         }
@@ -1000,8 +1081,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     function createDoneParticipantRow(participant) {
       const row = document.createElement("article");
-      row.className = "join-done-row" + (participant.isYou ? " join-done-row-you" : "");
+      row.className =
+        "join-done-row join-done-row-link" + (participant.isYou ? " join-done-row-you" : "");
       row.dataset.participantId = String(participant.id || "");
+      if (participant.profilePageUrl) {
+        row.dataset.profileUrl = participant.profilePageUrl;
+      }
 
       const avatarEl = document.createElement("div");
       avatarEl.className = "join-done-avatar";
@@ -1025,6 +1110,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       row.appendChild(body);
 
       updateDoneParticipantRow(row, participant);
+      if (!row.dataset.profileBound) {
+        row.dataset.profileBound = "1";
+        row.addEventListener("click", () => navigateToProfile(participant.profilePageUrl));
+      }
       return row;
     }
 
@@ -1056,6 +1145,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           row = createDoneParticipantRow(participant);
         } else {
           updateDoneParticipantRow(row, participant);
+          if (participant.profilePageUrl) {
+            row.dataset.profileUrl = participant.profilePageUrl;
+          }
           existing.delete(id);
         }
         orderedRows.push(row);
@@ -1102,7 +1194,116 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
+    function updateJoinBoostUi(payload) {
+      const inviteCount = Number(payload.referralInviteCount) || 0;
+      const maxInvites = Number(payload.referralMaxInvites) || 10;
+      const boost = Number(payload.referralBoostPercent) || inviteCount * 50;
+      const badge = document.getElementById("joinBoostBadge");
+      const counter = document.getElementById("joinBoostCounter");
+      if (badge) {
+        badge.innerHTML = "+" + boost + "% " + JOIN_BOOST_ARROW_HTML;
+      }
+      if (counter) {
+        counter.textContent = "Приглашено друзей: " + inviteCount + "/" + maxInvites;
+      }
+    }
+
+    let joinBoostOpen = false;
+    let joinBoostCloseTimer = null;
+    let joinBoostAutoOpenTimer = null;
+    let lastDonePayload = null;
+    const JOIN_BOOST_AUTO_OPEN_MS = 1000;
+    const JOIN_BOOST_SHEET_ANIM_MS = 340;
+
+    function getJoinBoostElements() {
+      return {
+        backdrop: document.getElementById("joinBoostBackdrop"),
+        sheet: document.getElementById("joinBoostSheet"),
+      };
+    }
+
+    function cancelJoinBoostAutoOpen() {
+      if (joinBoostAutoOpenTimer) {
+        clearTimeout(joinBoostAutoOpenTimer);
+        joinBoostAutoOpenTimer = null;
+      }
+    }
+
+    function clearJoinBoostCloseTimer() {
+      if (joinBoostCloseTimer) {
+        clearTimeout(joinBoostCloseTimer);
+        joinBoostCloseTimer = null;
+      }
+    }
+
+    function hideJoinBoostElements() {
+      const { backdrop, sheet } = getJoinBoostElements();
+      if (!backdrop || !sheet) return;
+      backdrop.classList.add("hidden");
+      sheet.classList.add("hidden");
+      backdrop.classList.remove("is-open");
+      sheet.classList.remove("is-open");
+      backdrop.setAttribute("aria-hidden", "true");
+    }
+
+    function openJoinBoostSheet(payload) {
+      cancelJoinBoostAutoOpen();
+      clearJoinBoostCloseTimer();
+      updateJoinBoostUi(payload || lastDonePayload || {});
+
+      const { backdrop, sheet } = getJoinBoostElements();
+      if (!backdrop || !sheet) return;
+      if (joinBoostOpen) return;
+
+      joinBoostOpen = true;
+      backdrop.classList.remove("hidden");
+      sheet.classList.remove("hidden");
+      backdrop.classList.remove("is-open");
+      sheet.classList.remove("is-open");
+      backdrop.setAttribute("aria-hidden", "false");
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!joinBoostOpen) return;
+          backdrop.classList.add("is-open");
+          sheet.classList.add("is-open");
+        });
+      });
+    }
+
+    function closeJoinBoostSheet() {
+      cancelJoinBoostAutoOpen();
+      clearJoinBoostCloseTimer();
+
+      const { backdrop, sheet } = getJoinBoostElements();
+      if (!backdrop || !sheet) return;
+      if (!joinBoostOpen) {
+        hideJoinBoostElements();
+        return;
+      }
+
+      joinBoostOpen = false;
+      backdrop.classList.remove("is-open");
+      sheet.classList.remove("is-open");
+      backdrop.setAttribute("aria-hidden", "true");
+
+      joinBoostCloseTimer = setTimeout(() => {
+        joinBoostCloseTimer = null;
+        hideJoinBoostElements();
+      }, JOIN_BOOST_SHEET_ANIM_MS);
+    }
+
+    function scheduleJoinBoostSheetAutoOpen(payload) {
+      cancelJoinBoostAutoOpen();
+      joinBoostAutoOpenTimer = setTimeout(() => {
+        joinBoostAutoOpenTimer = null;
+        if (activeStep !== "done") return;
+        openJoinBoostSheet(payload || lastDonePayload || {});
+      }, JOIN_BOOST_AUTO_OPEN_MS);
+    }
+
     function showDoneStep(payload) {
+      lastDonePayload = payload || {};
       const title = document.getElementById("doneText");
       const badge = document.querySelector(".join-done-badge");
       const sub = document.querySelector(".join-done-sub");
@@ -1118,6 +1319,39 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       renderDoneStats(payload);
       showStep("done");
       startDoneLivePolling(payload);
+      updateJoinBoostUi(payload);
+      scheduleJoinBoostSheetAutoOpen(payload);
+    }
+
+    function showChannelStep(payload) {
+      const title = document.getElementById("joinChannelTitle");
+      const openBtn = document.getElementById("joinChannelOpenBtn");
+      const avatar = document.getElementById("joinChannelAvatar");
+      const avatarFallback = document.getElementById("joinChannelAvatarFallback");
+      const channelTitle = payload.channelTitle || "Канал";
+      const channelUrl = payload.channelUrl || "";
+      const channelPhotoUrl = payload.channelPhotoUrl || "";
+      if (title) title.textContent = channelTitle;
+      if (openBtn) {
+        openBtn.href = channelUrl || "#";
+        openBtn.classList.toggle("hidden", !channelUrl);
+      }
+      if (avatar && avatarFallback) {
+        if (channelPhotoUrl) {
+          avatar.src = channelPhotoUrl;
+          avatar.classList.remove("hidden");
+          avatarFallback.classList.add("hidden");
+        } else {
+          avatar.classList.add("hidden");
+          avatar.removeAttribute("src");
+          avatarFallback.classList.remove("hidden");
+        }
+      }
+      showStep("channel");
+    }
+
+    function navigateToProfile(profileUrl) {
+      navigateMiniAppProfileUrl(profileUrl);
     }
 
     function bindDoneLiveVisibilityRefresh() {
@@ -1162,6 +1396,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     function handleStep(step, payload) {
       if (step === "captcha") {
         renderCaptcha();
+        return;
+      }
+      if (step === "channel") {
+        showChannelStep(payload || {});
         return;
       }
       if (step === "registration") {
@@ -1266,6 +1504,64 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     });
 
+    bindClick("joinChannelCheckBtn", async () => {
+      const btn = document.getElementById("joinChannelCheckBtn");
+      if (btn) btn.disabled = true;
+      try {
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/channel-check", {});
+        hideMessage();
+        handleStep(data.step, data);
+      } catch (error) {
+        showMessage(error.message);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+
+    bindClick("joinChannelOpenBtn", (event) => {
+      const url = document.getElementById("joinChannelOpenBtn")?.href || "";
+      if (!url || url === "#") {
+        event.preventDefault();
+        return;
+      }
+      const tgApp = window.Telegram?.WebApp;
+      if (tgApp?.openTelegramLink && url.indexOf("t.me/") !== -1) {
+        event.preventDefault();
+        tgApp.openTelegramLink(url);
+      }
+    });
+
+    bindClick("joinDoneBoostBtn", () => openJoinBoostSheet(lastDonePayload || {}));
+
+    bindClick("joinBoostCloseBtn", () => closeJoinBoostSheet());
+    document.getElementById("joinBoostBackdrop")?.addEventListener("click", () => closeJoinBoostSheet());
+
+    bindClick("joinBoostGenerateBtn", async () => {
+      const btn = document.getElementById("joinBoostGenerateBtn");
+      const preview = document.getElementById("joinBoostLinkPreview");
+      if (btn) btn.disabled = true;
+      try {
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/referral-link", {});
+        if (preview && data.link) {
+          preview.textContent = data.link;
+          preview.classList.remove("hidden");
+        }
+        if (data.link && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(data.link);
+          showMessage("Ссылка скопирована в буфер обмена.", "ok");
+        } else if (data.link) {
+          showMessage("Ссылка готова — скопируйте её из поля ниже.", "ok");
+        }
+        if (data.link && tg?.shareUrl) {
+          tg.shareUrl(data.link, "Приглашение в розыгрыш");
+        }
+      } catch (error) {
+        showMessage(error.message);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+
     (async () => {
       try {
         const healthRes = await fetch(apiUrl("/api/join/health"), { cache: "no-store" });
@@ -1281,9 +1577,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         const nav = document.getElementById("previewNav");
         const steps = [
           { id: "captcha", label: "Капча" },
+          { id: "channel", label: "Канал" },
           { id: "registration", label: "Рег." },
           { id: "trc20", label: "TRC-20" },
           { id: "done", label: "Готово" },
+          { id: "profile", label: "Профиль" },
         ];
         steps.forEach(({ id, label }) => {
           const btn = document.createElement("button");
@@ -1298,18 +1596,34 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             if (id === "registration") {
               resetRefConfirmUi();
             }
+            if (id === "channel") {
+              showChannelStep({
+                channelTitle: "Random Beast 🏆",
+                channelUrl: "https://t.me/demo_channel",
+                channelPhotoUrl: "",
+              });
+              return;
+            }
+            if (id === "profile") {
+              location.href = "/dev/preview/profile";
+              return;
+            }
             if (id === "done") {
               const previewEnd = new Date(Date.now() + 2 * 60 * 60 * 1000 + 15 * 60 * 1000).toISOString();
               showDoneStep({
                 message: "Вы участвуете!",
                 alreadyJoined: false,
                 participantCount: 8,
-                winChancePercent: 12.5,
+                winChancePercent: 55,
+                baseWinChancePercent: 5,
+                referralBoostPercent: 50,
+                referralInviteCount: 1,
+                referralMaxInvites: 10,
                 endAt: previewEnd,
                 participants: [
-                  { id: "1001", displayName: "Алексей", username: "@alex_winner", initial: "А", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#5b7cfa,#325fff)", isYou: true },
-                  { id: "1002", displayName: "Мария", username: "@maria_p", initial: "М", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#f97316,#ea580c)", isYou: false },
-                  { id: "1003", displayName: "Дмитрий", username: "@dmitry_k", initial: "Д", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#14b8a6,#0d9488)", isYou: false },
+                  { id: "1001", displayName: "Алексей", username: "@alex_winner", initial: "А", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#5b7cfa,#325fff)", profilePageUrl: "/user/1001?back=%2Fdev%2Fpreview%2Fjoin", isYou: true },
+                  { id: "1002", displayName: "Мария", username: "@maria_p", initial: "М", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#f97316,#ea580c)", profilePageUrl: "/user/1002?back=%2Fdev%2Fpreview%2Fjoin", isYou: false },
+                  { id: "1003", displayName: "Дмитрий", username: "@dmitry_k", initial: "Д", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#14b8a6,#0d9488)", profilePageUrl: "/user/1003?back=%2Fdev%2Fpreview%2Fjoin", isYou: false },
                 ],
               });
               return;
@@ -1438,6 +1752,12 @@ function registerJoinMiniApp(app, deps) {
     shouldHideParticipant = () => false,
     RECAPTCHA_SITE_KEY = "",
     RECAPTCHA_SECRET_KEY = "",
+    BOT_USERNAME = "",
+    JOIN_MINI_APP_SHORT_NAME = "join",
+    checkChannelSubscription = null,
+    getChannelSubscribePayload = null,
+    computeJoinWinChance: computeJoinWinChanceFn = null,
+    buildJoinReferralDirectLink = null,
   } = deps;
 
   async function verifyRecaptchaToken(token) {
@@ -1571,11 +1891,72 @@ function registerJoinMiniApp(app, deps) {
     return [ua, secUa, platform, lang].filter(Boolean).join("|");
   }
 
+  function getReferrerIdFromRequest(req) {
+    const raw = req.body?.referrerId;
+    if (raw == null || raw === "") {
+      return null;
+    }
+    const id = Number(raw);
+    return Number.isFinite(id) ? id : null;
+  }
+
   function getJoinParticipationMeta(req) {
+    const referrerId = getReferrerIdFromRequest(req);
     return {
       ipAddress: extractClientIp(req),
       deviceFingerprint: buildDeviceFingerprint(req),
+      ...(referrerId ? { referrerId } : {}),
     };
+  }
+
+  function buildParticipationMetaForJoin(req, session) {
+    const meta = getJoinParticipationMeta(req);
+    const sessionReferrer = session?.referrerId;
+    if (sessionReferrer && !meta.referrerId) {
+      meta.referrerId = sessionReferrer;
+    }
+    return meta;
+  }
+
+  function buildChannelStepPayload(draw) {
+    const payload = getChannelSubscribePayload ? getChannelSubscribePayload(draw) : null;
+    return payload || { channelTitle: "Канал", channelUrl: "", channelUsername: "" };
+  }
+
+  async function ensureChannelSubscribedOrRespond(draw, userId, session, res) {
+    if (!draw?.channelId || !checkChannelSubscription) {
+      return true;
+    }
+    const check = await checkChannelSubscription(draw, userId);
+    if (check.subscribed) {
+      return true;
+    }
+    session.step = "channel";
+    setJoinApiSession(userId, draw.id, session);
+    res.json(buildJoinStepResponse("channel", buildChannelStepPayload(draw)));
+    return false;
+  }
+
+  async function proceedAfterChannelVerified(draw, userId, session, req, res) {
+    const participationMeta = buildParticipationMetaForJoin(req, session);
+
+    if (!draw.projectId) {
+      const result = await addUserToDraw(draw.id, userId, participationMeta);
+      clearJoinApiSession(userId, draw.id);
+      scheduleParticipantAvatars(draw, userId);
+      const updatedDraw = getActiveDraw(draw.id) || draw;
+      res.json(
+        buildJoinDonePayload(updatedDraw, userId, {
+          message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+          alreadyJoined: Boolean(result.already),
+        }),
+      );
+      return;
+    }
+
+    session.step = "registration";
+    setJoinApiSession(userId, draw.id, session);
+    res.json(buildJoinStepResponse("registration"));
   }
 
   function drawHasParticipant(draw, userId) {
@@ -1611,10 +1992,18 @@ function registerJoinMiniApp(app, deps) {
   function buildJoinDonePayload(draw, userId, extra = {}) {
     const userProfiles = readUserProjectProfiles();
     const participantIds = draw.participantIds || [];
-    const winnersCount = Math.max(1, Number(draw.winnersCount) || 1);
-    const participantCount = participantIds.length;
-    const winChancePercent =
-      participantCount > 0 ? Math.min(100, (winnersCount / participantCount) * 100) : 0;
+    const chance = computeJoinWinChanceFn
+      ? computeJoinWinChanceFn(draw, userId)
+      : {
+          participantCount: participantIds.length,
+          winnersCount: Math.max(1, Number(draw.winnersCount) || 1),
+          winChancePercent: 0,
+          baseWinChancePercent: 0,
+          referralBoostPercent: 0,
+          referralInviteCount: 0,
+          referralMaxInvites: 10,
+          referralBoostPerInvite: 50,
+        };
 
     const participants = participantIds
       .filter((id) => !shouldHideParticipant(id))
@@ -1631,15 +2020,21 @@ function registerJoinMiniApp(app, deps) {
           initial,
           avatarUrl: avatarFileId ? `/winners/avatar/${encodeURIComponent(String(id))}` : "",
           fallbackStyle: avatarFileId ? "" : getAvatarFallbackStyle(id),
+          profilePageUrl: buildParticipantProfileUrl(id, `/join/${encodeURIComponent(draw.id)}`),
           isYou: Number(id) === Number(userId),
         };
       });
 
     return buildJoinStepResponse("done", {
       ...extra,
-      participantCount,
-      winnersCount,
-      winChancePercent: Number(winChancePercent.toFixed(2)),
+      participantCount: chance.participantCount,
+      winnersCount: chance.winnersCount,
+      winChancePercent: chance.winChancePercent,
+      baseWinChancePercent: chance.baseWinChancePercent,
+      referralBoostPercent: chance.referralBoostPercent,
+      referralInviteCount: chance.referralInviteCount,
+      referralMaxInvites: chance.referralMaxInvites,
+      referralBoostPerInvite: chance.referralBoostPerInvite,
       endAt: draw.endAt || null,
       participants,
     });
@@ -1791,6 +2186,11 @@ function registerJoinMiniApp(app, deps) {
       participantCount: payload.participantCount,
       winnersCount: payload.winnersCount,
       winChancePercent: payload.winChancePercent,
+      baseWinChancePercent: payload.baseWinChancePercent,
+      referralBoostPercent: payload.referralBoostPercent,
+      referralInviteCount: payload.referralInviteCount,
+      referralMaxInvites: payload.referralMaxInvites,
+      referralBoostPerInvite: payload.referralBoostPerInvite,
       endAt: payload.endAt,
       participants: payload.participants,
     });
@@ -1822,13 +2222,26 @@ function registerJoinMiniApp(app, deps) {
 
       let session = getJoinApiSession(userId, drawId);
       if (!session) {
+        const referrerId = getReferrerIdFromRequest(req);
         session = {
           userId,
           drawId,
           projectId: draw.projectId,
           step: "captcha",
+          referrerId: referrerId || null,
         };
         setJoinApiSession(userId, drawId, session);
+      } else if (!session.referrerId) {
+        const referrerId = getReferrerIdFromRequest(req);
+        if (referrerId) {
+          session.referrerId = referrerId;
+          setJoinApiSession(userId, drawId, session);
+        }
+      }
+
+      if (session.step === "channel") {
+        res.json(buildJoinStepResponse("channel", buildChannelStepPayload(draw)));
+        return;
       }
 
       if (session.step === "captcha") {
@@ -1895,22 +2308,83 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    if (!draw.projectId) {
-      const result = await addUserToDraw(draw.id, userId, req.joinParticipationMeta);
-      clearJoinApiSession(userId, drawId);
-      scheduleParticipantAvatars(draw, userId);
-      res.json(
-        buildJoinDonePayload(draw, userId, {
-          message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
-          alreadyJoined: Boolean(result.already),
-        }),
-      );
+    const subscribed = await ensureChannelSubscribedOrRespond(draw, userId, session, res);
+    if (!subscribed) {
       return;
     }
 
-    session.step = "registration";
-    setJoinApiSession(userId, drawId, session);
-    res.json(buildJoinStepResponse("registration"));
+    await proceedAfterChannelVerified(draw, userId, session, req, res);
+  });
+
+  app.post("/api/join/:drawId/channel-check", requireJoinUser, async (req, res) => {
+    const drawId = req.params.drawId;
+    const userId = req.telegramUser.id;
+    const draw = getActiveDraw(drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
+
+    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    if (entry) {
+      res.json(entry);
+      return;
+    }
+
+    const session = getJoinApiSession(userId, drawId);
+    if (!session) {
+      res.status(400).json({ error: "Сессия устарела. Обновите страницу." });
+      return;
+    }
+
+    if (!draw.channelId || !checkChannelSubscription) {
+      await proceedAfterChannelVerified(draw, userId, session, req, res);
+      return;
+    }
+
+    const check = await checkChannelSubscription(draw, userId);
+    if (!check.subscribed) {
+      res.status(400).json({
+        error: "Подпишитесь на канал и нажмите «Я подписался».",
+        step: "channel",
+        ...buildChannelStepPayload(draw),
+      });
+      return;
+    }
+
+    await proceedAfterChannelVerified(draw, userId, session, req, res);
+  });
+
+  app.post("/api/join/:drawId/referral-link", requireJoinUser, async (req, res) => {
+    const drawId = req.params.drawId;
+    const userId = req.telegramUser.id;
+    const draw = getActiveDraw(drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
+    if (!drawHasParticipant(draw, userId)) {
+      res.status(403).json({ error: "Сначала завершите участие в розыгрыше." });
+      return;
+    }
+
+    const link =
+      buildJoinReferralDirectLink && BOT_USERNAME
+        ? buildJoinReferralDirectLink(drawId, userId, BOT_USERNAME, JOIN_MINI_APP_SHORT_NAME)
+        : "";
+    if (!link) {
+      res.status(503).json({ error: "Ссылка недоступна. Проверьте BOT_USERNAME и Mini App." });
+      return;
+    }
+
+    const chance = computeJoinWinChanceFn ? computeJoinWinChanceFn(draw, userId) : {};
+    res.json({
+      link,
+      referralBoostPerInvite: chance.referralBoostPerInvite || 50,
+      referralInviteCount: chance.referralInviteCount || 0,
+      referralMaxInvites: chance.referralMaxInvites || 10,
+      referralBoostPercent: chance.referralBoostPercent || 0,
+    });
   });
 
   function applyReferralRoll(userId, session) {
@@ -2002,7 +2476,11 @@ function registerJoinMiniApp(app, deps) {
         : { nonReferralReason: null }),
     });
 
-    const result = await addUserToDraw(drawId, userId, req.joinParticipationMeta);
+    const result = await addUserToDraw(
+      drawId,
+      userId,
+      buildParticipationMetaForJoin(req, session),
+    );
     clearJoinApiSession(userId, drawId);
 
     const updatedDraw = getActiveDraw(drawId);

@@ -10,6 +10,7 @@ const {
   renderThemeToggleButton,
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
+const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
 
 const GIFT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M20 12v10H4V12"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>`;
 const TROPHY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10"/><path d="M17 4v3a5 5 0 0 1-10 0V4"/><path d="M5 5H3v1a3 3 0 0 0 3 3"/><path d="M19 5h2v1a3 3 0 0 1-3 3"/></svg>`;
@@ -73,7 +74,8 @@ function buildUserViewModel(userId, draw, deps, options = {}) {
   const username = meta.username ? `@${meta.username}` : "";
   const initial = (displayName.replace(/^@/, "") || String(userId)).charAt(0).toUpperCase() || "?";
   const avatarUrl = meta.avatarFileId ? `/winners/avatar/${encodeURIComponent(String(userId))}` : "";
-  const profileUrl = deps.getTelegramUserProfileUrl(userId, meta.username);
+  const backUrl = options.backUrl || (draw?.id ? `/winners/${encodeURIComponent(draw.id)}` : "");
+  const profilePageUrl = buildParticipantProfileUrl(userId, backUrl);
   const prize = options.includePrize ? deps.getPerWinnerPrizeText(draw) : "";
 
   return {
@@ -82,7 +84,7 @@ function buildUserViewModel(userId, draw, deps, options = {}) {
     username,
     initial,
     avatarUrl,
-    profileUrl,
+    profilePageUrl,
     prize,
   };
 }
@@ -108,15 +110,16 @@ function renderUserRow(user, options = {}) {
       </div>`
     : "";
 
-  return `<article class="winners-row${showPrize ? "" : " winners-row-compact"}">
-    ${renderAvatar(user)}
-    <div class="winners-row-body">
-      <div class="winners-row-identity">
-        <span class="winners-row-name">${escapeHtml(user.displayName)}</span>
-        <a href="${escapeHtml(user.profileUrl)}" class="winners-profile-btn" title="Профиль" aria-label="Перейти в профиль">${USER_ICON}</a>
+  return `<article class="winners-row winners-row-link${showPrize ? "" : " winners-row-compact"}" data-profile-url="${escapeHtml(user.profilePageUrl)}" role="link" tabindex="0">
+    <a href="${escapeHtml(user.profilePageUrl)}" class="winners-row-hit" aria-label="Профиль ${escapeHtml(user.displayName)}">
+      ${renderAvatar(user)}
+      <div class="winners-row-body">
+        <div class="winners-row-identity">
+          <span class="winners-row-name">${escapeHtml(user.displayName)}</span>
+        </div>
+        <div class="winners-row-handle">${escapeHtml(handle)}</div>
       </div>
-      <div class="winners-row-handle">${escapeHtml(handle)}</div>
-    </div>
+    </a>
     ${prizeBlock}
   </article>`;
 }
@@ -213,6 +216,8 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
   <script>
     ${getMiniAppInitScript({ authSession: false, previewShell: true })}
     (function () {
+      ${getMiniAppProfileNavigateScript()}
+
       const DRAW_VIEW = {
         winnerIds: ${JSON.stringify(winnerIds)},
         participantIds: ${JSON.stringify(participantIds)},
@@ -272,14 +277,23 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
       applyViewerStatus();
 
       function bindProfileLinks(root) {
-        (root || document).querySelectorAll(".winners-profile-btn").forEach((link) => {
-          if (link.dataset.bound === "1") return;
-          link.dataset.bound = "1";
-          link.addEventListener("click", (event) => {
-            const href = link.getAttribute("href") || "";
-            if (!href.startsWith("tg://") || !tg?.openTelegramLink) return;
-            event.preventDefault();
-            tg.openTelegramLink(href);
+        (root || document).querySelectorAll(".winners-row-link").forEach((row) => {
+          if (row.dataset.bound === "1") return;
+          row.dataset.bound = "1";
+          const go = (event) => {
+            if (event) event.preventDefault();
+            const href = row.getAttribute("data-profile-url") || row.querySelector(".winners-row-hit")?.getAttribute("href") || "";
+            navigateMiniAppProfileUrl(href);
+          };
+          row.querySelector(".winners-row-hit")?.addEventListener("click", go);
+          row.addEventListener("click", (event) => {
+            if (event.target.closest("a.winners-row-hit")) return;
+            go(event);
+          });
+          row.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              go(event);
+            }
           });
         });
       }
@@ -390,7 +404,6 @@ function registerWinnersMiniApp(app, deps) {
     getUserProfileBundle,
     getWinnerDisplayName,
     getPerWinnerPrizeText,
-    getTelegramUserProfileUrl,
     shouldHideParticipant,
     enrichUserAvatar,
     ensureUserAvatars,
@@ -403,7 +416,6 @@ function registerWinnersMiniApp(app, deps) {
     getUserProfileBundle,
     getWinnerDisplayName,
     getPerWinnerPrizeText,
-    getTelegramUserProfileUrl,
     shouldHideParticipant:
       shouldHideParticipant ||
       (designPreview ? (userId) => String(userId) === "999001" : () => false),

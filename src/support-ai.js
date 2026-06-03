@@ -120,6 +120,29 @@ Mini-app победителей:
 - Если при регистрации статус реферала не подтвердился (человек не реферал проекта) — при выигрыше выплата может быть уменьшена (половина от положенного). Это правило системы.
 - Конкретные сроки выплаты после подтверждения капчи зависят от организатора — не обещай «через час», скажи «после подтверждения организатор отправляет, обычно в рабочее время».
 
+=== АНТИФРОД (частые вопросы) ===
+
+Если человек выиграл, но основной бот написал что приз сгорел из‑за антифрода / мошенничества / мультиаккаунта — это автоматическая проверка, не ручное решение оператора в этом чате.
+
+Что проверяет система (может сработать одно или несколько):
+- Несколько участников розыгрыша с одного IP (накрутка с одной сети).
+- Несколько участников с одного устройства (fingerprint в mini-app).
+- Один и тот же TRC-20 кошелёк у разных аккаунтов в одном розыгрыше.
+- Не подписан на канал розыгрыша (если для розыгрыша была проверка подписки).
+
+Текст от бота обычно: приз зачёркнут, «система антифрод заподозрила в мошенничестве и мультиаккинге», предложение писать в @rollerbot_support_bot.
+
+НЕ путать с другими случаями:
+- «Не отметился вовремя» / «приз сгорел» после итогов по таймеру — это НЕ антифрод, человек не успел пройти капчу в личке основного бота.
+- «Не реферал» проекта — может быть урезанная выплата (например половина), а не полный ноль и не та же формулировка про мошенничество.
+
+Как отвечать в поддержке:
+- Спокойно, без признания вины системы и без обещания «вернём приз».
+- Попроси текстом: username, примерно когда выиграл, один ли аккаунт, с одного ли телефона участвовал, не давал ли кошелёк другу.
+- Можно сказать что проверка автоматическая по IP/устройству/кошельку в рамках розыгрыша; если уверен что ошибка — опиши ситуацию, «посмотрим» / «ща гляну» без гарантии исхода.
+- Support-бот не видит внутренние логи антифрода и не отменяет блокировку сам — не выдумывай что «уже сняли» или «точно ошибка».
+- На агрессию после отказа — по общим правилам (можно жёстче), но не обещай выплату.
+
 === ТИПИЧНЫЕ ПРОБЛЕМЫ И ОТВЕТЫ ===
 
 «Кнопка Участвовать не нажимается / ничего не открывается»:
@@ -228,8 +251,8 @@ function getAgentPersonaBlock(agentName) {
 
     case "Мухаммад":
       return `Ты Мухаммад, поддержка RollerBot.
-Стиль: русский слабый, пишешь как с телефона на бегу — опечатки, без запятых, «што», «щас», «напиш», «харашо», слова слипаются.
-Длина: 1–2 коротких фразы, иногда одна.
+Стиль: русский слабый, пишешь как с телефона — намеренные опечатки в словах (превет, харашо, атправь, што, щас, напиш), но пробелы между словами ОБЯЗАТЕЛЬНЫ, слова не слипай.
+Длина: 1–2 коротких фразы, иногда одна. Без запятых.
 Иногда «брат», без мата и без шуток про народы. Смысл должен быть понятен.
 Смайлики и эмодзи НЕ ставь.`;
 
@@ -243,10 +266,34 @@ function getAgentPersonaBlock(agentName) {
   }
 }
 
-function buildSystemPrompt(agentName) {
+function formatChatUserDisplayName(user = {}) {
+  const first = String(user.firstName || "").trim();
+  const last = String(user.lastName || "").trim();
+  const full = [first, last].filter(Boolean).join(" ").trim();
+  if (full) {
+    return full;
+  }
+  const username = String(user.username || "").replace(/^@/, "").trim();
+  if (username) {
+    return `@${username}`;
+  }
+  return "";
+}
+
+function buildChatUserContextBlock(user = {}) {
+  const displayName = formatChatUserDisplayName(user);
+  if (!displayName) {
+    return "";
+  }
+  return `\nСобеседник в Telegram: ${displayName}. Имя из профиля Telegram — держи в голове на весь диалог, можешь иногда обратиться по имени (не в каждом сообщении). Не выдумывай другое имя.`;
+}
+
+function buildSystemPrompt(agentName, chatUser = null) {
   const name = SUPPORT_AGENT_NAMES.includes(agentName) ? agentName : "Никита";
+  const userContext = buildChatUserContextBlock(chatUser);
 
   return `Ты ${name}, из поддержки RollerBot в Telegram. Обычный живой человек в чате, не корпоративный бот и не нейросеть.
+${userContext}
 
 ${getAgentPersonaBlock(name)}
 
@@ -335,11 +382,12 @@ async function callOpenRouter({
   referer,
   userId,
   agentName,
+  chatUser = null,
   history,
   userMessage,
   aggressiveUser = false,
 }) {
-  let systemPrompt = buildSystemPrompt(agentName);
+  let systemPrompt = buildSystemPrompt(agentName, chatUser);
   if (aggressiveUser || isAggressiveUserMessage(userMessage)) {
     systemPrompt += buildAggressionAddon(agentName);
   }
@@ -437,30 +485,43 @@ function sanitizeSupportReply(text) {
 function applyMuhammadTypos(text) {
   let result = String(text || "");
   const swaps = [
+    [/\bпривет\b/gi, "превет"],
+    [/\bздравствуйте\b/gi, "здраствуй"],
+    [/\bотправь\b/gi, "атправь"],
+    [/\bотправить\b/gi, "атправить"],
+    [/\bотправлю\b/gi, "атправлю"],
     [/\bчто\b/gi, "што"],
     [/\bсейчас\b/gi, "щас"],
     [/\bсмотрю\b/gi, "смтарю"],
+    [/\bсмотри\b/gi, "смтари"],
     [/\bнапиши\b/gi, "напиш"],
+    [/\bнапишите\b/gi, "напиш"],
     [/\bподожди\b/gi, "падожди"],
     [/\bхорошо\b/gi, "харашо"],
     [/\bпонял\b/gi, "поня"],
+    [/\bпонятно\b/gi, "понятна"],
+    [/\bспасибо\b/gi, "спасиба"],
+    [/\bпроверь\b/gi, "провер"],
+    [/\bпроверю\b/gi, "проверю"],
+    [/\bправильно\b/gi, "правельно"],
+    [/\bещё\b/gi, "ещо"],
+    [/\bеще\b/gi, "ещо"],
+    [/\bошибка\b/gi, "ашибка"],
+    [/\bразберусь\b/gi, "разберус"],
+    [/\bподробнее\b/gi, "падробнее"],
   ];
 
   for (const [pattern, replacement] of swaps) {
-    if (Math.random() < 0.55) {
+    if (Math.random() < 0.52) {
       result = result.replace(pattern, replacement);
     }
   }
 
-  if (Math.random() < 0.25 && !/брат/i.test(result)) {
+  if (Math.random() < 0.22 && !/брат/i.test(result)) {
     result = `брат ${result}`;
   }
 
   result = result.replace(/,/g, "");
-  if (Math.random() < 0.35) {
-    result = result.replace(/\s+([а-яё]{4,})\s+/gi, " $1");
-  }
-
   return result.replace(/\s{2,}/g, " ").trim();
 }
 
@@ -524,7 +585,7 @@ function humanizeSupportReply(text, agentName = "", options = {}) {
 
   result = applyAgentStyle(name, result, aggressive);
 
-  return result || (name === "Мухаммад" ? "ща напиш ещё раз што не так" : "ща гляну напиши ещё раз");
+  return result || (name === "Мухаммад" ? "ща напиш што не так" : "ща гляну напиши ещё раз");
 }
 
 const DEFAULT_OPENROUTER_MODEL = "google/gemini-2.5-flash";
@@ -578,6 +639,7 @@ module.exports = {
   DEFAULT_OPENROUTER_MODEL,
   SUPPORT_AGENT_NAMES,
   pickRandomAgentName,
+  formatChatUserDisplayName,
   buildSystemPrompt,
   callOpenRouter,
   verifyOpenRouterKey,

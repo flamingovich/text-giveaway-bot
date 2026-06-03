@@ -1611,7 +1611,7 @@ function getJoinFlowStyles() {
       display: flex;
       flex-direction: column;
       gap: 8px;
-      margin: 0 0 14px;
+      margin: 4px 0 14px;
     }
 
     body.join-flow .join-done-participants-title {
@@ -1775,6 +1775,267 @@ function getJoinFlowStyles() {
 
     body.join-flow .join-done-card .join-step-body {
       padding-top: 8px;
+    }
+
+    body.join-flow .join-channel-card .join-step-head {
+      display: none;
+    }
+
+    body.join-flow .join-channel-card .join-step-body {
+      padding-top: 12px;
+    }
+
+    body.join-flow .join-channel-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      align-items: center;
+      text-align: center;
+    }
+
+    body.join-flow .join-channel-lead {
+      margin: 0;
+      width: 100%;
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    body.join-flow .join-channel-hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    body.join-flow .join-channel-avatar-wrap {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 12%, #e8ecf8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    body.join-flow .join-channel-avatar {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    body.join-flow .join-channel-avatar-fallback {
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    body.join-flow .join-channel-name {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, #151a2d);
+    }
+
+    body.join-flow .join-channel-actions {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    body.join-flow .join-done-boost-btn {
+      width: 100%;
+      margin-top: 8px;
+      margin-bottom: 20px;
+    }
+
+    @keyframes join-btn-gradient-shift {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    body.join-flow .join-btn-gradient:not(:disabled) {
+      background: linear-gradient(
+        90deg,
+        #ff6b9d 0%,
+        #e07da8 18%,
+        #b88ae8 42%,
+        #5b7cfa 62%,
+        #8b9cf5 82%,
+        #ff6b9d 100%
+      );
+      background-size: 220% 100%;
+      animation: join-btn-gradient-shift 3.2s ease-in-out infinite;
+      color: #fff;
+      border: none;
+      border-radius: 999px;
+      box-shadow: none;
+    }
+
+    body.join-flow .join-btn-gradient:not(:disabled):active {
+      filter: brightness(0.96);
+    }
+
+    body.join-flow .join-btn-gradient:disabled {
+      background: linear-gradient(135deg, #ff6b9d, #5b7cfa);
+      background-size: 100% 100%;
+      animation: none;
+      color: #fff;
+      border: none;
+      border-radius: 999px;
+      opacity: 0.55;
+      box-shadow: none;
+      cursor: wait;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.join-flow .join-btn-gradient:not(:disabled) {
+        animation: none;
+        background-size: 100% 100%;
+      }
+    }
+
+    body.join-flow .join-done-row-link {
+      cursor: pointer;
+    }
+
+    body.join-flow .join-done-row-link .join-done-row-name {
+      color: var(--tg-theme-link-color, #2d49cc);
+    }
+
+    body.join-flow .join-boost-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 120;
+      background: rgba(0, 0, 0, 0.45);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+    }
+
+    body.join-flow .join-boost-backdrop.is-open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    body.join-flow .join-boost-sheet {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 130;
+      max-width: 100%;
+      margin: 0 auto;
+      padding: 0 var(--join-pad-right) max(18px, env(safe-area-inset-bottom, 0px)) var(--join-pad-left);
+      transform: translateY(110%);
+      transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+      pointer-events: none;
+    }
+
+    body.join-flow .join-boost-sheet.is-open {
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    body.join-flow .join-boost-card {
+      position: relative;
+      background: var(--tg-theme-bg-color, #fff);
+      border-radius: 20px 20px 16px 16px;
+      padding: 28px 18px 18px;
+      box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.12);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 12%, transparent);
+    }
+
+    body.join-flow .join-boost-close {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 32px;
+      height: 32px;
+      border: none;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 12%, transparent);
+      color: var(--tg-theme-text-color, #151a2d);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    body.join-flow .join-boost-badge {
+      position: absolute;
+      top: -14px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 15px;
+      font-weight: 800;
+      color: #fff;
+      background: linear-gradient(135deg, #ff6b9d, #5b7cfa);
+      box-shadow: 0 4px 14px rgba(91, 124, 250, 0.35);
+    }
+
+    body.join-flow .join-boost-badge-icon {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+
+    body.join-flow .join-boost-title {
+      margin: 8px 0 6px;
+      font-size: 20px;
+      font-weight: 800;
+      text-align: center;
+      color: var(--tg-theme-text-color, #151a2d);
+    }
+
+    body.join-flow .join-boost-counter {
+      margin: 0 0 12px;
+      text-align: center;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--tg-theme-link-color, #5b7cfa);
+    }
+
+    body.join-flow .join-boost-text {
+      margin: 0 0 16px;
+      font-size: 14px;
+      line-height: 1.5;
+      text-align: center;
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    body.join-flow .join-boost-text b {
+      color: var(--tg-theme-text-color, #151a2d);
+      font-weight: 700;
+    }
+
+    body.join-flow .join-boost-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    body.join-flow .join-boost-link-preview {
+      margin: 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 12px;
+      line-height: 1.4;
+      word-break: break-all;
+      text-align: center;
+      color: var(--tg-theme-hint-color, #65708a);
+      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 6%, var(--tg-theme-secondary-bg-color, #fff));
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
     }
 
     body.join-flow .msg {
@@ -2327,24 +2588,24 @@ function getWinnersPageStyles() {
       white-space: nowrap;
     }
 
-    body.winners-page .winners-profile-btn {
-      flex-shrink: 0;
-      width: 22px;
-      height: 22px;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      text-decoration: none;
-      color: var(--tg-theme-button-color, #325fff);
-      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 8%, transparent);
-      border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 16%, transparent);
-      margin: 0;
+    body.winners-page .winners-row-link {
+      cursor: pointer;
     }
 
-    body.winners-page .winners-profile-btn svg {
-      width: 11px;
-      height: 11px;
+    body.winners-page .winners-row-hit {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex: 1;
+      min-width: 0;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    body.winners-page .winners-row-hit:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 50%, transparent);
+      outline-offset: 2px;
+      border-radius: 12px;
     }
 
     body.winners-page .winners-row-compact {

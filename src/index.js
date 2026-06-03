@@ -20,6 +20,11 @@ const {
   convertRubToUsdt,
 } = require("./rub-usdt-rate");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
+const { tryRecordDrawReferral, computeJoinWinChance } = require("./join-referrals");
+const {
+  registerParticipantProfile,
+  buildParticipantProfileUrl,
+} = require("./participant-profile");
 const {
   tgCustomEmojiHtml,
   buildDrawPostCaptionPayload,
@@ -45,6 +50,11 @@ const WEB_PORT = Number(process.env.WEB_PORT || 3000);
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
 const PANEL_BASE = "/panel";
 const WEB_ONLY = process.env.WEB_ONLY === "true";
+const SKIP_TELEGRAM_POLLING = process.env.SKIP_TELEGRAM_POLLING === "true";
+const ENABLE_DEV_PREVIEW =
+  process.env.ENABLE_DEV_PREVIEW === "true" ||
+  WEB_ONLY ||
+  /localhost|127\.0\.0\.1/.test(WEB_PUBLIC_URL);
 const WEB_AUTH_DISABLED = process.env.WEB_AUTH_DISABLED === "true" || WEB_ONLY;
 const RECAPTCHA_SITE_KEY = process.env.RECAPTCHA_SITE_KEY || "";
 const RECAPTCHA_SECRET_KEY = process.env.RECAPTCHA_SECRET_KEY || "";
@@ -1345,6 +1355,28 @@ function getJoinParticipateUrl(drawId) {
   return getJoinDeepLink(drawId);
 }
 
+function getChannelSubscribePayload(draw) {
+  const channelId = normalizeChannelRef(draw?.channelId);
+  if (!channelId) {
+    return null;
+  }
+  const known = findKnownChannel(channelId);
+  const username =
+    known?.username ||
+    (channelId.startsWith("@") ? channelId.replace(/^@/, "") : "");
+  const cleanUsername = String(username || "").replace(/^@/, "").trim();
+  const channelUrl = cleanUsername ? `https://t.me/${cleanUsername}` : "";
+  const channelTitle =
+    known?.title || (cleanUsername ? `@${cleanUsername}` : "канал розыгрыша");
+  const channelPhotoUrl = known?.id ? `/channel-avatar/${encodeURIComponent(String(known.id))}` : "";
+  return {
+    channelTitle,
+    channelUrl,
+    channelUsername: cleanUsername ? `@${cleanUsername}` : "",
+    channelPhotoUrl,
+  };
+}
+
 function getWinnersWebAppUrl(drawId) {
   const base = (WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`).replace(/\/$/, "");
   return `${base}/winners/${encodeURIComponent(drawId)}`;
@@ -1915,12 +1947,14 @@ function upsertUserMeta(user) {
     data.users[userKey] = { projects: {} };
   }
 
+  const prevMeta = data.users[userKey].meta || {};
   data.users[userKey].meta = {
-    ...(data.users[userKey].meta || {}),
+    ...prevMeta,
     id: user.id,
-    username: user.username || data.users[userKey].meta?.username || "",
-    first_name: user.first_name || data.users[userKey].meta?.first_name || "",
-    last_name: user.last_name || data.users[userKey].meta?.last_name || "",
+    username: user.username || prevMeta.username || "",
+    first_name: user.first_name || prevMeta.first_name || "",
+    last_name: user.last_name || prevMeta.last_name || "",
+    firstSeenAt: prevMeta.firstSeenAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
   writeUserProjectProfiles(data);
@@ -2237,6 +2271,9 @@ async function addUserToDraw(drawId, userId, participationMeta = null) {
   draw.participantIds.push(userId);
   if (participationMeta) {
     upsertDrawParticipantMeta(draw, userId, participationMeta);
+    if (participationMeta.referrerId) {
+      tryRecordDrawReferral(draw, participationMeta.referrerId, userId);
+    }
   }
   writeData(data);
 
@@ -2897,8 +2934,8 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
           <button type="submit" class="winner-action-btn">Оплатил</button>
         </form>
       </div>`;
-  const profileUrl = getTelegramUserProfileUrl(winnerId, meta.username);
-  const profileBtn = `<a href="${escapeHtml(profileUrl)}" class="winner-profile-btn" title="Перейти в профиль" aria-label="Перейти в профиль">${renderFormIcon("user")}</a>`;
+  const profileUrl = buildParticipantProfileUrl(winnerId, PANEL_BASE);
+  const profileBtn = `<a href="${escapeHtml(profileUrl)}" class="winner-profile-btn" title="Профиль участника" aria-label="Профиль участника">${renderFormIcon("user")}</a>`;
 
   return `
     <article class="winner-card">
@@ -6003,15 +6040,30 @@ ${getPanelFluidTypographyVars()}
     }
 
     function setupProfileLinks() {
+      function navigateMiniAppProfileUrl(href) {
+        var url = String(href || "").trim();
+        if (!url) return;
+        var tg = window.Telegram && window.Telegram.WebApp;
+        var isInternal = url.charAt(0) === "/" || /\\/user\\//.test(url);
+        if (isInternal) {
+          location.href = url;
+          return;
+        }
+        if ((url.indexOf("tg://") === 0 || /^https:\\/\\/t\\.me\\//i.test(url)) && tg && tg.openTelegramLink) {
+          tg.openTelegramLink(url);
+          return;
+        }
+        location.href = url;
+      }
+
       document.querySelectorAll(".winner-profile-btn").forEach((link) => {
         if (link.dataset.bound === "1") return;
         link.dataset.bound = "1";
         link.addEventListener("click", (event) => {
-          const tg = window.Telegram?.WebApp;
           const href = link.getAttribute("href");
-          if (!href || !tg?.openTelegramLink) return;
+          if (!href) return;
           event.preventDefault();
-          tg.openTelegramLink(href);
+          navigateMiniAppProfileUrl(href);
         });
       });
     }
@@ -6484,6 +6536,23 @@ app.post("/auth/session", (req, res) => {
   });
 });
 
+registerParticipantProfile(app, {
+  readData,
+  readUserProjectProfiles,
+  getUserProfileBundle,
+  getWinnerDisplayName,
+  shouldHideParticipant: (userId) => isPlatformAdmin(userId),
+  findKnownChannel,
+  bot: WEB_ONLY ? null : bot,
+  designPreview: ENABLE_DEV_PREVIEW,
+  DRAW_STATUS,
+  isMoneyPrizeType,
+  getWinnerPayoutAmount,
+  getWinnerAntiFraud,
+  formatRubAmount,
+  convertUsdToRub: require("./rub-usdt-rate").convertUsdToRub,
+});
+
 registerJoinMiniApp(app, {
   validateInitData,
   BOT_TOKEN,
@@ -6505,9 +6574,14 @@ registerJoinMiniApp(app, {
   shouldHideParticipant: (userId) => isPlatformAdmin(userId),
   ASSETS_DIR,
   BOT_USERNAME,
-  designPreview: WEB_ONLY,
+  JOIN_MINI_APP_SHORT_NAME,
+  designPreview: ENABLE_DEV_PREVIEW,
   RECAPTCHA_SITE_KEY,
   RECAPTCHA_SECRET_KEY,
+  checkChannelSubscription: WEB_ONLY ? null : checkChannelSubscriptionWithRetry,
+  getChannelSubscribePayload,
+  computeJoinWinChance,
+  buildJoinReferralDirectLink: require("./join-referrals").buildJoinReferralDirectLink,
 });
 
 registerWinnersMiniApp(app, {
@@ -6517,12 +6591,11 @@ registerWinnersMiniApp(app, {
   getUserProfileBundle,
   getWinnerDisplayName,
   getPerWinnerPrizeText,
-  getTelegramUserProfileUrl,
   shouldHideParticipant: (userId) => isPlatformAdmin(userId),
   enrichUserAvatar,
   ensureUserAvatars,
   bot: WEB_ONLY ? null : bot,
-  designPreview: WEB_ONLY,
+  designPreview: ENABLE_DEV_PREVIEW,
 });
 
 app.get("/", (_req, res) => {
@@ -7726,7 +7799,14 @@ async function bootstrap() {
   }
 
   app.listen(WEB_PORT, "0.0.0.0", () => {
+    const localBase = `http://localhost:${WEB_PORT}`;
     console.log(`Веб-панель запущена: ${WEB_PUBLIC_URL || `http://0.0.0.0:${WEB_PORT}`}`);
+    if (ENABLE_DEV_PREVIEW) {
+      console.log(`  Превью Join:    ${localBase}/dev/preview/join`);
+      console.log(`  Превью Winners: ${localBase}/dev/preview/winners`);
+      console.log(`  Превью Gate:    ${localBase}/dev/preview/gate`);
+      console.log(`  Превью Profile: ${localBase}/dev/preview/profile`);
+    }
     const joinAppUrl = getJoinMiniAppBaseUrl();
     if (joinAppUrl) {
       console.log(`Join Mini App (URL в BotFather): ${joinAppUrl}`);
@@ -7746,14 +7826,20 @@ async function bootstrap() {
       }
     }
   });
-  await bot.launch();
-  console.log("[boot] Telegram bot polling started");
+  if (SKIP_TELEGRAM_POLLING) {
+    console.log(
+      "[boot] SKIP_TELEGRAM_POLLING=true — getUpdates не запущен (прод-бот может работать параллельно)",
+    );
+  } else {
+    await bot.launch();
+    console.log("[boot] Telegram bot polling started");
+    await syncActiveDrawKeyboards();
+    await syncAllOrganizerPanelMenus();
+  }
   console.log(
     `[boot] participate example: ${getJoinParticipateUrl("draw_example") || "(нет URL — проверьте BOT_USERNAME и JOIN_MINI_APP_SHORT_NAME)"}`,
   );
-  await syncActiveDrawKeyboards();
-  await syncAllOrganizerPanelMenus();
-  console.log(`Бот запущен: @${BOT_USERNAME}`);
+  console.log(`Бот: @${BOT_USERNAME}${SKIP_TELEGRAM_POLLING ? " (только веб + API)" : ""}`);
 }
 
 bootstrap().catch((error) => {
@@ -7761,7 +7847,7 @@ bootstrap().catch((error) => {
   process.exit(1);
 });
 
-if (!WEB_ONLY) {
+if (!WEB_ONLY && !SKIP_TELEGRAM_POLLING) {
   process.once("SIGINT", () => bot.stop("SIGINT"));
   process.once("SIGTERM", () => bot.stop("SIGTERM"));
 }

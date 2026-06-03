@@ -104,6 +104,15 @@ function convertRubToUsdt(rubAmount, rate = getRubPerUsdtRate()) {
   return rub / rubPerUsdt;
 }
 
+function convertUsdToRub(usdAmount, rate = getRubPerUsdtRate()) {
+  const usd = Number(usdAmount) || 0;
+  const rubPerUsdt = Number(rate) || DEFAULT_RUB_PER_USDT;
+  if (usd <= 0 || rubPerUsdt <= 0) {
+    return 0;
+  }
+  return Math.floor(usd * rubPerUsdt);
+}
+
 function startRubUsdtRateRefresh() {
   refreshRubUsdtRate(true).catch(() => {});
   setInterval(() => {
@@ -116,4 +125,5 @@ module.exports = {
   startRubUsdtRateRefresh,
   getRubPerUsdtRate,
   convertRubToUsdt,
+  convertUsdToRub,
 };
