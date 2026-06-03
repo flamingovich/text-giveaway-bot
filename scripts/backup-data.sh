@@ -19,8 +19,13 @@ DB_FILE="${APP_DIR}/data/giveaway.db"
 UPLOADS_DIR="${APP_DIR}/data/uploads"
 
 if [[ -f "${DB_FILE}" ]]; then
-  sqlite3 "${DB_FILE}" ".backup '${BACKUP_DIR}/hourly/giveaway-${TIMESTAMP}.db'"
-  cp "${BACKUP_DIR}/hourly/giveaway-${TIMESTAMP}.db" "${BACKUP_DIR}/daily/giveaway-${DAILY_STAMP}.db"
+  BACKUP_DB="${BACKUP_DIR}/hourly/giveaway-${TIMESTAMP}.db"
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "${DB_FILE}" ".backup '${BACKUP_DB}'"
+  else
+    node "${APP_DIR}/scripts/backup-sqlite.js" "${DB_FILE}" "${BACKUP_DB}"
+  fi
+  cp "${BACKUP_DB}" "${BACKUP_DIR}/daily/giveaway-${DAILY_STAMP}.db"
   echo "[$(date -Is)] sqlite backup ok: giveaway-${TIMESTAMP}.db"
 else
   echo "[$(date -Is)] sqlite db not found, backing up JSON files"
@@ -28,7 +33,7 @@ else
 fi
 
 if [[ -d "${UPLOADS_DIR}" ]]; then
-  tar -czf "${BACKUP_DIR}/hourly/uploads-${TIMESTAMP}.tar.gz" -C "${APP_DIR}/data" uploads"
+  tar -czf "${BACKUP_DIR}/hourly/uploads-${TIMESTAMP}.tar.gz" -C "${APP_DIR}/data" uploads
   echo "[$(date -Is)] uploads backup ok: uploads-${TIMESTAMP}.tar.gz"
 fi
 
