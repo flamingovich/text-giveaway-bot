@@ -3,6 +3,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const { createSupportBot } = require("./create-support-bot");
 const { createSupportChatsStore } = require("./create-support-chats-store");
+const { STORE_KEYS } = require("./storage");
 const depmanAi = require("./depman-support-ai");
 
 const DEPMAN_SUPPORT_BOT_TOKEN = process.env.DEPMAN_SUPPORT_BOT_TOKEN;
@@ -20,7 +21,7 @@ if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY.includes("your_")) {
   throw new Error("Укажите OPENROUTER_API_KEY в .env");
 }
 
-const chatsStore = createSupportChatsStore("depman-support-chats.json");
+const chatsStore = createSupportChatsStore(STORE_KEYS.DEPMAN_SUPPORT_CHATS);
 
 const MEDIA_DECLINES = [
   "фото и видео тут не открываются — напиши текстом что на экране",

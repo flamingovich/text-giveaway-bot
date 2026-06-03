@@ -435,7 +435,7 @@ function renderUsersPage(deps, viewModel) {
 
     <section class="panel">
       <h2>Фильтры</h2>
-      <p class="hint">Показывает, на каком проекте (бренде) пользователь чей реф. Данные из <code>user-project-profiles.json</code>.</p>
+      <p class="hint">Показывает, на каком проекте (бренде) пользователь чей реф. Данные из SQLite (<code>data/giveaway.db</code>).</p>
       <form class="filters" method="get" action="/admin/users">
         <label>
           <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Бренд / проект</span>
@@ -757,7 +757,7 @@ function renderSupportListPage(chats, timezone) {
   <main class="wrap">
     <section class="panel">
       <h2>Диалоги с ботом поддержки</h2>
-      <p class="hint">Переписки из <code>data/support-chats.json</code>. В диалоге можно отправить ответ пользователю в Telegram.</p>
+      <p class="hint">Переписки из SQLite (<code>data/giveaway.db</code>, ключ support-chats). В диалоге можно отправить ответ пользователю в Telegram.</p>
       <table class="support-table">
         <thead>
           <tr>

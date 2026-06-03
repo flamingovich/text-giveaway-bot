@@ -1,42 +1,27 @@
 #!/usr/bin/env node
 /**
- * Сбрасывает только привязку к проекту (бренду) в user-project-profiles.json.
- * Не трогает: draws.json, участников розыгрышей, победителей, выплаты, meta (username/аватар).
- *
- * Примеры:
- *   node scripts/reset-brand-project-profiles.js --brand Pokerdom
- *   node scripts/reset-brand-project-profiles.js --brand Pokerdom --apply
- *   node scripts/reset-brand-project-profiles.js --list-brands
+ * Thin CLI wrapper around storage reset for brand profiles.
  */
 
-const fs = require("fs");
 const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+
 const {
   normalizeProjectBrandName,
   resetBrandProjectProfiles,
 } = require("../src/project-profile-bridge");
+const {
+  readUserProjectProfiles,
+  readProjects,
+  writeUserProjectProfiles,
+} = require("../src/storage");
 
-const DATA_DIR = path.join(__dirname, "..", "data");
-const USER_PROJECT_PROFILES_FILE = path.join(DATA_DIR, "user-project-profiles.json");
-const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
+const { KEY_TO_JSON_FILE } = require("../src/storage/constants");
+const { DATA_DIR } = require("../src/storage/paths");
+const fs = require("fs");
 
-function readJson(filePath, fallback) {
-  if (!fs.existsSync(filePath)) {
-    return fallback;
-  }
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-function readUserProjectProfiles() {
-  return readJson(USER_PROJECT_PROFILES_FILE, { users: {} });
-}
-
-function readProjects() {
-  return readJson(PROJECTS_FILE, { projects: [] });
-}
-
-function writeUserProjectProfiles(data) {
-  fs.writeFileSync(USER_PROJECT_PROFILES_FILE, JSON.stringify(data, null, 2));
+function readProjectsData() {
+  return readProjects();
 }
 
 function parseArgs(argv) {
@@ -64,7 +49,7 @@ function parseArgs(argv) {
 }
 
 function listBrands() {
-  const projects = readProjects().projects || [];
+  const projects = readProjectsData().projects || [];
   const byName = new Map();
   for (const project of projects) {
     const key = normalizeProjectBrandName(project.name);
@@ -107,14 +92,19 @@ function main() {
   if (dryRun) {
     console.log("Режим просмотра (без записи). Добавьте --apply чтобы применить.\n");
   } else {
-    const backupPath = `${USER_PROJECT_PROFILES_FILE}.bak-${Date.now()}`;
-    fs.copyFileSync(USER_PROJECT_PROFILES_FILE, backupPath);
-    console.log(`Бэкап: ${backupPath}\n`);
+    const timestamp = Date.now();
+    for (const fileName of Object.values(KEY_TO_JSON_FILE)) {
+      const source = path.join(DATA_DIR, fileName);
+      if (fs.existsSync(source)) {
+        fs.copyFileSync(source, `${source}.bak-${timestamp}`);
+      }
+    }
+    console.log(`JSON backups (if present): data/*.json.bak-${timestamp}\n`);
   }
 
   const result = resetBrandProjectProfiles(args.brand, {
     readUserProjectProfiles,
-    readProjects,
+    readProjects: readProjectsData,
     writeUserProjectProfiles,
     dryRun,
   });

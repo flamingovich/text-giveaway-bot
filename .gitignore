@@ -11,5 +11,10 @@ data/known-channels.json
 data/user-project-profiles.json
 data/delegated-admins.json
 data/support-chats.json
+data/giveaway.db
+data/giveaway.db-wal
+data/giveaway.db-shm
+data/json-archive/
+backups/
 data/uploads/*
 !data/uploads/.gitkeep

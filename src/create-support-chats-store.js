@@ -1,27 +1,19 @@
-const path = require("path");
-const fs = require("fs");
 const { DateTime } = require("luxon");
+const { readDocument, writeDocument, DATA_DIR } = require("./storage");
 
-const DATA_DIR = path.join(__dirname, "..", "data");
 const TRANSCRIPT_LIMIT = Number(process.env.SUPPORT_TRANSCRIPT_LIMIT || 2000);
 
-function createSupportChatsStore(filename) {
-  const chatsFile = path.join(DATA_DIR, filename);
-
+function createSupportChatsStore(storeKey) {
   function readSupportChats() {
-    if (!fs.existsSync(chatsFile)) {
-      return {};
-    }
     try {
-      return JSON.parse(fs.readFileSync(chatsFile, "utf8"));
+      return readDocument(storeKey);
     } catch {
       return {};
     }
   }
 
   function writeSupportChats(raw) {
-    fs.mkdirSync(path.dirname(chatsFile), { recursive: true });
-    fs.writeFileSync(chatsFile, JSON.stringify(raw, null, 2));
+    writeDocument(storeKey, raw);
   }
 
   function ensureChatTranscriptFields(state) {
@@ -84,7 +76,7 @@ function createSupportChatsStore(filename) {
   }
 
   return {
-    chatsFile,
+    storeKey,
     readSupportChats,
     writeSupportChats,
     ensureChatTranscriptFields,

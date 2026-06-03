@@ -1,5 +1,3 @@
-const path = require("path");
-const fs = require("fs");
 const { Telegraf } = require("telegraf");
 const { DateTime } = require("luxon");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
@@ -40,14 +38,12 @@ function createSupportBot(options) {
   } = options;
 
   const {
-    chatsFile,
     readSupportChats,
+    writeSupportChats,
     ensureChatTranscriptFields,
     syncChatUser,
     appendTranscript,
   } = chatsStore;
-
-  fs.mkdirSync(path.dirname(chatsFile), { recursive: true });
 
   const chats = new Map();
   const pendingTimers = new Map();
@@ -73,11 +69,8 @@ function createSupportBot(options) {
   }
 
   function loadChats() {
-    if (!fs.existsSync(chatsFile)) {
-      return;
-    }
     try {
-      const raw = JSON.parse(fs.readFileSync(chatsFile, "utf8"));
+      const raw = readSupportChats();
       for (const [chatId, state] of Object.entries(raw)) {
         const normalized = ensureChatTranscriptFields(state);
         normalized.escalated = false;
@@ -91,7 +84,7 @@ function createSupportBot(options) {
 
   function saveChats() {
     const payload = Object.fromEntries(chats.entries());
-    fs.writeFileSync(chatsFile, JSON.stringify(payload, null, 2));
+    writeSupportChats(payload);
   }
 
   function getChatState(chatId) {

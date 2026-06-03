@@ -1,24 +1,17 @@
-const path = require("path");
-const fs = require("fs");
 const { DateTime } = require("luxon");
-
-const SUPPORT_CHATS_FILE = path.join(__dirname, "..", "data", "support-chats.json");
+const { readDocument, writeDocument, STORE_KEYS } = require("./storage");
 const SUPPORT_TRANSCRIPT_LIMIT = Number(process.env.SUPPORT_TRANSCRIPT_LIMIT || 2000);
 
 function readSupportChats() {
-  if (!fs.existsSync(SUPPORT_CHATS_FILE)) {
-    return {};
-  }
   try {
-    return JSON.parse(fs.readFileSync(SUPPORT_CHATS_FILE, "utf8"));
+    return readDocument(STORE_KEYS.SUPPORT_CHATS);
   } catch {
     return {};
   }
 }
 
 function writeSupportChats(raw) {
-  fs.mkdirSync(path.dirname(SUPPORT_CHATS_FILE), { recursive: true });
-  fs.writeFileSync(SUPPORT_CHATS_FILE, JSON.stringify(raw, null, 2));
+  writeDocument(STORE_KEYS.SUPPORT_CHATS, raw);
 }
 
 function createEmptySupportChatState(chatId) {
@@ -210,7 +203,6 @@ async function closeSupportChatFromAdmin(botToken, chatId) {
 }
 
 module.exports = {
-  SUPPORT_CHATS_FILE,
   readSupportChats,
   writeSupportChats,
   updateSupportChat,

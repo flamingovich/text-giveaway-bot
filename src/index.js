@@ -36,6 +36,21 @@ const {
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
 } = require("./draw-post-emojis");
+const {
+  DATA_DIR,
+  UPLOADS_DIR,
+  ensureStorage,
+  readData,
+  writeData,
+  readKnownChannels,
+  writeKnownChannels,
+  readProjects,
+  writeProjects,
+  readUserProjectProfiles,
+  writeUserProjectProfiles,
+  readDelegatedAdmins,
+  writeDelegatedAdmins,
+} = require("./storage");
 
 const DRAW_POST_PREMIUM_EMOJI = process.env.DRAW_POST_PREMIUM_EMOJI !== "false";
 
@@ -98,13 +113,6 @@ const webAuth = createWebAuth({
   panelPath: PANEL_BASE,
 });
 const app = express();
-const DATA_DIR = path.join(__dirname, "..", "data");
-const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
-const DRAWS_FILE = path.join(DATA_DIR, "draws.json");
-const KNOWN_CHANNELS_FILE = path.join(DATA_DIR, "known-channels.json");
-const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
-const USER_PROJECT_PROFILES_FILE = path.join(DATA_DIR, "user-project-profiles.json");
-const DELEGATED_ADMINS_FILE = path.join(DATA_DIR, "delegated-admins.json");
 const ASSETS_DIR = path.join(__dirname, "..", "assets");
 const BRAND_LOGO_FILE = path.join(__dirname, "..", "rollerbot_logo.jpg");
 const BRAND_BACKGROUND_FILE = path.join(__dirname, "..", "background.jpg");
@@ -120,80 +128,6 @@ const DRAW_STATUS = {
 const sessions = new Map();
 const joinSessions = new Map();
 const winnerVerificationSessions = new Map();
-
-function ensureStorage() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(UPLOADS_DIR)) {
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(DRAWS_FILE)) {
-    fs.writeFileSync(DRAWS_FILE, JSON.stringify({ draws: [] }, null, 2), "utf8");
-  }
-  if (!fs.existsSync(KNOWN_CHANNELS_FILE)) {
-    fs.writeFileSync(KNOWN_CHANNELS_FILE, JSON.stringify({ channels: [] }, null, 2), "utf8");
-  }
-  if (!fs.existsSync(PROJECTS_FILE)) {
-    fs.writeFileSync(PROJECTS_FILE, JSON.stringify({ projects: [] }, null, 2), "utf8");
-  }
-  if (!fs.existsSync(USER_PROJECT_PROFILES_FILE)) {
-    fs.writeFileSync(USER_PROJECT_PROFILES_FILE, JSON.stringify({ users: {} }, null, 2), "utf8");
-  }
-  if (!fs.existsSync(DELEGATED_ADMINS_FILE)) {
-    fs.writeFileSync(DELEGATED_ADMINS_FILE, JSON.stringify({ admins: [] }, null, 2), "utf8");
-  }
-}
-
-function readData() {
-  ensureStorage();
-  const content = fs.readFileSync(DRAWS_FILE, "utf8");
-  return JSON.parse(content);
-}
-
-function writeData(data) {
-  fs.writeFileSync(DRAWS_FILE, JSON.stringify(data, null, 2), "utf8");
-}
-
-function readKnownChannels() {
-  ensureStorage();
-  const content = fs.readFileSync(KNOWN_CHANNELS_FILE, "utf8");
-  return JSON.parse(content);
-}
-
-function writeKnownChannels(data) {
-  fs.writeFileSync(KNOWN_CHANNELS_FILE, JSON.stringify(data, null, 2), "utf8");
-}
-
-function readProjects() {
-  ensureStorage();
-  const content = fs.readFileSync(PROJECTS_FILE, "utf8");
-  return JSON.parse(content);
-}
-
-function writeProjects(data) {
-  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(data, null, 2), "utf8");
-}
-
-function readUserProjectProfiles() {
-  ensureStorage();
-  const content = fs.readFileSync(USER_PROJECT_PROFILES_FILE, "utf8");
-  return JSON.parse(content);
-}
-
-function writeUserProjectProfiles(data) {
-  fs.writeFileSync(USER_PROJECT_PROFILES_FILE, JSON.stringify(data, null, 2), "utf8");
-}
-
-function readDelegatedAdmins() {
-  ensureStorage();
-  const content = fs.readFileSync(DELEGATED_ADMINS_FILE, "utf8");
-  return JSON.parse(content);
-}
-
-function writeDelegatedAdmins(data) {
-  fs.writeFileSync(DELEGATED_ADMINS_FILE, JSON.stringify(data, null, 2), "utf8");
-}
 
 function getDelegatedAdminIds() {
   return (readDelegatedAdmins().admins || []).map((entry) => Number(entry.userId)).filter(Number.isFinite);

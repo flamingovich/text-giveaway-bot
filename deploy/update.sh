@@ -15,6 +15,9 @@ else
   echo "JOIN_PAGE_BUILD=${BUILD_ID}" | sudo tee -a "${APP_DIR}/.env" >/dev/null
 fi
 sudo -u "${APP_USER}" npm install --omit=dev
+if ! grep -q '^STORAGE_BACKEND=' "${APP_DIR}/.env" 2>/dev/null; then
+  echo "STORAGE_BACKEND=sqlite" | sudo tee -a "${APP_DIR}/.env" >/dev/null
+fi
 cp "${APP_DIR}/deploy/ecosystem.config.cjs" /etc/giveaway-bot.ecosystem.config.cjs
 sudo -u "${APP_USER}" pm2 startOrRestart /etc/giveaway-bot.ecosystem.config.cjs
 sudo -u "${APP_USER}" pm2 save

@@ -9,13 +9,17 @@
     "depman-support": "node src/depman-support-bot.js",
     "dev": "node --watch src/index.js",
     "dev:design": "node --env-file=.env --env-file=.env.design src/index.js",
-    "reset-brand-profiles": "node scripts/reset-brand-project-profiles.js"
+    "reset-brand-profiles": "node scripts/reset-brand-project-profiles.js",
+    "migrate:sqlite": "node scripts/migrate-json-to-sqlite.js --apply",
+    "migrate:sqlite:dry": "node scripts/migrate-json-to-sqlite.js",
+    "backup:data": "bash scripts/backup-data.sh"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "better-sqlite3": "^11.10.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "luxon": "^3.7.2",
