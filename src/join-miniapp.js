@@ -475,7 +475,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <button type="button" class="join-done-info-backdrop" id="joinDoneChanceInfoBackdrop" aria-label="Закрыть"></button>
             <div class="join-done-info-card">
               <h4 id="joinDoneChanceInfoTitle" class="join-done-info-title">Как считается шанс</h4>
-              <p class="join-done-info-text">Процент «шанс» — это призовые места ÷ участники при <b>текущем</b> составе. Новые участники уменьшают этот %. Приглашение друзей <b>не меняет</b> этот процент — даёт только визуальный бонус +50% в окне «Пригласить друзей».</p>
+              <p class="join-done-info-text">Процент «шанс» — это призовые места ÷ участники при <b>текущем</b> составе. Новые участники уменьшают этот %.</p>
               <button type="button" class="join-btn join-btn-primary join-done-info-close" id="joinDoneChanceInfoClose">Понятно</button>
             </div>
           </div>
@@ -508,7 +508,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       <div class="join-boost-badge" id="joinBoostBadge">+0% ${JOIN_BOOST_ARROW_ICON}</div>
       <h3 class="join-boost-title" id="joinBoostTitle">Пригласи друзей</h3>
       <p class="join-boost-counter" id="joinBoostCounter">Приглашено друзей: 0/10</p>
-      <p class="join-boost-text">Поделитесь ссылкой с друзьями. За каждого, кто присоединится к розыгрышу по вашей ссылке, начисляется <b>+50%</b> к визуальному бонусу (счётчик выше). На реальный шанс в блоке «шанс» это <b>не влияет</b> — розыгрыш остаётся случайным среди всех участников.</p>
+      <p class="join-boost-text">Поделитесь ссылкой с друзьями. За каждого приглашённого друга, который присоединится к розыгрышу по вашей ссылке, вы получаете <b>+50%</b> к шансу на победу!</p>
       <div class="join-boost-actions">
         <p class="join-boost-link-preview hidden" id="joinBoostLinkPreview"></p>
         <p class="join-boost-link-notice hidden" id="joinBoostLinkNotice" role="status"></p>

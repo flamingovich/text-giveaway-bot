@@ -1517,7 +1517,7 @@ async function publishDrawToOrganizer(draw) {
 }
 
 function normalizePublishTarget(value) {
-  return value === "channel" ? "channel" : "dm";
+  return value === "dm" ? "dm" : "channel";
 }
 
 async function publishDraw(draw, target) {
@@ -5846,17 +5846,11 @@ ${getPanelFluidTypographyVars()}
             </div>
           </div>
 
-          <input type="hidden" name="publishTarget" id="publishTargetInput" value="dm" />
-          <div class="draw-submit-row">
-            <button type="submit" class="draw-submit" id="createDrawDmBtn">
-              <span class="draw-ico">${renderFormIcon("gift")}</span>
-              Создать розыгрыш (личка)
-            </button>
-            <button type="submit" class="draw-submit draw-submit-secondary" id="createDrawChannelBtn">
-              <span class="draw-ico">${renderFormIcon("channel")}</span>
-              Создать розыгрыш (канал)
-            </button>
-          </div>
+          <input type="hidden" name="publishTarget" value="channel" />
+          <button type="submit" class="draw-submit">
+            <span class="draw-ico">${renderFormIcon("gift")}</span>
+            Создать розыгрыш
+          </button>
         </form>
       </section>
 
@@ -6283,19 +6277,6 @@ ${getPanelFluidTypographyVars()}
       endMode.addEventListener("change", syncEnd);
       if (winnerConfirmMode) {
         winnerConfirmMode.addEventListener("change", syncWinnerConfirm);
-      }
-      const publishTargetInput = document.getElementById("publishTargetInput");
-      const createDrawDmBtn = document.getElementById("createDrawDmBtn");
-      const createDrawChannelBtn = document.getElementById("createDrawChannelBtn");
-      if (createDrawDmBtn && publishTargetInput) {
-        createDrawDmBtn.addEventListener("click", () => {
-          publishTargetInput.value = "dm";
-        });
-      }
-      if (createDrawChannelBtn && publishTargetInput) {
-        createDrawChannelBtn.addEventListener("click", () => {
-          publishTargetInput.value = "channel";
-        });
       }
       syncPublish();
       syncEnd();
@@ -7285,7 +7266,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       res,
       publishMode === "now"
         ? createdNowMessages[publishTarget]
-        : `Розыгрыш создан и будет опубликован по расписанию (${publishTarget === "channel" ? "в канал" : "в личку"}).`,
+        : "Розыгрыш создан и будет опубликован по расписанию.",
       publishMode === "now" && publishTarget === "dm" ? { openBot: true } : {},
     );
   } catch (error) {
