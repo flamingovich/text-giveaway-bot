@@ -13,6 +13,7 @@ const { DEFAULT_OPENROUTER_MODEL } = require("./support-ai");
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL;
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "https://rollerbot.pro").replace(/\/$/, "");
 const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
+const SUPPORT_ALWAYS_ON = process.env.SUPPORT_ALWAYS_ON !== "false";
 
 if (!SUPPORT_BOT_TOKEN || SUPPORT_BOT_TOKEN.includes("your_")) {
   throw new Error("Укажите SUPPORT_BOT_TOKEN в .env");
@@ -32,7 +33,7 @@ const { bot, boot, stop } = createSupportBot({
   openRouterModel: OPENROUTER_MODEL,
   webPublicUrl: WEB_PUBLIC_URL,
   timezone: TIMEZONE,
-  alwaysOn: false,
+  alwaysOn: SUPPORT_ALWAYS_ON,
   hoursStart: Number(process.env.SUPPORT_HOURS_START || 9),
   hoursEnd: Number(process.env.SUPPORT_HOURS_END || 21),
   idleCloseMs: Number(process.env.SUPPORT_IDLE_CLOSE_MS || 10 * 60 * 1000),
