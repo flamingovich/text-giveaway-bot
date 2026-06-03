@@ -22,6 +22,7 @@ const {
 const { applyNoLinkPreview } = require("./telegram-no-preview");
 const {
   tgCustomEmojiHtml,
+  buildDrawPostCaptionPayload,
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
 } = require("./draw-post-emojis");
@@ -1158,8 +1159,7 @@ function formatDrawPrizeForPost(draw) {
   return escapeHtml(String(draw.prize || "").trim());
 }
 
-function buildDrawMessage(draw, options = {}) {
-  const { includeWinners = false, forCaption = false } = options;
+function buildDrawMessageFinished(draw) {
   const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const durationLabel = getDrawDurationLabel(draw);
   const e = (key) => tgCustomEmojiHtml(key, DRAW_POST_PREMIUM_EMOJI);
@@ -1171,9 +1171,8 @@ function buildDrawMessage(draw, options = {}) {
       project.refLink
         ? `<a href="${escapeHtml(project.refLink)}"><b>${escapeHtml(project.name)}</b></a>`
         : escapeHtml(project.name);
-    conditions.push(`• ${e("point")} Быть рефералом на ${projectLink}`);
+    conditions.push(`${e("point")} Быть рефералом на ${projectLink}`);
   }
-  conditions.push(buildDrawParticipateConditionLine(draw));
 
   const base = [
     `<b>${e("gift")} РОЗЫГРЫШ НА ${prizeLabel}</b>`,
@@ -1185,28 +1184,81 @@ function buildDrawMessage(draw, options = {}) {
     `${e("clock")} Итоги через ${escapeHtml(durationLabel)}`,
   ].filter((line) => line !== null && line !== undefined);
 
+  const userProfiles = readUserProjectProfiles();
+  const winnerLinks = (draw.winnerIds || []).map((winnerId) => {
+    return getWinnerMentionHtml(userProfiles, winnerId);
+  });
+  const botHandle = BOT_USERNAME ? `@${BOT_USERNAME}` : "@roller_official_bot";
+  base.push(
+    "",
+    winnerLinks.length > 0
+      ? `<b>🥳 Победители:</b> ${winnerLinks.join(", ")}`
+      : "<b>🥳 Победители:</b> не определены",
+  );
+  base.push("", `<b>⚠️ Кто выйграл, отметьтесь! ${escapeHtml(botHandle)}</b>`);
+  return base.join("\n");
+}
+
+function getDrawPostTelegramContent(draw, options = {}) {
+  const { includeWinners = false, forCaption = false } = options;
+
   if (includeWinners) {
-    const userProfiles = readUserProjectProfiles();
-    const winnerLinks = (draw.winnerIds || []).map((winnerId) => {
-      return getWinnerMentionHtml(userProfiles, winnerId);
-    });
-    const botHandle = BOT_USERNAME ? `@${BOT_USERNAME}` : "@roller_official_bot";
-    base.push(
-      "",
-      winnerLinks.length > 0
-        ? `<b>🥳 Победители:</b> ${winnerLinks.join(", ")}`
-        : "<b>🥳 Победители:</b> не определены"
-    );
-    base.push("", `<b>⚠️ Кто выйграл, отметьтесь! ${escapeHtml(botHandle)}</b>`);
-  } else {
-    base.push("", `<b>👇 Жми кнопку, для участия 👇</b>`);
+    const text = buildDrawMessageFinished(draw);
+    return {
+      text: forCaption && text.length > 1000 ? `${text.slice(0, 997)}...` : text,
+      parse_mode: "HTML",
+    };
   }
 
-  const text = base.join("\n");
+  const project = draw.projectId ? getProjectById(draw.projectId) : null;
+  const payload = buildDrawPostCaptionPayload({
+    usePremiumEmoji: DRAW_POST_PREMIUM_EMOJI,
+    prizeLabel: formatDrawPrizeForPost(draw),
+    projectName: project?.name || "",
+    projectRefLink: project?.refLink || "",
+    winnersCount: draw.winnersCount,
+    durationLabel: getDrawDurationLabel(draw),
+    includeWinners: false,
+  });
+
+  let text = payload.caption || "";
   if (forCaption && text.length > 1000) {
-    return `${text.slice(0, 997)}...`;
+    text = `${text.slice(0, 997)}...`;
+    return { text, parse_mode: "HTML" };
   }
-  return text;
+
+  if (payload.mode === "entities" && Array.isArray(payload.caption_entities)) {
+    return { text, caption_entities: payload.caption_entities };
+  }
+
+  return { text, parse_mode: "HTML" };
+}
+
+function buildDrawMessage(draw, options = {}) {
+  return getDrawPostTelegramContent(draw, options).text;
+}
+
+function applyDrawPostContentToTelegramOpts(draw, options, telegramOpts) {
+  const content = getDrawPostTelegramContent(draw, options);
+  const useCaption = Boolean(options.forCaption || draw.messageType === "photo");
+
+  if (content.caption_entities?.length) {
+    if (useCaption) {
+      telegramOpts.caption = content.text;
+      telegramOpts.caption_entities = content.caption_entities;
+    } else {
+      telegramOpts.entities = content.caption_entities;
+    }
+    return telegramOpts;
+  }
+
+  if (useCaption) {
+    telegramOpts.caption = content.text;
+  }
+  if (content.parse_mode) {
+    telegramOpts.parse_mode = content.parse_mode;
+  }
+  return telegramOpts;
 }
 
 function createDrawId() {
@@ -1453,25 +1505,26 @@ function getFinishedKeyboard(draw) {
 
 async function publishDraw(draw) {
   if (draw.imagePath) {
+    const photoOpts = applyDrawPostContentToTelegramOpts(
+      draw,
+      { forCaption: true },
+      { ...getKeyboard(draw.id, draw.participantIds.length) },
+    );
     const message = await bot.telegram.sendPhoto(
       draw.channelId,
       { source: fs.createReadStream(draw.imagePath) },
-      {
-        caption: buildDrawMessage(draw, { forCaption: true }),
-        parse_mode: "HTML",
-        ...getKeyboard(draw.id, draw.participantIds.length),
-      }
+      photoOpts,
     );
     draw.messageType = "photo";
     draw.messageId = message.message_id;
   } else {
+    const textOpts = applyDrawPostContentToTelegramOpts(draw, {}, {
+      ...getKeyboard(draw.id, draw.participantIds.length),
+    });
     const message = await bot.telegram.sendMessage(
       draw.channelId,
       buildDrawMessage(draw),
-      {
-        parse_mode: "HTML",
-        ...getKeyboard(draw.id, draw.participantIds.length),
-      }
+      textOpts,
     );
     draw.messageType = "text";
     draw.messageId = message.message_id;
@@ -1494,28 +1547,28 @@ async function updateDrawPost(draw, includeWinners) {
 
   try {
     if (draw.messageType === "photo") {
+      const captionOpts = applyDrawPostContentToTelegramOpts(
+        draw,
+        { includeWinners, forCaption: true },
+        { ...keyboard },
+      );
       await bot.telegram.editMessageCaption(
         draw.channelId,
         draw.messageId,
         undefined,
-        buildDrawMessage(draw, { includeWinners, forCaption: true }),
-        {
-          parse_mode: "HTML",
-          ...keyboard,
-        },
+        captionOpts.caption,
+        captionOpts,
       );
       return;
     }
 
+    const textOpts = applyDrawPostContentToTelegramOpts(draw, { includeWinners }, { ...keyboard });
     await bot.telegram.editMessageText(
       draw.channelId,
       draw.messageId,
       undefined,
       buildDrawMessage(draw, { includeWinners }),
-      {
-        parse_mode: "HTML",
-        ...keyboard,
-      },
+      textOpts,
     );
   } catch (error) {
     if (isIgnorableTelegramEditError(error)) {
