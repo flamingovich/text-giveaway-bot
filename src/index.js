@@ -1475,7 +1475,37 @@ function getFinishedKeyboard(draw) {
   return { reply_markup: { inline_keyboard: [[button]] } };
 }
 
-async function publishDraw(draw) {
+async function publishDrawToChannel(draw) {
+  const keyboard = getKeyboard(draw.id, draw.participantIds.length);
+
+  if (draw.imagePath && fs.existsSync(draw.imagePath)) {
+    const photoOpts = applyDrawPostContentToTelegramOpts(
+      draw,
+      { forCaption: true },
+      { ...keyboard },
+    );
+    const message = await bot.telegram.sendPhoto(
+      draw.channelId,
+      { source: fs.createReadStream(draw.imagePath) },
+      photoOpts,
+    );
+    draw.messageType = "photo";
+    draw.messageId = message.message_id;
+  } else {
+    const textOpts = applyDrawPostContentToTelegramOpts(draw, {}, { ...keyboard });
+    const message = await bot.telegram.sendMessage(
+      draw.channelId,
+      buildDrawMessage(draw),
+      textOpts,
+    );
+    draw.messageType = "text";
+    draw.messageId = message.message_id;
+  }
+
+  draw.awaitingChannelPost = false;
+}
+
+async function publishDrawToOrganizer(draw) {
   const organizerId = Number(draw.ownerId || draw.createdBy);
   if (!Number.isInteger(organizerId)) {
     throw new Error("Не удалось определить организатора розыгрыша.");
@@ -1484,6 +1514,22 @@ async function publishDraw(draw) {
   await sendDrawDraftToOrganizer(draw, organizerId);
   draw.messageId = null;
   draw.awaitingChannelPost = true;
+}
+
+function normalizePublishTarget(value) {
+  return value === "channel" ? "channel" : "dm";
+}
+
+async function publishDraw(draw, target) {
+  const publishTarget = normalizePublishTarget(target ?? draw.publishTarget);
+  draw.publishTarget = publishTarget;
+
+  if (publishTarget === "channel") {
+    await publishDrawToChannel(draw);
+  } else {
+    await publishDrawToOrganizer(draw);
+  }
+
   draw.status = DRAW_STATUS.ACTIVE;
 }
 
@@ -4282,6 +4328,22 @@ ${getPanelFluidTypographyVars()}
     }
     .draw-submit .draw-ico { color: inherit; width: 18px; height: 18px; }
     .draw-submit .draw-ico svg { width: 18px; height: 18px; }
+    .draw-submit-row {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .draw-submit-secondary {
+      background: color-mix(in srgb, var(--tg-theme-text-color, #111) 8%, var(--tg-theme-secondary-bg-color, #eef1f7));
+      color: var(--tg-theme-text-color, #111);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-text-color, #111) 12%, transparent);
+    }
+    .draw-submit-secondary:hover,
+    .draw-submit-secondary:focus-visible {
+      background: color-mix(in srgb, var(--tg-theme-text-color, #111) 12%, var(--tg-theme-secondary-bg-color, #eef1f7));
+      color: var(--tg-theme-text-color, #111);
+      filter: none;
+    }
     .form-section-card {
       background: rgba(255, 255, 255, 0.1);
       border: 1px solid rgba(231, 238, 255, 0.22);
@@ -5784,10 +5846,17 @@ ${getPanelFluidTypographyVars()}
             </div>
           </div>
 
-          <button type="submit" class="draw-submit">
-            <span class="draw-ico">${renderFormIcon("gift")}</span>
-            Создать розыгрыш
-          </button>
+          <input type="hidden" name="publishTarget" id="publishTargetInput" value="dm" />
+          <div class="draw-submit-row">
+            <button type="submit" class="draw-submit" id="createDrawDmBtn">
+              <span class="draw-ico">${renderFormIcon("gift")}</span>
+              Создать розыгрыш (личка)
+            </button>
+            <button type="submit" class="draw-submit draw-submit-secondary" id="createDrawChannelBtn">
+              <span class="draw-ico">${renderFormIcon("channel")}</span>
+              Создать розыгрыш (канал)
+            </button>
+          </div>
         </form>
       </section>
 
@@ -6214,6 +6283,19 @@ ${getPanelFluidTypographyVars()}
       endMode.addEventListener("change", syncEnd);
       if (winnerConfirmMode) {
         winnerConfirmMode.addEventListener("change", syncWinnerConfirm);
+      }
+      const publishTargetInput = document.getElementById("publishTargetInput");
+      const createDrawDmBtn = document.getElementById("createDrawDmBtn");
+      const createDrawChannelBtn = document.getElementById("createDrawChannelBtn");
+      if (createDrawDmBtn && publishTargetInput) {
+        createDrawDmBtn.addEventListener("click", () => {
+          publishTargetInput.value = "dm";
+        });
+      }
+      if (createDrawChannelBtn && publishTargetInput) {
+        createDrawChannelBtn.addEventListener("click", () => {
+          publishTargetInput.value = "channel";
+        });
       }
       syncPublish();
       syncEnd();
@@ -7055,6 +7137,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       ? body.winnerConfirmUnit
       : "minutes";
     const publishMode = body.publishMode === "scheduled" ? "scheduled" : "now";
+    const publishTarget = normalizePublishTarget(body.publishTarget);
     const endMode = body.endMode === "scheduled" ? "scheduled" : "manual";
     const winnersCount = Number(body.winnersCount);
 
@@ -7182,22 +7265,28 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       winnerNotifications: {},
       winnerConfirmValue: normalizedWinnerConfirmValue,
       winnerConfirmUnit: normalizedWinnerConfirmUnit,
+      publishTarget,
     };
 
     if (publishMode === "now") {
-      await publishDraw(draw);
+      await publishDraw(draw, publishTarget);
     }
 
     const data = readData();
     data.draws.push(draw);
     writeData(data);
 
+    const createdNowMessages = {
+      dm: "Розыгрыш создан. Пост отправлен в личку бота — перешлите его в канал.",
+      channel: "Розыгрыш создан и опубликован в канал.",
+    };
+
     redirectWithMessage(
       res,
       publishMode === "now"
-        ? "Розыгрыш создан. Пост отправлен в личку бота — перешлите его в канал."
-        : "Розыгрыш создан и будет опубликован по расписанию.",
-      publishMode === "now" ? { openBot: true } : {},
+        ? createdNowMessages[publishTarget]
+        : `Розыгрыш создан и будет опубликован по расписанию (${publishTarget === "channel" ? "в канал" : "в личку"}).`,
+      publishMode === "now" && publishTarget === "dm" ? { openBot: true } : {},
     );
   } catch (error) {
     console.error("Ошибка создания розыгрыша через веб:", error);
@@ -7222,9 +7311,12 @@ panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer
   try {
     await publishDraw(draw);
     writeData(data);
-    redirectWithMessage(res, "Розыгрыш опубликован. Пост отправлен в личку бота — перешлите его в канал.", {
-      openBot: true,
-    });
+    const publishedMessages = {
+      dm: "Розыгрыш опубликован. Пост отправлен в личку бота — перешлите его в канал.",
+      channel: "Розыгрыш опубликован в канал.",
+    };
+    const target = normalizePublishTarget(draw.publishTarget);
+    redirectWithMessage(res, publishedMessages[target], target === "dm" ? { openBot: true } : {});
   } catch (error) {
     console.error("Ошибка публикации через веб:", error);
     redirectWithMessage(res, `Не удалось опубликовать: ${error.message}`);
