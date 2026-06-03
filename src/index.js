@@ -1619,6 +1619,43 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
   const payoutPrize = getWinnerPayoutText(draw, projectData, {
     hasFraudFlag: antiFraud.hasFraudFlag,
   });
+  const channelFields = {
+    channelSubscribed: subscriptionCheck?.ok ? Boolean(subscriptionCheck.subscribed) : notifyExisting.channelSubscribed,
+    channelStatus: subscriptionCheck?.status || notifyExisting.channelStatus || null,
+    channelCheckedAt: subscriptionCheck?.checkedAt || notifyExisting.channelCheckedAt || null,
+    channelCheckError: subscriptionCheck?.ok ? null : (subscriptionCheck?.error || notifyExisting.channelCheckError || null),
+  };
+
+  if (!draw.winnerNotifications) {
+    draw.winnerNotifications = {};
+  }
+
+  if (antiFraud.hasFraudFlag) {
+    const message = await bot.telegram.sendMessage(
+      userId,
+      buildWinnerWinMessageHtml(draw, payoutPrize, { antiFraud: true }),
+      {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      },
+    );
+
+    draw.winnerNotifications[String(userId)] = {
+      sentAt: new Date().toISOString(),
+      sentBy,
+      verifiedAt: null,
+      expiresAt: null,
+      status: "forfeited",
+      payoutPrize,
+      antiFraudFlag: true,
+      trc20Address: trc,
+      lastMessageId: message.message_id,
+      ...channelFields,
+    };
+    winnerVerificationSessions.delete(winnerVerificationSessionKey(userId, draw.id));
+    return;
+  }
+
   const task = buildCaptchaTask();
   const windowCfg = getWinnerConfirmWindow(draw);
   const expiresAt = windowCfg
@@ -1629,7 +1666,7 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     userId,
     [
       buildWinnerWinMessageHtml(draw, payoutPrize, {
-        antiFraud: antiFraud.hasFraudFlag,
+        antiFraud: false,
       }),
       "",
       "Пройди проверку для подтверждения и получения приза 👇",
@@ -1645,9 +1682,6 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     }
   );
 
-  if (!draw.winnerNotifications) {
-    draw.winnerNotifications = {};
-  }
   draw.winnerNotifications[String(userId)] = {
     sentAt: new Date().toISOString(),
     sentBy,
@@ -1655,14 +1689,11 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     expiresAt,
     status: "pending",
     payoutPrize,
-      antiFraudFlag: antiFraud.hasFraudFlag,
+    antiFraudFlag: false,
     trc20Address: trc,
     lastMessageId: message.message_id,
     captchaAnswer: task.correct,
-    channelSubscribed: subscriptionCheck?.ok ? Boolean(subscriptionCheck.subscribed) : notifyExisting.channelSubscribed,
-    channelStatus: subscriptionCheck?.status || notifyExisting.channelStatus || null,
-    channelCheckedAt: subscriptionCheck?.checkedAt || notifyExisting.channelCheckedAt || null,
-    channelCheckError: subscriptionCheck?.ok ? null : (subscriptionCheck?.error || notifyExisting.channelCheckError || null),
+    ...channelFields,
   };
 
   winnerVerificationSessions.set(winnerVerificationSessionKey(userId, draw.id), {
@@ -1765,7 +1796,11 @@ async function processWinnerConfirmTimeouts(data) {
         continue;
       }
 
-      if (notify.status === "confirmed" || notify.status === "expired") {
+      if (notify.status === "confirmed" || notify.status === "expired" || notify.status === "forfeited") {
+        continue;
+      }
+
+      if (notify.antiFraudFlag) {
         continue;
       }
 
@@ -2868,7 +2903,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const referralOwnerHtml = referralOwnerLabel
     ? `<div class="winner-card-meta winner-card-ref-owner">${escapeHtml(referralOwnerLabel)}</div>`
     : "";
-  const statusBadge = isVerified
+  const statusBadge = antiFraud.hasFraudFlag
+    ? `<span class="winner-badge winner-badge-danger">Приз сгорел</span>`
+    : isVerified
     ? `<span class="winner-badge winner-badge-ok">Проверен</span>`
     : isExpired
       ? `<span class="winner-badge winner-badge-danger">Не отметился</span>`
@@ -7223,6 +7260,11 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     null,
     draw.winnerNotifications[String(userId)],
   );
+  if (antiFraud.hasFraudFlag) {
+    writeData(data);
+    redirectWithMessage(res, "Выплата недоступна — сработала антифрод-проверка.");
+    return;
+  }
   const payoutText = getWinnerPayoutText(draw, projectData, {
     hasFraudFlag: antiFraud.hasFraudFlag,
   });
@@ -7671,6 +7713,11 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
     const notify = draw.winnerNotifications?.[String(userId)];
     if (!notify || notify.status === "expired") {
       await ctx.answerCbQuery("Сессия проверки устарела.");
+      return;
+    }
+
+    if (notify.antiFraudFlag || notify.status === "forfeited") {
+      await ctx.answerCbQuery("Приз недоступен — сработала антифрод-проверка.");
       return;
     }
 
