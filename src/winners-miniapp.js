@@ -8,6 +8,7 @@ const {
   getWinnersPageStyles,
   renderDesktopTiledBackground,
   renderThemeToggleButton,
+  getParticipantRowChevronIcon,
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
@@ -115,7 +116,10 @@ function renderUserRow(user, options = {}) {
       ${renderAvatar(user)}
       <div class="winners-row-body">
         <div class="winners-row-identity">
-          <span class="winners-row-name">${escapeHtml(user.displayName)}</span>
+          <span class="winners-row-name-line">
+            <span class="winners-row-name">${escapeHtml(user.displayName)}</span>
+            <span class="winners-row-chevron" aria-hidden="true">${getParticipantRowChevronIcon()}</span>
+          </span>
         </div>
         <div class="winners-row-handle">${escapeHtml(handle)}</div>
       </div>

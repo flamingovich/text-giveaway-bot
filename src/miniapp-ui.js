@@ -13,6 +13,10 @@ function getMiniAppViewportMeta() {
   return `<meta name="viewport" content="${MINIAPP_VIEWPORT}" />`;
 }
 
+function getParticipantRowChevronIcon() {
+  return `<svg class="participant-row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>`;
+}
+
 function getMiniAppFontLinks() {
   return `<link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -1699,6 +1703,32 @@ function getJoinFlowStyles() {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      min-width: 0;
+    }
+
+    body.join-flow .join-done-row-name-line {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    body.join-flow .join-done-row-chevron {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      color: var(--tg-theme-hint-color, #65708a);
+      opacity: 0.8;
+    }
+
+    body.join-flow .join-done-row-chevron .participant-row-chevron {
+      width: 14px;
+      height: 14px;
+      display: block;
     }
 
     body.join-flow .join-done-row-handle {
@@ -1904,6 +1934,11 @@ function getJoinFlowStyles() {
 
     body.join-flow .join-done-row-link .join-done-row-name {
       color: var(--tg-theme-link-color, #2d49cc);
+    }
+
+    body.join-flow .join-done-row-link .join-done-row-chevron {
+      color: var(--tg-theme-link-color, #2d49cc);
+      opacity: 0.65;
     }
 
     body.join-flow .join-boost-backdrop {
@@ -2539,6 +2574,14 @@ function getWinnersPageStyles() {
       min-width: 0;
     }
 
+    body.winners-page .winners-row-name-line {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      min-width: 0;
+      max-width: 100%;
+    }
+
     body.winners-page .winners-row-name {
       font-size: 14px;
       font-weight: 700;
@@ -2548,6 +2591,23 @@ function getWinnersPageStyles() {
       text-overflow: ellipsis;
       min-width: 0;
       line-height: 1.2;
+    }
+
+    body.winners-page .winners-row-chevron {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      color: var(--tg-theme-hint-color, #65708a);
+      opacity: 0.8;
+    }
+
+    body.winners-page .winners-row-chevron .participant-row-chevron {
+      width: 14px;
+      height: 14px;
+      display: block;
     }
 
     body.winners-page .winners-row-handle {
@@ -3050,6 +3110,7 @@ module.exports = {
   getMiniAppInitScript,
   getMiniAppHeadScript,
   getMiniAppViewportMeta,
+  getParticipantRowChevronIcon,
   getMiniAppFontLinks,
   getTelegramPanelAuthRedirectScript,
   getPreviewDevStyles,

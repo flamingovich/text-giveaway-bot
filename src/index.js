@@ -26,6 +26,11 @@ const {
   buildParticipantProfileUrl,
 } = require("./participant-profile");
 const {
+  resolveJoinProjectContext,
+  ensureCrossOrganizerProjectProfile,
+  getPanelReferralOwnerLabel,
+} = require("./project-profile-bridge");
+const {
   tgCustomEmojiHtml,
   buildDrawPostCaptionPayload,
   formatRubPrizeForPost,
@@ -2321,11 +2326,17 @@ async function tryAutoJoinDraw(draw, userId) {
     };
   }
 
-  const profile = getUserProjectProfile(userId, draw.projectId);
-  const canSkip =
-    !draw.projectId ||
-    ((profile?.referralVerified || profile?.selfReportedNonReferral) && profile?.trc20Address);
+  const joinCtx = resolveJoinProjectContext(userId, draw, {
+    getUserProjectProfile,
+    setUserProjectProfile,
+    readUserProjectProfiles,
+    readProjects,
+    readData,
+    getProjectById,
+  });
+  const canSkip = !draw.projectId || joinCtx.canSkipRegistration;
   if (canSkip) {
+    ensureCrossOrganizerProjectProfile(userId, draw, joinCtx, setUserProjectProfile);
     const result = await addUserToDraw(draw.id, userId);
     return {
       joined: true,
@@ -2913,6 +2924,16 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const refBadge = projectData.selfReportedNonReferral
     ? `<span class="winner-badge winner-badge-warn">Не реф</span>`
     : `<span class="winner-badge winner-badge-ok">Реф</span>`;
+  const referralOwnerLabel = getPanelReferralOwnerLabel(winnerId, draw, {
+    readUserProjectProfiles,
+    readProjects,
+    readData,
+    getWinnerDisplayName,
+    getProjectById,
+  });
+  const referralOwnerHtml = referralOwnerLabel
+    ? `<div class="winner-card-meta winner-card-ref-owner">${escapeHtml(referralOwnerLabel)}</div>`
+    : "";
   const statusBadge = isVerified
     ? `<span class="winner-badge winner-badge-ok">Проверен</span>`
     : isExpired
@@ -2947,6 +2968,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
             ${profileBtn}
           </div>
           ${usernameMetaHtml}
+          ${referralOwnerHtml}
           <div class="winner-card-badges">${refBadge}${statusBadge}${antiFraudBadges}</div>
         </div>
       </div>

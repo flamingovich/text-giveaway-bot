@@ -12,9 +12,15 @@ const {
   renderThemeToggleButton,
   renderJoinProgressMarkup,
   JOIN_FLOW_STEPS,
+  getParticipantRowChevronIcon,
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
+const {
+  getDrawOwnerId,
+  resolveJoinProjectContext,
+  ensureCrossOrganizerProjectProfile,
+} = require("./project-profile-bridge");
 
 const NON_REFERRAL_CHANCE = 0.35;
 const JOIN_BOOST_ARROW_ICON = `<svg class="join-boost-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 19V5"/><path d="m7 10 5-5 5 5"/></svg>`;
@@ -517,6 +523,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     const PAGE_BUILD = ${JSON.stringify(JOIN_PAGE_BUILD)};
     const API_BASE = ${JSON.stringify(apiBase)};
     let drawId = PAGE_MODE === "draw" ? ${JSON.stringify(drawId)} : "";
+
+    const PARTICIPANT_ROW_CHEVRON_HTML = ${JSON.stringify(getParticipantRowChevronIcon())};
 
     function apiUrl(path) {
       if (!path) return API_BASE || "";
@@ -1098,9 +1106,20 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const text = document.createElement("div");
       text.className = "join-done-row-text";
 
+      const nameLine = document.createElement("span");
+      nameLine.className = "join-done-row-name-line";
+
       const nameEl = document.createElement("span");
       nameEl.className = "join-done-row-name";
-      text.appendChild(nameEl);
+      nameLine.appendChild(nameEl);
+
+      const chevronEl = document.createElement("span");
+      chevronEl.className = "join-done-row-chevron";
+      chevronEl.setAttribute("aria-hidden", "true");
+      chevronEl.innerHTML = PARTICIPANT_ROW_CHEVRON_HTML;
+      nameLine.appendChild(chevronEl);
+
+      text.appendChild(nameLine);
 
       const handleEl = document.createElement("span");
       handleEl.className = "join-done-row-handle";
@@ -1938,9 +1957,14 @@ function registerJoinMiniApp(app, deps) {
   }
 
   async function proceedAfterChannelVerified(draw, userId, session, req, res) {
-    const participationMeta = buildParticipationMetaForJoin(req, session);
+    const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
+    if (joinCtx.canSkipRegistration) {
+      await completeJoinAfterProfileReady(draw, userId, session, req, res);
+      return;
+    }
 
     if (!draw.projectId) {
+      const participationMeta = buildParticipationMetaForJoin(req, session);
       const result = await addUserToDraw(draw.id, userId, participationMeta);
       clearJoinApiSession(userId, draw.id);
       scheduleParticipantAvatars(draw, userId);
@@ -2066,6 +2090,33 @@ function registerJoinMiniApp(app, deps) {
     );
   }
 
+  function getJoinProfileDeps() {
+    return {
+      getUserProjectProfile,
+      setUserProjectProfile,
+      readUserProjectProfiles,
+      readProjects,
+      readData,
+      getProjectById,
+    };
+  }
+
+  async function completeJoinAfterProfileReady(draw, userId, session, req, res) {
+    const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
+    ensureCrossOrganizerProjectProfile(userId, draw, joinCtx, setUserProjectProfile);
+    const participationMeta = buildParticipationMetaForJoin(req, session);
+    const result = await addUserToDraw(draw.id, userId, participationMeta);
+    clearJoinApiSession(userId, draw.id);
+    scheduleParticipantAvatars(draw, userId);
+    const updatedDraw = getActiveDraw(draw.id) || draw;
+    res.json(
+      buildJoinDonePayload(updatedDraw, userId, {
+        message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+        alreadyJoined: Boolean(result.already),
+      }),
+    );
+  }
+
   function resolveJoinEntry(draw, userId, participationMeta = null) {
     if (drawHasParticipant(draw, userId)) {
       clearJoinApiSession(userId, draw.id);
@@ -2076,12 +2127,14 @@ function registerJoinMiniApp(app, deps) {
       });
     }
 
-    const profile = getUserProjectProfile(userId, draw.projectId);
-    const canSkip = (profile?.referralVerified || profile?.selfReportedNonReferral) && profile?.trc20Address;
-    const autoJoin =
-      (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) || canSkip;
+    const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
+    const canSkip =
+      joinCtx.canSkipRegistration ||
+      (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id));
+    const autoJoin = canSkip;
 
     if (autoJoin) {
+      ensureCrossOrganizerProjectProfile(userId, draw, joinCtx, setUserProjectProfile);
       if (!drawHasParticipant(draw, userId)) {
         queueAddUserToDraw(draw.id, userId, participationMeta);
       }
@@ -2229,6 +2282,7 @@ function registerJoinMiniApp(app, deps) {
           projectId: draw.projectId,
           step: "captcha",
           referrerId: referrerId || null,
+          drawOwnerId: getDrawOwnerId(draw),
         };
         setJoinApiSession(userId, drawId, session);
       } else if (!session.referrerId) {
@@ -2387,7 +2441,8 @@ function registerJoinMiniApp(app, deps) {
     });
   });
 
-  function applyReferralRoll(userId, session) {
+  function applyReferralRoll(userId, session, draw) {
+    const ownerId = getDrawOwnerId(draw);
     const isNonReferral = Math.random() < NON_REFERRAL_CHANCE;
     if (isNonReferral) {
       setUserProjectProfile(userId, session.projectId, {
@@ -2401,6 +2456,7 @@ function registerJoinMiniApp(app, deps) {
         referralVerified: true,
         selfReportedNonReferral: false,
         referralCheckedAt: new Date().toISOString(),
+        referralOwnerId: ownerId,
       });
       session.skipReferralCheck = false;
     }
@@ -2427,7 +2483,7 @@ function registerJoinMiniApp(app, deps) {
       res.status(400).json({ error: "Сессия устарела." });
       return;
     }
-    applyReferralRoll(userId, session);
+    applyReferralRoll(userId, session, draw);
     session.step = "await_trc20";
     setJoinApiSession(userId, drawId, session);
     res.json(buildJoinStepResponse("trc20"));
@@ -2462,10 +2518,13 @@ function registerJoinMiniApp(app, deps) {
 
     const walletCheck = await checkWalletHasTransactions(address);
     const forceNonReferralByWallet = walletCheck.ok && walletCheck.hasTransactions;
+    const ownerId = getDrawOwnerId(draw);
+    const isReferral = !forceNonReferralByWallet && !session.skipReferralCheck;
 
     setUserProjectProfile(userId, session.projectId, {
-      referralVerified: forceNonReferralByWallet ? false : session.skipReferralCheck ? false : true,
+      referralVerified: isReferral,
       selfReportedNonReferral: forceNonReferralByWallet ? true : Boolean(session.skipReferralCheck),
+      referralOwnerId: isReferral ? ownerId : null,
       trc20Address: address,
       verifiedBy: "miniapp",
       walletTxCheckedAt: new Date().toISOString(),
