@@ -190,7 +190,7 @@ function buildDrawPostFinishedPayload(data) {
   b.append("🎊 ");
   b.addBold(`ИТОГИ КОНКУРСА НА ${prizeLabel}`);
 
-  b.append("\n\n 🏆");
+  b.append("\n\n🏆");
   b.addBold(" Победители: ");
   if (winners.length > 0) {
     winners.forEach((winner, index) => {
