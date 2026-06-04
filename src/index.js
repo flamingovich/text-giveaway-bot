@@ -1686,6 +1686,55 @@ async function tryLinkDrawFromChannelPost(post) {
 const DRAW_POST_UPDATE_DEBOUNCE_MS = Number(process.env.DRAW_POST_UPDATE_DEBOUNCE_MS || 8000);
 /** @type {Map<string, { timer: NodeJS.Timeout, includeWinners: boolean }>} */
 const drawPostUpdateTimers = new Map();
+/** @type {Map<number, number>} */
+const drawCreateLocks = new Map();
+/** @type {Map<number, { fingerprint: string, at: number }>} */
+const lastDrawCreateByUser = new Map();
+const DRAW_CREATE_DEDUP_MS = 30_000;
+
+function tryAcquireDrawCreateLock(userId) {
+  const key = Number(userId);
+  if (!Number.isInteger(key)) {
+    return false;
+  }
+  if (drawCreateLocks.has(key)) {
+    return false;
+  }
+  drawCreateLocks.set(key, Date.now());
+  return true;
+}
+
+function releaseDrawCreateLock(userId) {
+  drawCreateLocks.delete(Number(userId));
+}
+
+function buildDrawCreateFingerprint(fields) {
+  return [
+    fields.channelId,
+    fields.projectId,
+    fields.prizeType,
+    fields.prize,
+    fields.winnersCount,
+    fields.publishMode,
+    fields.publishAt,
+    fields.endMode,
+    fields.endAfterValue,
+    fields.endAfterUnit,
+    fields.publishTarget,
+  ].join("|");
+}
+
+function isRecentDuplicateDrawCreate(userId, fingerprint) {
+  const prev = lastDrawCreateByUser.get(Number(userId));
+  if (!prev || prev.fingerprint !== fingerprint) {
+    return false;
+  }
+  return Date.now() - prev.at < DRAW_CREATE_DEDUP_MS;
+}
+
+function recordDrawCreate(userId, fingerprint) {
+  lastDrawCreateByUser.set(Number(userId), { fingerprint, at: Date.now() });
+}
 
 function isIgnorableTelegramEditError(error) {
   const message = String(error?.message || error || "");
@@ -3210,18 +3259,15 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
               </div>
               <div class="history-head-actions">
                 <span class="history-status status-${escapeHtml(draw.status)}">${escapeHtml(statusLabel)}</span>
-                ${
-                  draw.status !== DRAW_STATUS.ACTIVE
-                    ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/delete" class="project-delete-form draw-delete-form">
-                        <button
-                          type="submit"
-                          class="project-icon-btn project-delete-btn draw-delete-btn"
-                          title="Удалить розыгрыш"
-                          data-draw-prize="${escapeHtml(draw.prize)}"
-                        >${renderFormIcon("delete")}</button>
-                      </form>`
-                    : ""
-                }
+                <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/delete" class="project-delete-form draw-delete-form">
+                  <button
+                    type="submit"
+                    class="project-icon-btn project-delete-btn draw-delete-btn"
+                    title="Удалить розыгрыш"
+                    data-draw-prize="${escapeHtml(draw.prize)}"
+                    data-draw-status="${escapeHtml(draw.status)}"
+                  >${renderFormIcon("delete")}</button>
+                </form>
               </div>
             </div>
             <div class="history-divider" aria-hidden="true"></div>
@@ -4355,6 +4401,14 @@ ${getPanelFluidTypographyVars()}
       background: var(--tg-theme-button-color, var(--primary));
       color: var(--tg-theme-button-text-color, #fff);
       filter: brightness(1.06);
+      transform: none;
+    }
+    .draw-submit:disabled,
+    .draw-submit.is-busy {
+      opacity: 0.72;
+      cursor: wait;
+      pointer-events: none;
+      filter: none;
       transform: none;
     }
     .draw-submit .draw-ico { color: inherit; width: 18px; height: 18px; }
@@ -5878,7 +5932,7 @@ ${getPanelFluidTypographyVars()}
           </div>
 
           <input type="hidden" name="publishTarget" value="channel" />
-          <button type="submit" class="draw-submit">
+          <button type="submit" class="draw-submit" id="createDrawSubmitBtn">
             <span class="draw-ico">${renderFormIcon("gift")}</span>
             Создать розыгрыш
           </button>
@@ -6507,7 +6561,11 @@ ${getPanelFluidTypographyVars()}
       document.querySelectorAll(".draw-delete-btn").forEach((btn) => {
         btn.addEventListener("click", (event) => {
           const prize = btn.dataset.drawPrize || "розыгрыш";
-          if (!confirm("Удалить розыгрыш «" + prize + "»?")) {
+          const isActive = btn.dataset.drawStatus === "active";
+          const message = isActive
+            ? "Удалить активный розыгрыш «" + prize + "»? Пост в канале будет удалён, участие отменится."
+            : "Удалить розыгрыш «" + prize + "»?";
+          if (!confirm(message)) {
             event.preventDefault();
           }
         });
@@ -6645,6 +6703,36 @@ ${getPanelFluidTypographyVars()}
       });
     }
 
+    function setupCreateDrawSubmitGuard() {
+      const form = document.getElementById("create-draw-form");
+      const submitBtn = document.getElementById("createDrawSubmitBtn");
+      if (!form || !submitBtn) return;
+
+      let submitting = false;
+      const defaultHtml = submitBtn.innerHTML;
+
+      form.addEventListener("submit", (event) => {
+        if (submitting) {
+          event.preventDefault();
+          return;
+        }
+        submitting = true;
+        submitBtn.disabled = true;
+        submitBtn.classList.add("is-busy");
+        submitBtn.innerHTML =
+          '<span class="draw-ico">' +
+          ${JSON.stringify(renderFormIcon("gift"))} +
+          "</span> Создаём розыгрыш…";
+      });
+
+      window.addEventListener("pageshow", () => {
+        submitting = false;
+        submitBtn.disabled = false;
+        submitBtn.classList.remove("is-busy");
+        submitBtn.innerHTML = defaultHtml;
+      });
+    }
+
     setupDrawImageField();
     setupClipboardSubmit("create-draw-form", "draw-clipboard-data", "draw-image-input", "pasted-draw");
     setupProjectFormEdit();
@@ -6654,6 +6742,7 @@ ${getPanelFluidTypographyVars()}
     setupCopyButtons();
     setupProfileLinks();
     setupPublishEndToggles();
+    setupCreateDrawSubmitGuard();
     setupSettingsPanel();
     setupAdminPanels();
     setupPanelAutoRefresh();
@@ -7126,8 +7215,16 @@ panelRouter.post("/channels/:channelId/delete", webAuth.requireAuth, requireOrga
 });
 
 panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single("image"), async (req, res) => {
+  const ownerId = req.webUser.id;
+  if (!tryAcquireDrawCreateLock(ownerId)) {
+    redirectWithMessage(
+      res,
+      "Розыгрыш уже создаётся. Подождите, пока завершится текущая операция.",
+    );
+    return;
+  }
+
   try {
-    const ownerId = req.webUser.id;
     const body = req.body || {};
     const selectedChannelId = (body.knownChannelId || "").trim();
     const channelId = selectedChannelId;
@@ -7252,6 +7349,27 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       drawImagePath = saveClipboardImage(imageClipboardData, "draw_image");
     }
 
+    const createFingerprint = buildDrawCreateFingerprint({
+      channelId,
+      projectId,
+      prizeType,
+      prize,
+      winnersCount,
+      publishMode,
+      publishAt: body.publishAt || "",
+      endMode,
+      endAfterValue: normalizedEndAfterValue ?? "",
+      endAfterUnit: normalizedEndAfterUnit ?? "",
+      publishTarget,
+    });
+    if (isRecentDuplicateDrawCreate(ownerId, createFingerprint)) {
+      redirectWithMessage(
+        res,
+        "Такой розыгрыш уже был создан. Обновите панель, если нужно создать ещё один.",
+      );
+      return;
+    }
+
     const draw = {
       id: createDrawId(),
       status: publishMode === "now" ? DRAW_STATUS.ACTIVE : DRAW_STATUS.SCHEDULED,
@@ -7287,6 +7405,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
     const data = readData();
     data.draws.push(draw);
     writeData(data);
+    recordDrawCreate(ownerId, createFingerprint);
 
     const createdNowMessages = {
       dm: "Розыгрыш создан. Пост отправлен в личку бота — перешлите его в канал.",
@@ -7303,6 +7422,8 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
   } catch (error) {
     console.error("Ошибка создания розыгрыша через веб:", error);
     redirectWithMessage(res, `Ошибка: ${error.message}`);
+  } finally {
+    releaseDrawCreateLock(ownerId);
   }
 });
 
@@ -7368,9 +7489,10 @@ panelRouter.post("/draws/:id/delete", webAuth.requireAuth, requireOrganizer, asy
     return;
   }
 
-  if (draw.status === DRAW_STATUS.ACTIVE) {
-    redirectWithMessage(res, "Нельзя удалить активный розыгрыш. Сначала завершите его.");
-    return;
+  const pendingPostUpdate = drawPostUpdateTimers.get(draw.id);
+  if (pendingPostUpdate?.timer) {
+    clearTimeout(pendingPostUpdate.timer);
+    drawPostUpdateTimers.delete(draw.id);
   }
 
   if (draw.messageId && draw.channelId) {
