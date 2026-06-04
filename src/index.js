@@ -1171,11 +1171,9 @@ function getDrawPostTelegramContent(draw, options = {}) {
     const winners = (draw.winnerIds || []).map((winnerId) =>
       getWinnerMentionLink(userProfiles, winnerId),
     );
-    const botUsername = (BOT_USERNAME || "roller_official_bot").replace(/^@/, "");
     const payload = buildDrawPostFinishedPayload({
       prizeLabel: formatDrawPrizePlain(draw),
       winners,
-      botUrl: `https://t.me/${botUsername}`,
       resultsUrl: getWinnersChannelUrl(draw.id),
     });
     let text = payload.caption || "";

@@ -175,44 +175,38 @@ function buildDrawPostCaptionPayload(data) {
 
 /**
  * Пост с итогами розыгрыша (caption + caption_entities).
- * @param {{ prizeLabel: string, winners: { displayName: string, url: string }[], botUrl: string, resultsUrl: string }} data
+ * @param {{ prizeLabel: string, winners: { displayName: string, url: string }[], resultsUrl: string }} data
  */
 function buildDrawPostFinishedPayload(data) {
   const {
     prizeLabel = "",
     winners = [],
-    botUrl = "https://t.me/roller_official_bot",
     resultsUrl = "",
   } = data;
 
   const b = new CaptionBuilder();
 
-  b.append("🎊 ");
-  b.addBold(`ИТОГИ КОНКУРСА НА ${prizeLabel}`);
+  b.append("🎉");
+  b.addBold(`ИТОГИ РОЗЫГРЫША ${prizeLabel} `);
 
   b.append("\n\n🏆");
-  b.addBold(" Победители: ");
+  b.addBold(" Победители: \n");
   if (winners.length > 0) {
-    winners.forEach((winner, index) => {
-      if (index > 0) {
-        b.append(", ");
-      }
+    winners.forEach((winner) => {
+      b.append("• ");
       if (winner.url) {
         b.addTextLink(winner.displayName, winner.url);
       } else {
         b.append(winner.displayName);
       }
+      b.append("\n");
     });
   } else {
-    b.append("не определены");
+    b.append("не определены\n");
   }
 
-  b.append("\n❗️ Отметьтесь ");
-  b.addTextLink("в боте", botUrl, { bold: true });
-  b.append("!");
-
   if (resultsUrl) {
-    b.append("\n\n🔎 ");
+    b.append("\n🔎 ");
     b.addTextLink("Проверить Результаты", resultsUrl, { bold: true });
   }
 
