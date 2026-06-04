@@ -33,6 +33,7 @@ const {
 const {
   tgCustomEmojiHtml,
   buildDrawPostCaptionPayload,
+  buildDrawPostFinishedPayload,
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
 } = require("./draw-post-emojis");
@@ -1131,6 +1132,10 @@ function buildDrawParticipateConditionLine(_draw) {
 }
 
 function formatDrawPrizeForPost(draw) {
+  return escapeHtml(formatDrawPrizePlain(draw));
+}
+
+function formatDrawPrizePlain(draw) {
   if (draw.prizeType === "money_rub") {
     const amount = getDrawPrizeAmount(draw) || parseRubAmountFromText(draw.prize);
     if (Number.isFinite(amount) && amount > 0) {
@@ -1143,57 +1148,44 @@ function formatDrawPrizeForPost(draw) {
       return formatUsdPrizeForPost(amount);
     }
   }
-  return escapeHtml(String(draw.prize || "").trim());
+  return String(draw.prize || "").trim();
 }
 
-function buildDrawMessageFinished(draw) {
-  const project = draw.projectId ? getProjectById(draw.projectId) : null;
-  const durationLabel = getDrawDurationLabel(draw);
-  const e = (key) => tgCustomEmojiHtml(key, DRAW_POST_PREMIUM_EMOJI);
-  const prizeLabel = formatDrawPrizeForPost(draw);
-
-  const conditions = [];
-  if (project) {
-    const projectLink =
-      project.refLink
-        ? `<a href="${escapeHtml(project.refLink)}"><b>${escapeHtml(project.name)}</b></a>`
-        : escapeHtml(project.name);
-    conditions.push(`${e("point")} Быть рефералом на ${projectLink}`);
-  }
-
-  const base = [
-    `<b>${e("gift")} РОЗЫГРЫШ НА ${prizeLabel}</b>`,
-    "",
-    `<b>${e("warn")} Условие участия:</b>`,
-    ...conditions,
-    "",
-    `${e("people")} Призовых мест: ${draw.winnersCount}`,
-    `${e("clock")} Итоги через <b>${escapeHtml(durationLabel)}</b>`,
-  ].filter((line) => line !== null && line !== undefined);
-
-  const userProfiles = readUserProjectProfiles();
-  const winnerLinks = (draw.winnerIds || []).map((winnerId) => {
-    return getWinnerMentionHtml(userProfiles, winnerId);
-  });
-  const botHandle = BOT_USERNAME ? `@${BOT_USERNAME}` : "@roller_official_bot";
-  base.push(
-    "",
-    winnerLinks.length > 0
-      ? `<b>🥳 Победители:</b> ${winnerLinks.join(", ")}`
-      : "<b>🥳 Победители:</b> не определены",
-  );
-  base.push("", `<b>⚠️ Кто выйграл, отметьтесь! ${escapeHtml(botHandle)}</b>`);
-  return base.join("\n");
+function getWinnerMentionLink(userProfiles, winnerId) {
+  const userNode = userProfiles.users?.[String(winnerId)] || {};
+  const meta = userNode.meta || {};
+  const displayName =
+    [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim() ||
+    getWinnerDisplayName(meta, winnerId);
+  const url = meta.username
+    ? `https://t.me/${String(meta.username).replace(/^@/, "")}`
+    : `tg://user?id=${winnerId}`;
+  return { displayName, url };
 }
 
 function getDrawPostTelegramContent(draw, options = {}) {
   const { includeWinners = false, forCaption = false } = options;
 
   if (includeWinners) {
-    const text = buildDrawMessageFinished(draw);
+    const userProfiles = readUserProjectProfiles();
+    const winners = (draw.winnerIds || []).map((winnerId) =>
+      getWinnerMentionLink(userProfiles, winnerId),
+    );
+    const botUsername = (BOT_USERNAME || "roller_official_bot").replace(/^@/, "");
+    const payload = buildDrawPostFinishedPayload({
+      prizeLabel: formatDrawPrizePlain(draw),
+      winners,
+      botUrl: `https://t.me/${botUsername}`,
+      resultsUrl: getWinnersChannelUrl(draw.id),
+    });
+    let text = payload.caption || "";
+    if (forCaption && text.length > 1000) {
+      text = `${text.slice(0, 997)}...`;
+    }
     return {
-      text: forCaption && text.length > 1000 ? `${text.slice(0, 997)}...` : text,
-      parse_mode: "HTML",
+      text,
+      caption_entities: payload.caption_entities,
+      link_preview_options: { is_disabled: true },
     };
   }
 
@@ -1237,7 +1229,14 @@ function applyDrawPostContentToTelegramOpts(draw, options, telegramOpts) {
       telegramOpts.text = content.text;
       telegramOpts.entities = content.caption_entities;
     }
+    if (content.link_preview_options) {
+      telegramOpts.link_preview_options = content.link_preview_options;
+    }
     return telegramOpts;
+  }
+
+  if (content.link_preview_options) {
+    telegramOpts.link_preview_options = content.link_preview_options;
   }
 
   if (useCaption) {
@@ -1503,9 +1502,7 @@ function getJoinDeepLink(drawId) {
 }
 
 function getFinishedKeyboard(draw) {
-  const prizeText = String(draw?.prize || "").trim();
-  const shortPrize = prizeText.length > 24 ? `${prizeText.slice(0, 24)}...` : prizeText;
-  const text = `Розыгрыш на ${shortPrize || "приз"} завершен`;
+  const text = "🔎 Проверить Результаты";
   const url = getWinnersChannelUrl(draw.id);
   const button = url
     ? { text, url, style: "success" }

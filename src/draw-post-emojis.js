@@ -173,11 +173,62 @@ function buildDrawPostCaptionPayload(data) {
   };
 }
 
+/**
+ * Пост с итогами розыгрыша (caption + caption_entities).
+ * @param {{ prizeLabel: string, winners: { displayName: string, url: string }[], botUrl: string, resultsUrl: string }} data
+ */
+function buildDrawPostFinishedPayload(data) {
+  const {
+    prizeLabel = "",
+    winners = [],
+    botUrl = "https://t.me/roller_official_bot",
+    resultsUrl = "",
+  } = data;
+
+  const b = new CaptionBuilder();
+
+  b.append("🎊 ");
+  b.addBold(`ИТОГИ КОНКУРСА НА ${prizeLabel}`);
+
+  b.append("\n\n 🏆");
+  b.addBold(" Победители: ");
+  if (winners.length > 0) {
+    winners.forEach((winner, index) => {
+      if (index > 0) {
+        b.append(", ");
+      }
+      if (winner.url) {
+        b.addTextLink(winner.displayName, winner.url);
+      } else {
+        b.append(winner.displayName);
+      }
+    });
+  } else {
+    b.append("не определены");
+  }
+
+  b.append("\n❗️ Кто выйграл, отметьтесь ");
+  b.addTextLink("в боте", botUrl, { bold: true });
+  b.append("!");
+
+  if (resultsUrl) {
+    b.append("\n\n🔎 ");
+    b.addTextLink("Проверить Результаты", resultsUrl, { bold: true });
+  }
+
+  return {
+    mode: "entities",
+    caption: b.text,
+    caption_entities: b.entities,
+  };
+}
+
 module.exports = {
   DRAW_POST_EMOJI,
   CaptionBuilder,
   tgCustomEmojiHtml,
   buildDrawPostCaptionPayload,
+  buildDrawPostFinishedPayload,
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
   stylizeZeroAsCyrillicO,
