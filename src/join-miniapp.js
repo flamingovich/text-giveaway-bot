@@ -1972,14 +1972,6 @@ function registerJoinMiniApp(app, deps) {
     return "";
   }
 
-  function buildDeviceFingerprint(req) {
-    const ua = String(req.headers["user-agent"] || "").trim();
-    const secUa = String(req.headers["sec-ch-ua"] || "").trim();
-    const platform = String(req.headers["sec-ch-ua-platform"] || "").trim();
-    const lang = String(req.headers["accept-language"] || "").trim();
-    return [ua, secUa, platform, lang].filter(Boolean).join("|");
-  }
-
   function getReferrerIdFromRequest(req) {
     const raw = req.body?.referrerId;
     if (raw == null || raw === "") {
@@ -1993,7 +1985,6 @@ function registerJoinMiniApp(app, deps) {
     const referrerId = getReferrerIdFromRequest(req);
     return {
       ipAddress: extractClientIp(req),
-      deviceFingerprint: buildDeviceFingerprint(req),
       ...(referrerId ? { referrerId } : {}),
     };
   }

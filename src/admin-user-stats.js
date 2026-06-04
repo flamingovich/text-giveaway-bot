@@ -66,23 +66,6 @@ function collectDrawFraudLinks(draw, userId, userProfiles, signals, deps) {
     });
   }
 
-  if (participantMeta?.deviceHash && (signals.byDevice.get(participantMeta.deviceHash) || 0) > 1) {
-    const linkedUserIds = findLinkedParticipantIds(draw, userId, (participantId) => {
-      const meta = getDrawParticipantMeta(draw, participantId);
-      return meta?.deviceHash === participantMeta.deviceHash;
-    });
-    links.push({
-      label: "Бот по девайсу",
-      kind: "device",
-      drawId: draw.id,
-      drawTitle,
-      linkedUserIds,
-      reason: linkedUserIds.length
-        ? `Одно устройство (fingerprint) с участниками: ${linkedUserIds.join(", ")}`
-        : "Совпадение fingerprint с другими участниками",
-    });
-  }
-
   if (wallet && (signals.byWallet.get(wallet) || 0) > 1) {
     const linkedUserIds = findLinkedParticipantIds(draw, userId, (participantId) => {
       const { projectData: otherProjectData } = getUserProfileBundle(
@@ -270,11 +253,6 @@ function buildFraudDetailText(detail, formatUserLabel) {
     return linkedText
       ? `Бот по IP в ${drawPart}: ${linkedText}`
       : `Бот по IP в ${drawPart}`;
-  }
-  if (detail.kind === "device") {
-    return linkedText
-      ? `Бот по девайсу в ${drawPart}: ${linkedText}`
-      : `Бот по девайсу в ${drawPart}`;
   }
   if (detail.kind === "wallet") {
     const walletPart = detail.wallet ? ` (${detail.wallet})` : "";

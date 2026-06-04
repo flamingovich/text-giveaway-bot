@@ -240,6 +240,51 @@ function migrateLegacyOwnership() {
   }
 }
 
+function migrateClearDeviceFraud() {
+  const userProfiles = readUserProjectProfiles();
+  const data = readData();
+  let changed = false;
+
+  for (const draw of data.draws || []) {
+    if (draw.participantMeta) {
+      for (const meta of Object.values(draw.participantMeta)) {
+        if (meta?.deviceHash) {
+          delete meta.deviceHash;
+          changed = true;
+        }
+      }
+    }
+
+    if (!draw.winnerNotifications) {
+      continue;
+    }
+
+    for (const [userIdRaw, notify] of Object.entries(draw.winnerNotifications)) {
+      const userId = Number(userIdRaw);
+      if (!Number.isInteger(userId) || !notify) {
+        continue;
+      }
+
+      const antiFraud = getWinnerAntiFraud(draw, userId, userProfiles, null, notify);
+      if (!notify.antiFraudFlag || antiFraud.hasFraudFlag) {
+        continue;
+      }
+
+      notify.antiFraudFlag = false;
+      if (notify.status === "forfeited") {
+        notify.status = "pending";
+        delete notify.captchaAnswer;
+      }
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    writeData(data);
+    console.log("Сняты антифрод-блокировки по fingerprint устройства.");
+  }
+}
+
 function getProjectById(projectId, ownerId = null) {
   if (!projectId) {
     return null;
@@ -648,16 +693,12 @@ function getDrawParticipantMeta(draw, userId) {
 
 function collectDrawParticipantSignals(draw, userProfiles) {
   const byIp = new Map();
-  const byDevice = new Map();
   const byWallet = new Map();
 
   for (const participantId of draw.participantIds || []) {
     const participantMeta = getDrawParticipantMeta(draw, participantId);
     if (participantMeta?.ipHash) {
       byIp.set(participantMeta.ipHash, (byIp.get(participantMeta.ipHash) || 0) + 1);
-    }
-    if (participantMeta?.deviceHash) {
-      byDevice.set(participantMeta.deviceHash, (byDevice.get(participantMeta.deviceHash) || 0) + 1);
     }
 
     const { projectData } = getUserProfileBundle(userProfiles, participantId, draw.projectId);
@@ -667,7 +708,7 @@ function collectDrawParticipantSignals(draw, userProfiles) {
     }
   }
 
-  return { byIp, byDevice, byWallet };
+  return { byIp, byWallet };
 }
 
 function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = null, notifyInfo = null) {
@@ -677,9 +718,6 @@ function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = n
 
   if (participantMeta?.ipHash && (signals.byIp.get(participantMeta.ipHash) || 0) > 1) {
     labels.push("Бот по IP");
-  }
-  if (participantMeta?.deviceHash && (signals.byDevice.get(participantMeta.deviceHash) || 0) > 1) {
-    labels.push("Бот по девайсу");
   }
 
   const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
@@ -2354,15 +2392,11 @@ function upsertDrawParticipantMeta(draw, userId, participationMeta = {}) {
   const current = draw.participantMeta[userKey] || {};
   const next = { ...current };
   const ipHash = hashFingerprintValue(participationMeta.ipAddress);
-  const deviceHash = hashFingerprintValue(participationMeta.deviceFingerprint);
 
   if (ipHash) {
     next.ipHash = ipHash;
   }
-  if (deviceHash) {
-    next.deviceHash = deviceHash;
-  }
-  if (ipHash || deviceHash) {
+  if (ipHash) {
     next.updatedAt = new Date().toISOString();
   }
 
@@ -7998,6 +8032,7 @@ function printDesignPreviewUrls() {
 async function bootstrap() {
   ensureStorage();
   migrateLegacyOwnership();
+  migrateClearDeviceFraud();
   await ensureBotUsername();
   startRubUsdtRateRefresh();
   await refreshRubUsdtRate(true);
