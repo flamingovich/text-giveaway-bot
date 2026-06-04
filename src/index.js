@@ -1502,7 +1502,9 @@ function getJoinDeepLink(drawId) {
 }
 
 function getFinishedKeyboard(draw) {
-  const text = "🔎 Проверить Результаты";
+  const prizeLabel = formatDrawPrizePlain(draw);
+  const shortPrize = prizeLabel.length > 24 ? `${prizeLabel.slice(0, 24)}...` : prizeLabel;
+  const text = `Розыгрыш на ${shortPrize || "приз"} завершен`;
   const url = getWinnersChannelUrl(draw.id);
   const button = url
     ? { text, url, style: "success" }

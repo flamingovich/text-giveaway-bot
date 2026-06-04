@@ -207,7 +207,7 @@ function buildDrawPostFinishedPayload(data) {
     b.append("не определены");
   }
 
-  b.append("\n❗️ Кто выйграл, отметьтесь ");
+  b.append("\n❗️ Отметьтесь ");
   b.addTextLink("в боте", botUrl, { bold: true });
   b.append("!");
 
