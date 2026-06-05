@@ -35,7 +35,7 @@ const { bot, boot, stop } = createSupportBot({
   alwaysOn: SUPPORT_ALWAYS_ON,
   hoursStart: Number(process.env.SUPPORT_HOURS_START || 9),
   hoursEnd: Number(process.env.SUPPORT_HOURS_END || 21),
-  idleCloseMs: Number(process.env.SUPPORT_IDLE_CLOSE_MS || 10 * 60 * 1000),
+  idleCloseMs: Number(process.env.SUPPORT_IDLE_CLOSE_MS || 20 * 60 * 1000),
   operatorSearchMinMs: Number(process.env.SUPPORT_OPERATOR_SEARCH_MIN_MS || 5_000),
   operatorSearchMaxMs: Number(process.env.SUPPORT_OPERATOR_SEARCH_MAX_MS || 20_000),
   typingStartMinMs: Number(process.env.SUPPORT_TYPING_START_MIN_MS || 2_000),
@@ -52,8 +52,12 @@ const { bot, boot, stop } = createSupportBot({
     return `Ищем свободного оператора${dots}`;
   },
   buildGreeting: (agentName) => `Привет, на связи ${agentName} из поддержки RollerBot, чем помочь?`,
-  buildStopReply: (agentName) =>
-    `Ок, ${agentName || "оператор"} закончил диалог. Если снова понадобится помощь — нажми /start`,
+  buildStopReply: (agentName, meta = {}) => {
+    if (meta.reason === "idle") {
+      return "Оператор закрыл вопрос. Если снова понадобится помощь — нажми /start";
+    }
+    return `Ок, ${agentName || "оператор"} закончил диалог. Если снова понадобится помощь — нажми /start`;
+  },
   buildOffHoursReply: () => {
     const start = Number(process.env.SUPPORT_HOURS_START || 9);
     const end = Number(process.env.SUPPORT_HOURS_END || 21);

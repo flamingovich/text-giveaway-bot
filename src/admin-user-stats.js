@@ -42,27 +42,26 @@ function collectDrawFraudLinks(draw, userId, userProfiles, signals, deps) {
     getDrawParticipantMeta,
     getUserProfileBundle,
     normalizeWalletAddress,
+    evaluateIpFraud,
   } = deps;
   const links = [];
-  const participantMeta = getDrawParticipantMeta(draw, userId);
   const { projectData } = getUserProfileBundle(userProfiles, userId, draw.projectId);
   const wallet = normalizeWalletAddress(projectData?.trc20Address);
   const drawTitle = String(draw.title || draw.id || "—").trim();
 
-  if (participantMeta?.ipHash && (signals.byIp.get(participantMeta.ipHash) || 0) > 1) {
-    const linkedUserIds = findLinkedParticipantIds(draw, userId, (participantId) => {
-      const meta = getDrawParticipantMeta(draw, participantId);
-      return meta?.ipHash === participantMeta.ipHash;
-    });
+  const ipFraud = evaluateIpFraud(draw, userId, userProfiles, signals, {
+    getDrawParticipantMeta,
+    getUserProfileBundle,
+    normalizeWalletAddress,
+  });
+  if (ipFraud.shouldFlag) {
     links.push({
       label: "Бот по IP",
       kind: "ip",
       drawId: draw.id,
       drawTitle,
-      linkedUserIds,
-      reason: linkedUserIds.length
-        ? `Один IP с участниками: ${linkedUserIds.join(", ")}`
-        : "Совпадение IP с другими участниками",
+      linkedUserIds: ipFraud.linkedUserIds || [],
+      reason: ipFraud.reason || "Совпадение IP с другими участниками",
     });
   }
 

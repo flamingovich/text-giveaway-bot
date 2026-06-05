@@ -61,7 +61,7 @@ const { bot, boot, stop } = createSupportBot({
   webPublicUrl: WEB_PUBLIC_URL,
   timezone: TIMEZONE,
   alwaysOn: true,
-  idleCloseMs: Number(process.env.DEPMAN_SUPPORT_IDLE_CLOSE_MS || 10 * 60 * 1000),
+  idleCloseMs: Number(process.env.DEPMAN_SUPPORT_IDLE_CLOSE_MS || 20 * 60 * 1000),
   operatorSearchMinMs: Number(process.env.DEPMAN_OPERATOR_SEARCH_MIN_MS || 4_000),
   operatorSearchMaxMs: Number(process.env.DEPMAN_OPERATOR_SEARCH_MAX_MS || 14_000),
   typingStartMinMs: Number(process.env.DEPMAN_TYPING_START_MIN_MS || 1_500),

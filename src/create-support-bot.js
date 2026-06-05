@@ -305,25 +305,24 @@ function createSupportBot(options) {
     resetChatState(chatId);
   }
 
+  function touchChatActivity(bot, chatId, state) {
+    if (!state || state.sessionClosed) {
+      return;
+    }
+    state.lastActivityAt = new Date().toISOString();
+    saveChats();
+    scheduleIdleClose(bot, chatId);
+  }
+
   async function closeIdleSupportChat(bot, chatId) {
     const chatKey = String(chatId);
     const state = chats.get(chatKey);
-    if (!state || state.hasUserMessage) {
+    if (!state || state.sessionClosed) {
       clearIdleCloseTimer(chatKey);
       return;
     }
 
-    clearChatTimers(chatKey);
-    const text = "Оператор закрыл вопрос";
-    appendTranscript(state, { role: "assistant", content: text, kind: "idle_close" });
-    state.closedAt = new Date().toISOString();
-    saveChats();
-
-    try {
-      await bot.telegram.sendMessage(chatId, text);
-    } catch {
-      // ignore
-    }
+    await endSupportChat(bot, chatId, state, state.user || {}, "idle");
   }
 
   function scheduleIdleClose(bot, chatId) {
@@ -396,6 +395,7 @@ function createSupportBot(options) {
       saveChats();
 
       await bot.telegram.sendMessage(chatId, reply);
+      touchChatActivity(bot, chatId, mergeChatStateFromDisk(chatId));
     } catch (err) {
       error(`OpenRouter error (model=${openRouterModel}):`, err.message);
       stopTypingAction(String(chatId));
@@ -404,6 +404,7 @@ function createSupportBot(options) {
       appendTranscript(state, { role: "assistant", content: errorReply, kind: "error" });
       saveChats();
       await bot.telegram.sendMessage(chatId, errorReply);
+      touchChatActivity(bot, chatId, mergeChatStateFromDisk(chatId));
     }
   }
 
@@ -493,7 +494,7 @@ function createSupportBot(options) {
     appendTranscript(state, { role: "assistant", content: greeting, kind: "greeting" });
     saveChats();
     await ctx.reply(greeting);
-    scheduleIdleClose(bot, ctx.chat.id);
+    touchChatActivity(bot, ctx.chat.id, state);
   });
 
   bot.command("stop", async (ctx) => {
@@ -540,6 +541,7 @@ function createSupportBot(options) {
       appendTranscript(state, { role: "assistant", content: decision.message, kind: decision.kind || "policy" });
       saveChats();
       await ctx.reply(decision.message);
+      touchChatActivity(bot, chatId, state);
       return;
     }
 
@@ -563,7 +565,7 @@ function createSupportBot(options) {
     }
 
     state.hasUserMessage = true;
-    clearIdleCloseTimer(chatKey);
+    touchChatActivity(bot, chatId, state);
 
     if (!state.pendingTexts) state.pendingTexts = [];
     state.pendingTexts.push(text);
@@ -585,7 +587,7 @@ function createSupportBot(options) {
     }
 
     state.hasUserMessage = true;
-    clearIdleCloseTimer(String(chatId));
+    touchChatActivity(bot, chatId, state);
     clearPendingReplyTimer(String(chatId));
     clearTypingStartTimer(String(chatId));
     stopTypingAction(String(chatId));
@@ -613,6 +615,7 @@ function createSupportBot(options) {
     appendTranscript(state, { role: "assistant", content: mediaReply, kind: "media" });
     saveChats();
     await ctx.reply(mediaReply);
+    touchChatActivity(bot, chatId, state);
   });
 
   bot.catch((err) => {

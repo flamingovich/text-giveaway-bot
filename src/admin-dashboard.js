@@ -139,12 +139,33 @@ function labelForUser(userId, userProfiles, entry = {}) {
   return `ID ${userId}`;
 }
 
+function countReferralsForOwner(ownerId, projectsData, profiles) {
+  const ownerKey = ownerId ? String(ownerId) : "";
+  const projectIds = new Set(
+    (projectsData.projects || [])
+      .filter((project) => !ownerKey || String(project.ownerId || "") === ownerKey)
+      .map((project) => project.id),
+  );
+  if (!projectIds.size) {
+    return 0;
+  }
+
+  const refs = new Set();
+  for (const [userKey, userNode] of Object.entries(profiles.users || {})) {
+    for (const [projectId, projectData] of Object.entries(userNode.projects || {})) {
+      if (projectIds.has(projectId) && projectData?.referralVerified) {
+        refs.add(userKey);
+      }
+    }
+  }
+  return refs.size;
+}
+
 function buildStats(deps, ownerFilter = "") {
-  const { readData, readUserProjectProfiles, readProjects, readKnownChannels, timezone } = deps;
+  const { readData, readUserProjectProfiles, readProjects, timezone } = deps;
   const data = readData();
   const profiles = readUserProjectProfiles();
   const projects = readProjects();
-  const channels = readKnownChannels();
 
   let draws = data.draws || [];
   if (ownerFilter) {
@@ -152,7 +173,6 @@ function buildStats(deps, ownerFilter = "") {
   }
 
   const statusCounts = { draft: 0, scheduled: 0, active: 0, finished: 0 };
-  let totalParticipants = 0;
   let totalWinners = 0;
   const participantSet = new Set();
 
@@ -160,7 +180,6 @@ function buildStats(deps, ownerFilter = "") {
     statusCounts[draw.status] = (statusCounts[draw.status] || 0) + 1;
     for (const id of draw.participantIds || []) {
       participantSet.add(String(id));
-      totalParticipants += 1;
     }
     totalWinners += (draw.winnerIds || []).length;
   }
@@ -174,7 +193,7 @@ function buildStats(deps, ownerFilter = "") {
   const dayMap = new Map();
   for (let i = 13; i >= 0; i -= 1) {
     const day = DateTime.now().setZone(timezone).minus({ days: i }).toFormat("yyyy-MM-dd");
-    dayMap.set(day, { draws: 0, participants: 0 });
+    dayMap.set(day, { draws: 0, participants: 0, uniqueJoins: new Set() });
   }
 
   for (const draw of draws) {
@@ -190,11 +209,22 @@ function buildStats(deps, ownerFilter = "") {
     if (dayMap.has(publish)) {
       dayMap.get(publish).participants += (draw.participantIds || []).length;
     }
+    for (const participantId of draw.participantIds || []) {
+      const joinedAt = draw.participantMeta?.[String(participantId)]?.updatedAt;
+      if (!joinedAt) {
+        continue;
+      }
+      const joinDay = DateTime.fromISO(joinedAt, { zone: timezone }).toFormat("yyyy-MM-dd");
+      if (dayMap.has(joinDay)) {
+        dayMap.get(joinDay).uniqueJoins.add(String(participantId));
+      }
+    }
   }
 
   const chartLabels = [...dayMap.keys()];
   const chartDraws = chartLabels.map((k) => dayMap.get(k).draws);
   const chartParticipants = chartLabels.map((k) => dayMap.get(k).participants);
+  const chartUniqueJoins = chartLabels.map((k) => dayMap.get(k).uniqueJoins.size);
 
   const recentDraws = [...draws]
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
@@ -212,10 +242,16 @@ function buildStats(deps, ownerFilter = "") {
   const topOrganizers = new Map();
   for (const draw of data.draws || []) {
     const key = String(draw.ownerId || "unknown");
-    const row = topOrganizers.get(key) || { draws: 0, participants: 0 };
+    const row = topOrganizers.get(key) || { draws: 0, referrals: 0 };
     row.draws += 1;
-    row.participants += (draw.participantIds || []).length;
     topOrganizers.set(key, row);
+  }
+  for (const [ownerId, row] of topOrganizers.entries()) {
+    if (ownerId === "unknown") {
+      row.referrals = 0;
+      continue;
+    }
+    row.referrals = countReferralsForOwner(ownerId, projects, profiles);
   }
 
   const organizerRows = [...topOrganizers.entries()]
@@ -228,10 +264,8 @@ function buildStats(deps, ownerFilter = "") {
       users: allUsers.length,
       usersWithWallet: withTrc,
       draws: draws.length,
-      projects: (projects.projects || []).length,
-      channels: (channels.channels || []).length,
       uniqueParticipants: participantSet.size,
-      participantEntries: totalParticipants,
+      referrals: countReferralsForOwner(ownerFilter, projects, profiles),
       winners: totalWinners,
       active: statusCounts.active || 0,
       finished: statusCounts.finished || 0,
@@ -240,6 +274,7 @@ function buildStats(deps, ownerFilter = "") {
     chartLabels,
     chartDraws,
     chartParticipants,
+    chartUniqueJoins,
     recentDraws,
     organizerRows,
   };
@@ -639,17 +674,6 @@ function renderLoginPage(error = "") {
 </html>`;
 }
 
-function renderBarChart(labels, values, color) {
-  const max = Math.max(1, ...values);
-  const bars = values
-    .map((v, i) => {
-      const h = Math.round((v / max) * 100);
-      return `<div class="bar-wrap" title="${escapeHtml(labels[i])}: ${v}"><div class="bar" style="height:${h}%;background:${color}"></div><span>${escapeHtml(labels[i].slice(5))}</span></div>`;
-    })
-    .join("");
-  return `<div class="chart">${bars}</div>`;
-}
-
 function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfiles) {
   const ownerOptions = organizers
     .map(
@@ -678,11 +702,19 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
       return `<tr>
         <td>${escapeHtml(label)}</td>
         <td>${row.draws}</td>
-        <td>${row.participants}</td>
+        <td>${row.referrals}</td>
         <td><a href="/admin/dashboard?ownerId=${encodeURIComponent(row.id)}">Фильтр</a></td>
       </tr>`;
     })
     .join("");
+
+  const chartPayload = JSON.stringify({
+    labels: stats.chartLabels.map((label) => label.slice(5)),
+    draws: stats.chartDraws,
+    participants: stats.chartParticipants,
+    uniqueJoins: stats.chartUniqueJoins,
+    status: stats.statusCounts,
+  });
 
   return `<!doctype html>
 <html lang="ru">
@@ -695,11 +727,13 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; }
     .tag-active { background: #14532d; color: #bbf7d0; }
     .tag-finished { background: #1e3a5f; color: #bfdbfe; }
-    .chart { display: flex; align-items: flex-end; gap: 6px; height: 140px; padding-top: 8px; }
-    .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; min-width: 0; }
-    .bar { width: 100%; max-width: 28px; border-radius: 6px 6px 0 0; min-height: 4px; }
-    .bar-wrap span { font-size: 10px; color: #64748b; margin-top: 4px; }
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .chart-card { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 12px; }
+    .chart-card h3 { margin: 0 0 10px; font-size: 13px; color: #94a3b8; font-weight: 600; }
+    .chart-box { position: relative; height: 280px; }
+    .chart-box.chart-box-sm { height: 240px; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   ${renderAdminTop("RollerBot Admin", "stats")}
@@ -711,8 +745,7 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
       <div class="stat"><span>Активных</span><b>${stats.totals.active}</b></div>
       <div class="stat"><span>Завершённых</span><b>${stats.totals.finished}</b></div>
       <div class="stat"><span>Участников (уник.)</span><b>${stats.totals.uniqueParticipants}</b></div>
-      <div class="stat"><span>Записей участия</span><b>${stats.totals.participantEntries}</b></div>
-      <div class="stat"><span>Проектов / каналов</span><b>${stats.totals.projects} / ${stats.totals.channels}</b></div>
+      <div class="stat"><span>Рефералов${selectedOwner ? "" : " (все)"}</span><b>${stats.totals.referrals}</b></div>
     </div>
 
     <section class="panel">
@@ -731,19 +764,27 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     </section>
 
     <section class="panel">
-      <h2>Розыгрыши за 14 дней</h2>
-      ${renderBarChart(stats.chartLabels, stats.chartDraws, "#3b82f6")}
-    </section>
-
-    <section class="panel">
-      <h2>Участники по дням (сумма по розыгрышам)</h2>
-      ${renderBarChart(stats.chartLabels, stats.chartParticipants, "#22c55e")}
+      <h2>Графики (14 дней)</h2>
+      <div class="charts-grid">
+        <div class="chart-card" style="grid-column: 1 / -1;">
+          <h3>Розыгрыши и участники</h3>
+          <div class="chart-box"><canvas id="chartActivity"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <h3>Новые участники по дням</h3>
+          <div class="chart-box chart-box-sm"><canvas id="chartJoins"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <h3>Статусы розыгрышей</h3>
+          <div class="chart-box chart-box-sm"><canvas id="chartStatus"></canvas></div>
+        </div>
+      </div>
     </section>
 
     <section class="panel">
       <h2>Организаторы</h2>
       <table>
-        <thead><tr><th>Организатор</th><th>Розыгрышей</th><th>Участников</th><th></th></tr></thead>
+        <thead><tr><th>Организатор</th><th>Розыгрышей</th><th>Рефералов</th><th></th></tr></thead>
         <tbody>${orgRows || "<tr><td colspan='4'>Нет данных</td></tr>"}</tbody>
       </table>
     </section>
@@ -756,6 +797,134 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
       </table>
     </section>
   </main>
+  <script>
+    (function () {
+      const payload = ${chartPayload};
+      const axisColor = "#94a3b8";
+      const gridColor = "rgba(148, 163, 184, 0.15)";
+      const commonOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { labels: { color: axisColor } },
+          tooltip: {
+            backgroundColor: "#1e293b",
+            borderColor: "#475569",
+            borderWidth: 1,
+            titleColor: "#f8fafc",
+            bodyColor: "#e2e8f0",
+          },
+        },
+      };
+
+      const activityCtx = document.getElementById("chartActivity");
+      if (activityCtx) {
+        new Chart(activityCtx, {
+          type: "line",
+          data: {
+            labels: payload.labels,
+            datasets: [
+              {
+                label: "Новых розыгрышей",
+                data: payload.draws,
+                borderColor: "#60a5fa",
+                backgroundColor: "rgba(96, 165, 250, 0.18)",
+                fill: true,
+                tension: 0.3,
+                yAxisID: "y",
+              },
+              {
+                label: "Записей участия",
+                data: payload.participants,
+                borderColor: "#4ade80",
+                backgroundColor: "rgba(74, 222, 128, 0.12)",
+                fill: true,
+                tension: 0.3,
+                yAxisID: "y1",
+              },
+            ],
+          },
+          options: {
+            ...commonOptions,
+            scales: {
+              x: { ticks: { color: axisColor }, grid: { color: gridColor } },
+              y: {
+                position: "left",
+                ticks: { color: axisColor, precision: 0 },
+                grid: { color: gridColor },
+                title: { display: true, text: "Розыгрыши", color: axisColor },
+              },
+              y1: {
+                position: "right",
+                ticks: { color: axisColor, precision: 0 },
+                grid: { drawOnChartArea: false },
+                title: { display: true, text: "Участия", color: axisColor },
+              },
+            },
+          },
+        });
+      }
+
+      const joinsCtx = document.getElementById("chartJoins");
+      if (joinsCtx) {
+        new Chart(joinsCtx, {
+          type: "bar",
+          data: {
+            labels: payload.labels,
+            datasets: [
+              {
+                label: "Уникальных вступлений",
+                data: payload.uniqueJoins,
+                backgroundColor: "rgba(250, 204, 21, 0.75)",
+                borderColor: "#eab308",
+                borderWidth: 1,
+                borderRadius: 6,
+              },
+            ],
+          },
+          options: {
+            ...commonOptions,
+            scales: {
+              x: { ticks: { color: axisColor }, grid: { color: gridColor } },
+              y: { ticks: { color: axisColor, precision: 0 }, grid: { color: gridColor } },
+            },
+          },
+        });
+      }
+
+      const statusCtx = document.getElementById("chartStatus");
+      if (statusCtx) {
+        const status = payload.status || {};
+        new Chart(statusCtx, {
+          type: "doughnut",
+          data: {
+            labels: ["Активные", "Завершённые", "Запланированные", "Черновики"],
+            datasets: [
+              {
+                data: [
+                  status.active || 0,
+                  status.finished || 0,
+                  status.scheduled || 0,
+                  status.draft || 0,
+                ],
+                backgroundColor: ["#22c55e", "#3b82f6", "#f59e0b", "#64748b"],
+                borderColor: "#0f172a",
+                borderWidth: 2,
+              },
+            ],
+          },
+          options: {
+            ...commonOptions,
+            plugins: {
+              ...commonOptions.plugins,
+              legend: { position: "bottom", labels: { color: axisColor } },
+            },
+          },
+        });
+      }
+    })();
+  </script>
 </body>
 </html>`;
 }

@@ -37,6 +37,7 @@ const {
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
 } = require("./draw-post-emojis");
+const { evaluateIpFraud } = require("./draw-anti-fraud");
 const {
   DATA_DIR,
   UPLOADS_DIR,
@@ -717,7 +718,12 @@ function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = n
   const participantMeta = getDrawParticipantMeta(draw, winnerId);
   const signals = precomputedSignals || collectDrawParticipantSignals(draw, userProfiles);
 
-  if (participantMeta?.ipHash && (signals.byIp.get(participantMeta.ipHash) || 0) > 1) {
+  const ipFraud = evaluateIpFraud(draw, winnerId, userProfiles, signals, {
+    getDrawParticipantMeta,
+    getUserProfileBundle,
+    normalizeWalletAddress,
+  });
+  if (ipFraud.shouldFlag) {
     labels.push("Бот по IP");
   }
 
@@ -7658,6 +7664,7 @@ registerAdminDashboard(app, {
   getWinnerPayoutAmount,
   isMoneyPrizeType,
   normalizeWalletAddress,
+  evaluateIpFraud,
   formatRubAmount,
   formatUsdAmount,
 });
