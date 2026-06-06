@@ -909,7 +909,7 @@ function getDrawPanelStatusInfo(draw, userProfiles) {
   };
 }
 
-function computeDrawStats(draws) {
+function computeDrawStats(draws, userProfiles) {
   const now = DateTime.now().setZone(TIMEZONE);
   const monthName = now.setLocale("ru").toFormat("LLLL");
   const monthLabel = monthName.charAt(0).toUpperCase() + monthName.slice(1);
@@ -3505,7 +3505,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
 }
 
 function renderPanelLiveHtml(draws, projects, userProfiles) {
-  const drawsStats = computeDrawStats(draws);
+  const drawsStats = computeDrawStats(draws, userProfiles);
   const drawBlocks = renderDrawHistoryBlocks(draws, projects, userProfiles);
   return `
       <section class="card history-section">
