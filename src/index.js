@@ -1330,11 +1330,28 @@ function buildDrawReminderReplyHtml(draw) {
 }
 
 async function sendDrawReminderReply(draw) {
-  await bot.telegram.sendMessage(draw.channelId, buildDrawReminderReplyHtml(draw), {
+  const message = await bot.telegram.sendMessage(draw.channelId, buildDrawReminderReplyHtml(draw), {
     parse_mode: "HTML",
     reply_to_message_id: draw.messageId,
     link_preview_options: { is_disabled: true },
   });
+  if (!Array.isArray(draw.reminderMessageIds)) {
+    draw.reminderMessageIds = [];
+  }
+  if (message?.message_id) {
+    draw.reminderMessageIds.push(message.message_id);
+  }
+  return message;
+}
+
+async function deleteDrawReminderMessages(draw) {
+  if (WEB_ONLY || !draw?.channelId || !Array.isArray(draw.reminderMessageIds)) {
+    return;
+  }
+  for (const messageId of draw.reminderMessageIds) {
+    await safeDeleteMessage(draw.channelId, messageId);
+  }
+  draw.reminderMessageIds = [];
 }
 
 function buildDrawParticipateConditionLine(_draw) {
@@ -2050,6 +2067,7 @@ function pickWinners(draw) {
 }
 
 async function finishDraw(draw) {
+  await deleteDrawReminderMessages(draw);
   draw.winnerIds = pickWinners(draw);
   draw.winnerNotifications = {};
   draw.status = DRAW_STATUS.FINISHED;
@@ -7776,6 +7794,7 @@ panelRouter.post("/draws/:id/remind", webAuth.requireAuth, requireOrganizer, asy
 
   try {
     await sendDrawReminderReply(draw);
+    writeData(data);
     redirectWithMessage(res, "Напоминание отправлено в канал.");
   } catch (error) {
     console.error("Ошибка отправки напоминания:", error);
@@ -7823,7 +7842,10 @@ panelRouter.post("/draws/:id/delete", webAuth.requireAuth, requireOrganizer, asy
   }
 
   if (draw.messageId && draw.channelId) {
+    await deleteDrawReminderMessages(draw);
     await safeDeleteMessage(draw.channelId, draw.messageId);
+  } else {
+    await deleteDrawReminderMessages(draw);
   }
 
   if (draw.imagePath && fs.existsSync(draw.imagePath)) {
