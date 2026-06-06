@@ -1302,9 +1302,9 @@ function formatTimeUntilDrawEnd(draw) {
   const totalMinutes = Math.max(1, Math.ceil(endAt.diff(now, "minutes").minutes));
   if (totalMinutes >= 60) {
     const hours = Math.max(1, Math.floor(totalMinutes / 60));
-    return formatDurationRu(hours, "hours");
+    return formatDurationRu(hours, "hours").toUpperCase();
   }
-  return formatDurationRu(totalMinutes, "minutes");
+  return formatDurationRu(totalMinutes, "minutes").toUpperCase();
 }
 
 function canSendDrawReminder(draw) {
@@ -1323,7 +1323,7 @@ function buildDrawReminderReplyHtml(draw) {
     ? `<a href="${escapeHtml(postLink)}">УЧАСТВОВАТЬ</a>`
     : "УЧАСТВОВАТЬ";
   return [
-    `<b>⏰ ИТОГИ НА ${escapeHtml(prize)} ЧЕРЕЗ ${escapeHtml(timeLeft)}</b>`,
+    `<b>❗️ ИТОГИ НА ${escapeHtml(prize)} ЧЕРЕЗ ${escapeHtml(timeLeft)}</b>`,
     "",
     `<b>👉 ${participateHtml}</b>`,
   ].join("\n");
