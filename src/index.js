@@ -1287,6 +1287,56 @@ function getDrawDurationLabel(draw) {
   return "по команде администратора";
 }
 
+function formatTimeUntilDrawEnd(draw) {
+  if (!draw?.endAt) {
+    return null;
+  }
+  const endAt = DateTime.fromISO(draw.endAt, { zone: TIMEZONE });
+  if (!endAt.isValid) {
+    return null;
+  }
+  const now = DateTime.now().setZone(TIMEZONE);
+  if (endAt <= now) {
+    return null;
+  }
+  const totalMinutes = Math.max(1, Math.ceil(endAt.diff(now, "minutes").minutes));
+  if (totalMinutes >= 60) {
+    const hours = Math.max(1, Math.floor(totalMinutes / 60));
+    return formatDurationRu(hours, "hours");
+  }
+  return formatDurationRu(totalMinutes, "minutes");
+}
+
+function canSendDrawReminder(draw) {
+  return (
+    draw.status === DRAW_STATUS.ACTIVE &&
+    Boolean(draw.messageId && draw.channelId) &&
+    Boolean(formatTimeUntilDrawEnd(draw))
+  );
+}
+
+function buildDrawReminderReplyHtml(draw) {
+  const prize = formatDrawPrizePlain(draw);
+  const timeLeft = formatTimeUntilDrawEnd(draw);
+  const postLink = buildDrawPostLink(draw);
+  const participateHtml = postLink
+    ? `<a href="${escapeHtml(postLink)}">УЧАСТВОВАТЬ</a>`
+    : "УЧАСТВОВАТЬ";
+  return [
+    `<b>⏰ ИТОГИ НА ${escapeHtml(prize)} ЧЕРЕЗ ${escapeHtml(timeLeft)}</b>`,
+    "",
+    `<b>👉 ${participateHtml}</b>`,
+  ].join("\n");
+}
+
+async function sendDrawReminderReply(draw) {
+  await bot.telegram.sendMessage(draw.channelId, buildDrawReminderReplyHtml(draw), {
+    parse_mode: "HTML",
+    reply_to_message_id: draw.messageId,
+    link_preview_options: { is_disabled: true },
+  });
+}
+
 function buildDrawParticipateConditionLine(_draw) {
   // Без <a href> в тексте — иначе тап по слову «Участвовать» открывает сайт, а не mini-app.
   return "• Нажать кнопку <b>Участвовать</b> под постом";
@@ -3445,6 +3495,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
       const panelStatus = getDrawPanelStatusInfo(draw, userProfiles);
       const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED;
       const canFinishNow = draw.status === DRAW_STATUS.ACTIVE;
+      const canRemindNow = canSendDrawReminder(draw);
       const winnerNotifications = draw.winnerNotifications || {};
       const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
       const coverPreview = renderHistoryCoverSide(draw.imagePath);
@@ -3547,6 +3598,11 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
             ${
               canPublishNow
                 ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/publish-now"><button type="submit" class="history-action-btn">Опубликовать сейчас</button></form>`
+                : ""
+            }
+            ${
+              canRemindNow
+                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/remind"><button type="submit" class="history-action-btn">Напомнить</button></form>`
                 : ""
             }
             ${
@@ -7701,6 +7757,29 @@ panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer
   } catch (error) {
     console.error("Ошибка публикации через веб:", error);
     redirectWithMessage(res, `Не удалось опубликовать: ${error.message}`);
+  }
+});
+
+panelRouter.post("/draws/:id/remind", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+  const data = readData();
+  const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
+
+  if (!draw) {
+    redirectWithMessage(res, "Розыгрыш не найден.");
+    return;
+  }
+
+  if (!canSendDrawReminder(draw)) {
+    redirectWithMessage(res, "Напоминание доступно только для активного розыгрыша с постом в канале.");
+    return;
+  }
+
+  try {
+    await sendDrawReminderReply(draw);
+    redirectWithMessage(res, "Напоминание отправлено в канал.");
+  } catch (error) {
+    console.error("Ошибка отправки напоминания:", error);
+    redirectWithMessage(res, `Не удалось отправить напоминание: ${error.message}`);
   }
 });
 
