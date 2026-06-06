@@ -651,6 +651,37 @@ function isMoneyPrizeType(prizeType) {
   return prizeType === "money_rub" || prizeType === "money_usd";
 }
 
+function getDrawParticipantCount(draw) {
+  return (draw.participantIds || []).length;
+}
+
+function markDrawPostParticipantCount(draw, count = getDrawParticipantCount(draw)) {
+  draw.postParticipantCount = count;
+}
+
+function isActiveDrawPostCountStale(draw) {
+  if (draw.status !== DRAW_STATUS.ACTIVE || !draw.messageId) {
+    return false;
+  }
+  const current = getDrawParticipantCount(draw);
+  if (!Number.isFinite(draw.postParticipantCount)) {
+    return true;
+  }
+  return draw.postParticipantCount !== current;
+}
+
+function parseParticipantCountFromMarkup(replyMarkup) {
+  for (const row of replyMarkup?.inline_keyboard || []) {
+    for (const btn of row) {
+      const match = String(btn.text || "").match(/Участвовать\s*\((\d+)\)/i);
+      if (match) {
+        return Number(match[1]);
+      }
+    }
+  }
+  return null;
+}
+
 function getDrawPrizeAmount(draw) {
   if (draw.prizeType === "money_usd") {
     const total = Number.isFinite(draw.prizeAmountUsd)
@@ -812,14 +843,81 @@ function getWinnerPayoutAmount(draw, projectData, options = {}) {
   return perWinner;
 }
 
-function computeDrawStats(draws, userProfiles) {
+function getDrawPrizePoolUsdt(draw) {
+  if (!isMoneyPrizeType(draw.prizeType)) {
+    return 0;
+  }
+  const total = getDrawPrizeAmount(draw);
+  if (!Number.isFinite(total) || total <= 0) {
+    return 0;
+  }
+  if (draw.prizeType === "money_usd") {
+    return total;
+  }
+  return convertRubToUsdt(total);
+}
+
+function winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals) {
+  const notifyInfo = draw.winnerNotifications?.[String(winnerId)];
+  const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
+  if (antiFraud.hasFraudFlag) {
+    return false;
+  }
+  if (isWinnerNotificationExpired(notifyInfo)) {
+    return false;
+  }
+  if (notifyInfo?.paidAt) {
+    return false;
+  }
+  return true;
+}
+
+function isDrawPayoutComplete(draw, userProfiles) {
+  if (draw.status !== DRAW_STATUS.FINISHED) {
+    return false;
+  }
+  const winnerIds = draw.winnerIds || [];
+  if (winnerIds.length === 0) {
+    return true;
+  }
+  const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
+  return !winnerIds.some((winnerId) =>
+    winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals),
+  );
+}
+
+function getDrawPanelStatusInfo(draw, userProfiles) {
+  if (draw.awaitingChannelPost && !draw.messageId) {
+    return { label: "Ждёт пост в канале", cssClass: "scheduled" };
+  }
+  if (isDrawPayoutComplete(draw, userProfiles)) {
+    return { label: "Выплачен", cssClass: "paid" };
+  }
+  const labels = {
+    draft: "Черновик",
+    scheduled: "Запланирован",
+    active: "Активен",
+    finished: "Завершен",
+  };
+  return {
+    label: labels[draw.status] || draw.status,
+    cssClass: draw.status,
+  };
+}
+
+function computeDrawStats(draws) {
   const now = DateTime.now().setZone(TIMEZONE);
   const monthName = now.setLocale("ru").toFormat("LLLL");
   const monthLabel = monthName.charAt(0).toUpperCase() + monthName.slice(1);
   let paidThisMonthUsdt = 0;
   let paidAllTimeUsdt = 0;
+  let totalRaffledUsdt = 0;
 
   for (const draw of draws) {
+    if (draw.status !== DRAW_STATUS.DRAFT) {
+      totalRaffledUsdt += getDrawPrizePoolUsdt(draw);
+    }
+
     for (const winnerId of draw.winnerIds || []) {
       const notifyInfo = draw.winnerNotifications?.[String(winnerId)];
       if (!notifyInfo?.paidAt || !isMoneyPrizeType(draw.prizeType)) {
@@ -842,7 +940,7 @@ function computeDrawStats(draws, userProfiles) {
 
   return {
     total: draws.length,
-    active: draws.filter((draw) => draw.status === DRAW_STATUS.ACTIVE).length,
+    totalRaffledUsdt: formatUsdtStatDisplay(totalRaffledUsdt),
     monthLabel,
     paidThisMonth: formatPaidStatDisplay(paidThisMonthUsdt),
     paidAllTime: formatPaidStatDisplay(paidAllTimeUsdt),
@@ -1543,6 +1641,7 @@ async function publishDrawToChannel(draw) {
     draw.messageId = message.message_id;
   }
 
+  markDrawPostParticipantCount(draw);
   draw.awaitingChannelPost = false;
 }
 
@@ -1664,6 +1763,11 @@ async function linkDrawChannelPost(draw, post) {
   draw.messageId = post.message_id;
   draw.messageType = post.photo ? "photo" : "text";
   draw.awaitingChannelPost = false;
+  const postedCount = parseParticipantCountFromMarkup(post.reply_markup);
+  markDrawPostParticipantCount(
+    draw,
+    Number.isFinite(postedCount) ? postedCount : getDrawParticipantCount(draw),
+  );
   return true;
 }
 
@@ -1764,6 +1868,7 @@ async function updateDrawPost(draw, includeWinners) {
         captionOpts.caption,
         captionOpts,
       );
+      markDrawPostParticipantCount(draw);
       return;
     }
 
@@ -1775,6 +1880,7 @@ async function updateDrawPost(draw, includeWinners) {
       buildDrawMessage(draw, { includeWinners }),
       textOpts,
     );
+    markDrawPostParticipantCount(draw);
   } catch (error) {
     if (isIgnorableTelegramEditError(error)) {
       return;
@@ -1805,6 +1911,8 @@ function scheduleDrawPostUpdate(drawId, includeWinners = false) {
     const winners = flushIncludeWinners || draw.status === DRAW_STATUS.FINISHED;
     try {
       await updateDrawPost(draw, winners);
+      markDrawPostParticipantCount(draw);
+      writeData(data);
     } catch (error) {
       if (!isIgnorableTelegramEditError(error)) {
         console.error(`Не удалось обновить пост ${drawId}:`, error.message);
@@ -2056,12 +2164,42 @@ async function processWinnerConfirmTimeouts(data) {
 }
 
 async function refreshDrawPostKeyboard(draw) {
+  const count = getDrawParticipantCount(draw);
   const markup =
     draw.status === DRAW_STATUS.FINISHED
       ? getFinishedKeyboard(draw).reply_markup
-      : getKeyboardMarkup(draw.id, draw.participantIds.length);
+      : getKeyboardMarkup(draw.id, count);
 
   await bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup);
+  markDrawPostParticipantCount(draw, count);
+}
+
+async function syncStaleActiveDrawPostCounts(data) {
+  if (WEB_ONLY) {
+    return false;
+  }
+
+  let updated = 0;
+  for (const draw of data.draws) {
+    if (!isActiveDrawPostCountStale(draw)) {
+      continue;
+    }
+    try {
+      await refreshDrawPostKeyboard(draw);
+      updated += 1;
+      await sleep(300);
+    } catch (error) {
+      if (!isIgnorableTelegramEditError(error)) {
+        console.warn(`[draw-sync] счётчик участников ${draw.id}: ${error.message}`);
+      }
+    }
+  }
+
+  if (updated > 0) {
+    console.log(`[draw-sync] обновлены кнопки «Участвовать»: ${updated}`);
+    return true;
+  }
+  return false;
 }
 
 async function forceRefreshDrawPost(draw) {
@@ -2104,6 +2242,10 @@ async function syncActiveDrawKeyboards() {
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  if (updated > 0) {
+    writeData(data);
   }
 
   console.log(`[sync] клавиатуры постов: обновлено ${updated}, ошибок ${failed}`);
@@ -2670,6 +2812,11 @@ async function schedulerTick() {
     hasChanges = true;
   }
 
+  const postCountChanges = await syncStaleActiveDrawPostCounts(data);
+  if (postCountChanges) {
+    hasChanges = true;
+  }
+
   if (hasChanges) {
     writeData(data);
   }
@@ -3218,6 +3365,7 @@ function buildPanelLiveFingerprint(draws, userProfiles) {
     return {
       id: draw.id,
       status: draw.status,
+      payoutComplete: isDrawPayoutComplete(draw, userProfiles),
       participantCount: draw.participantIds?.length || 0,
       winnerIds: draw.winnerIds || [],
       winnerStates,
@@ -3233,14 +3381,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
   return draws
     .map((draw) => {
       const project = projects.find((item) => item.id === draw.projectId);
-      const statusLabel = draw.awaitingChannelPost && !draw.messageId
-        ? "Ждёт пост в канале"
-        : {
-            draft: "Черновик",
-            scheduled: "Запланирован",
-            active: "Активен",
-            finished: "Завершен",
-          }[draw.status] || draw.status;
+      const panelStatus = getDrawPanelStatusInfo(draw, userProfiles);
       const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED;
       const canFinishNow = draw.status === DRAW_STATUS.ACTIVE;
       const winnerNotifications = draw.winnerNotifications || {};
@@ -3264,7 +3405,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
                 </div>
               </div>
               <div class="history-head-actions">
-                <span class="history-status status-${escapeHtml(draw.status)}">${escapeHtml(statusLabel)}</span>
+                <span class="history-status status-${escapeHtml(panelStatus.cssClass)}">${escapeHtml(panelStatus.label)}</span>
                 <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/delete" class="project-delete-form draw-delete-form">
                   <button
                     type="submit"
@@ -3360,7 +3501,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
 }
 
 function renderPanelLiveHtml(draws, projects, userProfiles) {
-  const drawsStats = computeDrawStats(draws, userProfiles);
+  const drawsStats = computeDrawStats(draws);
   const drawBlocks = renderDrawHistoryBlocks(draws, projects, userProfiles);
   return `
       <section class="card history-section">
@@ -3374,8 +3515,8 @@ function renderPanelLiveHtml(draws, projects, userProfiles) {
             <span class="stat-card-value">${drawsStats.total}</span>
           </div>
           <div class="stat-card">
-            <span class="stat-card-label">Активных</span>
-            <span class="stat-card-value">${drawsStats.active}</span>
+            <span class="stat-card-label">Разыграно Всего</span>
+            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.totalRaffledUsdt)}</span>
           </div>
           <div class="stat-card">
             <span class="stat-card-label">За ${escapeHtml(drawsStats.monthLabel)}</span>
@@ -5703,6 +5844,7 @@ ${getPanelFluidTypographyVars()}
     .status-active { background: #eaffef; color: #21754a; border-color: #b7edc9; }
     .status-scheduled { background: #eef3ff; color: #2d56cc; border-color: #d4dfff; }
     .status-finished { background: #f3f4f8; color: #555f76; border-color: #dde1ea; }
+    .status-paid { background: #eaffef; color: #21754a; border-color: #b7edc9; }
     body.app-theme-dark .status-active {
       background: color-mix(in srgb, #3dd68c 18%, transparent);
       color: #7ee2a8;
@@ -5717,6 +5859,11 @@ ${getPanelFluidTypographyVars()}
       background: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 16%, transparent);
       color: #b8c2d8;
       border-color: color-mix(in srgb, var(--tg-theme-hint-color, #93a0b8) 30%, transparent);
+    }
+    body.app-theme-dark .status-paid {
+      background: color-mix(in srgb, #3dd68c 18%, transparent);
+      color: #7ee2a8;
+      border-color: color-mix(in srgb, #3dd68c 34%, transparent);
     }
     body.app-theme-dark .winner-badge {
       color: var(--tg-theme-hint-color, #93a0b8);
