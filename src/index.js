@@ -198,8 +198,12 @@ function itemBelongsToOwner(item, ownerId) {
   return actual === expected;
 }
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 function filterByOwner(items, ownerId) {
-  return (items || []).filter((item) => itemBelongsToOwner(item, ownerId));
+  return asArray(items).filter((item) => itemBelongsToOwner(item, ownerId));
 }
 
 function migrateLegacyOwnership() {
@@ -1615,7 +1619,7 @@ function getFinishedKeyboard(draw) {
 }
 
 async function publishDrawToChannel(draw) {
-  const keyboard = getKeyboard(draw.id, draw.participantIds.length);
+  const keyboard = getKeyboard(draw.id, (draw.participantIds || []).length);
 
   if (draw.imagePath && fs.existsSync(draw.imagePath)) {
     const photoOpts = applyDrawPostContentToTelegramOpts(
@@ -1674,7 +1678,7 @@ async function publishDraw(draw, target) {
 }
 
 async function sendDrawDraftToOrganizer(draw, organizerId) {
-  const keyboard = getKeyboard(draw.id, draw.participantIds.length);
+  const keyboard = getKeyboard(draw.id, (draw.participantIds || []).length);
   const hasImage = Boolean(draw.imagePath && fs.existsSync(draw.imagePath));
 
   if (hasImage) {
@@ -1852,7 +1856,7 @@ function isIgnorableTelegramEditError(error) {
 }
 
 async function updateDrawPost(draw, includeWinners) {
-  const keyboard = includeWinners ? getFinishedKeyboard(draw) : getKeyboard(draw.id, draw.participantIds.length);
+  const keyboard = includeWinners ? getFinishedKeyboard(draw) : getKeyboard(draw.id, (draw.participantIds || []).length);
 
   try {
     if (draw.messageType === "photo") {
@@ -3438,7 +3442,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
                 <span class="history-chip">
                   <span class="draw-ico">${renderFormIcon("winners")}</span>
                   <span class="history-chip-label">Участ.</span>
-                  <span class="history-chip-value">${draw.participantIds.length}</span>
+                  <span class="history-chip-value">${(draw.participantIds || []).length}</span>
                 </span>
                 <span class="history-chip">
                   <span class="draw-ico">${renderFormIcon("trophy")}</span>
@@ -7068,6 +7072,13 @@ async function renderPanelForUserWithRate(res, webUser, message) {
   renderPanelForUser(res, webUser, message);
 }
 
+function sendPanelServerError(res, error, context) {
+  console.error(`[panel] ${context}:`, error);
+  res.status(500).type("html").send(
+    `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ошибка</title></head><body style="font-family:system-ui,sans-serif;padding:24px"><h1>Не удалось открыть панель</h1><p>Попробуйте закрыть и открыть снова через /panel. Если ошибка повторяется — напишите в поддержку.</p></body></html>`,
+  );
+}
+
 function sendPanelAuthPage(res, message) {
   res.status(200).type("html").send(renderLoginPage(BOT_USERNAME, WEB_PUBLIC_URL, PANEL_BASE));
 }
@@ -7102,7 +7113,11 @@ panelRouter.get("/", async (req, res) => {
   }
 
   req.webUser = user;
-  await renderPanelForUserWithRate(res, user, req.query.msg);
+  try {
+    await renderPanelForUserWithRate(res, user, req.query.msg);
+  } catch (error) {
+    sendPanelServerError(res, error, "GET /");
+  }
 });
 
 panelRouter.post("/enter", async (req, res) => {
@@ -7115,19 +7130,28 @@ panelRouter.post("/enter", async (req, res) => {
 
   webAuth.setSessionCookie(res, tgUser.id);
   req.webUser = { id: tgUser.id, user: tgUser };
-  await renderPanelForUserWithRate(res, req.webUser, req.body?.msg || req.query?.msg);
+  try {
+    await renderPanelForUserWithRate(res, req.webUser, req.body?.msg || req.query?.msg);
+  } catch (error) {
+    sendPanelServerError(res, error, "POST /enter");
+  }
 });
 
 panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res) => {
-  await refreshRubUsdtRate();
-  const ownerId = req.webUser.id;
-  const draws = getOwnerDraws(ownerId);
-  const userProfiles = readUserProjectProfiles();
-  const projects = filterByOwner(readProjects().projects || [], ownerId);
-  res.json({
-    version: buildPanelLiveFingerprint(draws, userProfiles),
-    html: renderPanelLiveHtml(draws, projects, userProfiles),
-  });
+  try {
+    await refreshRubUsdtRate();
+    const ownerId = req.webUser.id;
+    const draws = getOwnerDraws(ownerId);
+    const userProfiles = readUserProjectProfiles();
+    const projects = filterByOwner(readProjects().projects || [], ownerId);
+    res.json({
+      version: buildPanelLiveFingerprint(draws, userProfiles),
+      html: renderPanelLiveHtml(draws, projects, userProfiles),
+    });
+  } catch (error) {
+    console.error("[panel] GET /live:", error);
+    res.status(500).json({ error: "panel_render_failed" });
+  }
 });
 
 panelRouter.post("/admin/access", webAuth.requireAuth, requireOrganizer, requireSuperAdmin, async (req, res) => {

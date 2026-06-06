@@ -142,7 +142,7 @@ function labelForUser(userId, userProfiles, entry = {}) {
 function countReferralsForOwner(ownerId, projectsData, profiles) {
   const ownerKey = ownerId ? String(ownerId) : "";
   const projectIds = new Set(
-    (projectsData.projects || [])
+    asArray(projectsData?.projects)
       .filter((project) => !ownerKey || String(project.ownerId || "") === ownerKey)
       .map((project) => project.id),
   );
@@ -161,13 +161,28 @@ function countReferralsForOwner(ownerId, projectsData, profiles) {
   return refs.size;
 }
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function formatStatsDay(isoValue, timezone) {
+  if (!isoValue) {
+    return "";
+  }
+  const dt = DateTime.fromISO(isoValue, { zone: timezone });
+  if (!dt.isValid) {
+    return "";
+  }
+  return dt.toFormat("yyyy-MM-dd");
+}
+
 function buildStats(deps, ownerFilter = "") {
   const { readData, readUserProjectProfiles, readProjects, timezone } = deps;
   const data = readData();
-  const profiles = readUserProjectProfiles();
-  const projects = readProjects();
+  const profiles = readUserProjectProfiles() || { users: {} };
+  const projects = readProjects() || { projects: [] };
 
-  let draws = data.draws || [];
+  let draws = asArray(data.draws);
   if (ownerFilter) {
     draws = draws.filter((draw) => String(draw.ownerId || "") === ownerFilter);
   }
@@ -197,25 +212,18 @@ function buildStats(deps, ownerFilter = "") {
   }
 
   for (const draw of draws) {
-    const created = draw.createdAt
-      ? DateTime.fromISO(draw.createdAt, { zone: timezone }).toFormat("yyyy-MM-dd")
-      : "";
+    const created = formatStatsDay(draw.createdAt, timezone);
     if (dayMap.has(created)) {
       dayMap.get(created).draws += 1;
     }
-    const publish = draw.publishAt
-      ? DateTime.fromISO(draw.publishAt, { zone: timezone }).toFormat("yyyy-MM-dd")
-      : created;
+    const publish = formatStatsDay(draw.publishAt, timezone) || created;
     if (dayMap.has(publish)) {
-      dayMap.get(publish).participants += (draw.participantIds || []).length;
+      dayMap.get(publish).participants += asArray(draw.participantIds).length;
     }
-    for (const participantId of draw.participantIds || []) {
+    for (const participantId of asArray(draw.participantIds)) {
       const joinedAt = draw.participantMeta?.[String(participantId)]?.updatedAt;
-      if (!joinedAt) {
-        continue;
-      }
-      const joinDay = DateTime.fromISO(joinedAt, { zone: timezone }).toFormat("yyyy-MM-dd");
-      if (dayMap.has(joinDay)) {
+      const joinDay = formatStatsDay(joinedAt, timezone);
+      if (joinDay && dayMap.has(joinDay)) {
         dayMap.get(joinDay).uniqueJoins.add(String(participantId));
       }
     }
@@ -240,7 +248,7 @@ function buildStats(deps, ownerFilter = "") {
     }));
 
   const topOrganizers = new Map();
-  for (const draw of data.draws || []) {
+  for (const draw of asArray(data.draws)) {
     const key = String(draw.ownerId || "unknown");
     const row = topOrganizers.get(key) || { draws: 0, referrals: 0 };
     row.draws += 1;
@@ -1157,18 +1165,25 @@ function registerAdminDashboard(app, deps) {
   });
 
   app.get("/admin/dashboard", requireAuth, (req, res) => {
-    const selectedOwner = String(req.query.ownerId || "").trim();
-    const data = deps.readData();
-    const profiles = deps.readUserProjectProfiles();
-    const delegated = deps.readDelegatedAdmins().admins || [];
-    const organizers = collectOrganizerOptions(
-      data.draws,
-      deps.adminIds,
-      delegated,
-      profiles,
-    );
-    const stats = buildStats(deps, selectedOwner);
-    res.type("html").send(renderDashboardPage(deps, stats, organizers, selectedOwner, profiles));
+    try {
+      const selectedOwner = String(req.query.ownerId || "").trim();
+      const data = deps.readData();
+      const profiles = deps.readUserProjectProfiles() || { users: {} };
+      const delegated = deps.readDelegatedAdmins()?.admins || [];
+      const organizers = collectOrganizerOptions(
+        asArray(data.draws),
+        deps.adminIds,
+        delegated,
+        profiles,
+      );
+      const stats = buildStats(deps, selectedOwner);
+      res.type("html").send(renderDashboardPage(deps, stats, organizers, selectedOwner, profiles));
+    } catch (error) {
+      console.error("[admin] GET /admin/dashboard:", error);
+      res.status(500).type("html").send(
+        `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Admin — ошибка</title></head><body style="font-family:system-ui,sans-serif;padding:24px;background:#0f172a;color:#e2e8f0"><h1>Не удалось загрузить дашборд</h1><p>Проверьте логи giveaway-bot на сервере. Частая причина — битые даты или формат данных в базе.</p><p><a href="/admin/login" style="color:#93c5fd">Вернуться ко входу</a></p></body></html>`,
+      );
+    }
   });
 
   app.get("/admin/users", requireAuth, (req, res) => {
