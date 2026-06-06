@@ -1330,6 +1330,7 @@ function buildDrawReminderReplyHtml(draw) {
 }
 
 async function sendDrawReminderReply(draw) {
+  await deleteDrawReminderMessages(draw);
   const message = await bot.telegram.sendMessage(draw.channelId, buildDrawReminderReplyHtml(draw), {
     parse_mode: "HTML",
     reply_to_message_id: draw.messageId,
