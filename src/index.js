@@ -867,7 +867,7 @@ function winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals) {
   if (antiFraud.hasFraudFlag) {
     return false;
   }
-  if (isWinnerNotificationExpired(notifyInfo)) {
+  if (isWinnerNotificationExpired(notifyInfo, draw)) {
     return false;
   }
   if (notifyInfo?.paidAt) {
@@ -1033,7 +1033,65 @@ function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired, hasFraud
   };
 }
 
-function isWinnerNotificationExpired(notifyInfo) {
+const DEFAULT_WINNER_CONFIRM_MINUTES = 30;
+
+function isWinnerConfirmExplicitlyDisabled(draw) {
+  return draw?.winnerConfirmValue === 0;
+}
+
+function isWinnerConfirmRequired(draw) {
+  return !isWinnerConfirmExplicitlyDisabled(draw);
+}
+
+function getWinnerConfirmWindow(draw) {
+  if (isWinnerConfirmExplicitlyDisabled(draw)) {
+    return null;
+  }
+  const value =
+    Number.isFinite(draw.winnerConfirmValue) && draw.winnerConfirmValue > 0
+      ? Math.floor(draw.winnerConfirmValue)
+      : DEFAULT_WINNER_CONFIRM_MINUTES;
+  const unit = ["minutes", "hours"].includes(draw.winnerConfirmUnit)
+    ? draw.winnerConfirmUnit
+    : "minutes";
+  return { value, unit };
+}
+
+function resolveWinnerNotifyExpiresAt(draw, notifyInfo) {
+  if (!notifyInfo?.sentAt) {
+    return null;
+  }
+  if (
+    notifyInfo.paidAt ||
+    notifyInfo.verifiedAt ||
+    notifyInfo.status === "confirmed" ||
+    notifyInfo.status === "expired" ||
+    notifyInfo.status === "forfeited" ||
+    notifyInfo.antiFraudFlag
+  ) {
+    return null;
+  }
+
+  if (notifyInfo.expiresAt) {
+    const stored = DateTime.fromISO(notifyInfo.expiresAt, { zone: TIMEZONE });
+    if (stored.isValid) {
+      return stored;
+    }
+  }
+
+  const windowCfg = getWinnerConfirmWindow(draw);
+  if (!windowCfg) {
+    return null;
+  }
+
+  const sentAt = DateTime.fromISO(notifyInfo.sentAt, { zone: TIMEZONE });
+  if (!sentAt.isValid) {
+    return null;
+  }
+  return sentAt.plus({ [windowCfg.unit]: windowCfg.value });
+}
+
+function isWinnerNotificationExpired(notifyInfo, draw = null) {
   if (!notifyInfo) {
     return false;
   }
@@ -1043,27 +1101,22 @@ function isWinnerNotificationExpired(notifyInfo) {
   if (notifyInfo.status === "expired") {
     return true;
   }
-  if (notifyInfo.verifiedAt) {
+  if (notifyInfo.verifiedAt || notifyInfo.status === "confirmed") {
     return false;
   }
-  const expiresAt = notifyInfo.expiresAt
-    ? DateTime.fromISO(notifyInfo.expiresAt, { zone: TIMEZONE })
-    : null;
-  return Boolean(expiresAt?.isValid && expiresAt <= DateTime.now().setZone(TIMEZONE));
-}
-
-function isWinnerConfirmRequired(draw) {
-  return Number.isFinite(draw.winnerConfirmValue) && draw.winnerConfirmValue > 0;
-}
-
-function getWinnerConfirmWindow(draw) {
-  if (!isWinnerConfirmRequired(draw)) {
-    return null;
+  if (notifyInfo.status === "forfeited" || notifyInfo.antiFraudFlag) {
+    return false;
   }
-  return {
-    value: Math.floor(draw.winnerConfirmValue),
-    unit: ["minutes", "hours"].includes(draw.winnerConfirmUnit) ? draw.winnerConfirmUnit : "minutes",
-  };
+
+  const expiresAt = draw ? resolveWinnerNotifyExpiresAt(draw, notifyInfo) : null;
+  if (!expiresAt?.isValid) {
+    if (!draw && notifyInfo.expiresAt) {
+      const legacy = DateTime.fromISO(notifyInfo.expiresAt, { zone: TIMEZONE });
+      return Boolean(legacy.isValid && legacy <= DateTime.now().setZone(TIMEZONE));
+    }
+    return false;
+  }
+  return expiresAt <= DateTime.now().setZone(TIMEZONE);
 }
 
 function winnerVerificationSessionKey(userId, drawId) {
@@ -1382,6 +1435,8 @@ function createSession(userId) {
       participantIds: [],
       winnerIds: [],
       winnerNotifications: {},
+      winnerConfirmValue: DEFAULT_WINNER_CONFIRM_MINUTES,
+      winnerConfirmUnit: "minutes",
     },
   });
 }
@@ -2150,11 +2205,13 @@ async function processWinnerConfirmTimeouts(data) {
         continue;
       }
 
-      const expiresAt = notify.expiresAt
-        ? DateTime.fromISO(notify.expiresAt, { zone: TIMEZONE })
-        : null;
-      if (!expiresAt || !expiresAt.isValid || expiresAt > now) {
+      const expiresAt = resolveWinnerNotifyExpiresAt(draw, notify);
+      if (!expiresAt?.isValid || expiresAt > now) {
         continue;
+      }
+
+      if (!notify.expiresAt) {
+        notify.expiresAt = expiresAt.toISO();
       }
 
       const changed = await markWinnerNotificationExpired(draw, userId);
@@ -3266,9 +3323,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const trcAddress = projectData.trc20Address || "Не указан";
   const notifyInfo = winnerNotifications[String(winnerId)];
   const isPaid = Boolean(notifyInfo?.paidAt);
-  const isVerified = Boolean(notifyInfo?.verifiedAt);
+  const isVerified = Boolean(notifyInfo?.verifiedAt) || notifyInfo?.status === "confirmed";
   const notifySent = Boolean(notifyInfo?.sentAt);
-  const isExpired = isWinnerNotificationExpired(notifyInfo);
+  const isExpired = isWinnerNotificationExpired(notifyInfo, draw);
   const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
   const payoutRow = getWinnerPayoutRowHtml(draw, projectData, {
     isPaid,
@@ -3291,7 +3348,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const statusBadge = antiFraud.hasFraudFlag
     ? `<span class="winner-badge winner-badge-danger">Приз сгорел</span>`
     : isVerified
-    ? `<span class="winner-badge winner-badge-ok">Проверен</span>`
+    ? `<span class="winner-badge winner-badge-ok">Отметился</span>`
     : isExpired
       ? `<span class="winner-badge winner-badge-danger">Не отметился</span>`
       : notifySent
@@ -7069,6 +7126,13 @@ function renderPanelForUser(res, webUser, message) {
 
 async function renderPanelForUserWithRate(res, webUser, message) {
   await refreshRubUsdtRate();
+  if (!WEB_ONLY) {
+    const data = readData();
+    const timeoutChanges = await processWinnerConfirmTimeouts(data);
+    if (timeoutChanges) {
+      writeData(data);
+    }
+  }
   renderPanelForUser(res, webUser, message);
 }
 
@@ -7140,6 +7204,13 @@ panelRouter.post("/enter", async (req, res) => {
 panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   try {
     await refreshRubUsdtRate();
+    if (!WEB_ONLY) {
+      const data = readData();
+      const timeoutChanges = await processWinnerConfirmTimeouts(data);
+      if (timeoutChanges) {
+        writeData(data);
+      }
+    }
     const ownerId = req.webUser.id;
     const draws = getOwnerDraws(ownerId);
     const userProfiles = readUserProjectProfiles();
@@ -8265,9 +8336,12 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
     }
 
     const expiresAtISO = notify.expiresAt;
-    const isExpired = expiresAtISO
-      ? DateTime.fromISO(expiresAtISO, { zone: TIMEZONE }) < DateTime.now().setZone(TIMEZONE)
-      : false;
+    const resolvedExpiry = resolveWinnerNotifyExpiresAt(draw, notify);
+    const isExpired = resolvedExpiry?.isValid
+      ? resolvedExpiry <= DateTime.now().setZone(TIMEZONE)
+      : expiresAtISO
+        ? DateTime.fromISO(expiresAtISO, { zone: TIMEZONE }) < DateTime.now().setZone(TIMEZONE)
+        : false;
     if (isExpired) {
       await markWinnerNotificationExpired(draw, userId);
       writeData(data);
@@ -8386,6 +8460,10 @@ async function bootstrap() {
     console.log("[boot] Telegram bot polling started");
     await syncActiveDrawKeyboards();
     await syncAllOrganizerPanelMenus();
+    const data = readData();
+    if (await processWinnerConfirmTimeouts(data)) {
+      writeData(data);
+    }
   }
   console.log(
     `[boot] participate example: ${getJoinParticipateUrl("draw_example") || "(нет URL — проверьте BOT_USERNAME и JOIN_MINI_APP_SHORT_NAME)"}`,
