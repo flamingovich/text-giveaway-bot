@@ -1034,6 +1034,8 @@ function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired, hasFraud
 }
 
 const DEFAULT_WINNER_CONFIRM_MINUTES = 30;
+const WINNER_NOTIFY_SEND_ATTEMPTS = 3;
+const WINNER_NOTIFY_SEND_RETRY_DELAYS_MS = [2000, 5000];
 
 function isWinnerConfirmExplicitlyDisabled(draw) {
   return draw?.winnerConfirmValue === 0;
@@ -1067,6 +1069,7 @@ function resolveWinnerNotifyExpiresAt(draw, notifyInfo) {
     notifyInfo.status === "confirmed" ||
     notifyInfo.status === "expired" ||
     notifyInfo.status === "forfeited" ||
+    notifyInfo.status === "failed" ||
     notifyInfo.antiFraudFlag
   ) {
     return null;
@@ -2174,6 +2177,26 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
   });
 }
 
+async function sendWinnerVerificationNotificationWithRetry(draw, userId, sentBy, subscriptionCheck) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= WINNER_NOTIFY_SEND_ATTEMPTS; attempt += 1) {
+    try {
+      await sendWinnerVerificationNotification(draw, userId, sentBy, subscriptionCheck);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < WINNER_NOTIFY_SEND_ATTEMPTS) {
+        const delay =
+          WINNER_NOTIFY_SEND_RETRY_DELAYS_MS[attempt - 1] ??
+          WINNER_NOTIFY_SEND_RETRY_DELAYS_MS[WINNER_NOTIFY_SEND_RETRY_DELAYS_MS.length - 1] ??
+          3000;
+        await sleep(delay);
+      }
+    }
+  }
+  throw lastError;
+}
+
 async function notifyWinnersOnFinish(draw) {
   for (const winnerId of draw.winnerIds || []) {
     try {
@@ -2181,7 +2204,7 @@ async function notifyWinnersOnFinish(draw) {
       const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, winnerId, {
         maxAttempts: 3,
       });
-      await sendWinnerVerificationNotification(draw, winnerId, "auto_finish", subscriptionCheck);
+      await sendWinnerVerificationNotificationWithRetry(draw, winnerId, "auto_finish", subscriptionCheck);
     } catch (error) {
       if (!draw.winnerNotifications) {
         draw.winnerNotifications = {};
@@ -2266,7 +2289,12 @@ async function processWinnerConfirmTimeouts(data) {
         continue;
       }
 
-      if (notify.status === "confirmed" || notify.status === "expired" || notify.status === "forfeited") {
+      if (
+        notify.status === "confirmed" ||
+        notify.status === "expired" ||
+        notify.status === "forfeited" ||
+        notify.status === "failed"
+      ) {
         continue;
       }
 
@@ -3393,7 +3421,8 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const notifyInfo = winnerNotifications[String(winnerId)];
   const isPaid = Boolean(notifyInfo?.paidAt);
   const isVerified = Boolean(notifyInfo?.verifiedAt) || notifyInfo?.status === "confirmed";
-  const notifySent = Boolean(notifyInfo?.sentAt);
+  const isDeliveryFailed = notifyInfo?.status === "failed";
+  const notifySent = Boolean(notifyInfo?.sentAt) && !isDeliveryFailed;
   const isExpired = isWinnerNotificationExpired(notifyInfo, draw);
   const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
   const payoutRow = getWinnerPayoutRowHtml(draw, projectData, {
@@ -3418,6 +3447,8 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     ? `<span class="winner-badge winner-badge-danger">Приз сгорел</span>`
     : isVerified
     ? `<span class="winner-badge winner-badge-ok">Отметился</span>`
+    : isDeliveryFailed
+      ? `<span class="winner-badge winner-badge-danger">Не доставлено</span>`
     : isExpired
       ? `<span class="winner-badge winner-badge-danger">Не отметился</span>`
       : notifySent
@@ -3430,7 +3461,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     trcAddress !== "Не указан"
       ? `<button type="button" class="winner-copy-btn" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
       : "";
-  const payButton = isPaid || isExpired || antiFraud.hasFraudFlag
+  const payButton = isPaid || isExpired || antiFraud.hasFraudFlag || isDeliveryFailed
     ? ""
     : `<div class="winner-card-actions">
         <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
@@ -7890,8 +7921,19 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
     const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
       maxAttempts: 3,
     });
-    await sendWinnerVerificationNotification(draw, userId, ownerId, subscriptionCheck);
+    await sendWinnerVerificationNotificationWithRetry(draw, userId, ownerId, subscriptionCheck);
   } catch (error) {
+    if (!draw.winnerNotifications) {
+      draw.winnerNotifications = {};
+    }
+    draw.winnerNotifications[String(userId)] = {
+      sentAt: new Date().toISOString(),
+      sentBy: ownerId,
+      verifiedAt: null,
+      status: "failed",
+      error: error.message,
+    };
+    writeData(data);
     redirectWithMessage(
       res,
       "Не удалось отправить уведомление. Возможно, пользователь не открыл личный чат с ботом."
