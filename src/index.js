@@ -1207,6 +1207,51 @@ function buildWinnerExpiredText(draw) {
   ].join("\n");
 }
 
+function formatWinnerDeliveryFailureReason(errorMessage) {
+  const message = String(errorMessage || "").toLowerCase();
+  if (!message) {
+    return "Ошибка";
+  }
+  if (message.includes("blocked")) {
+    return "Блок";
+  }
+  if (message.includes("deactivated") || message.includes("deleted")) {
+    return "Удалён";
+  }
+  if (
+    message.includes("can't initiate") ||
+    message.includes("cant initiate") ||
+    message.includes("chat not found") ||
+    message.includes("user not found") ||
+    message.includes("peer_id_invalid")
+  ) {
+    return "Нет чата";
+  }
+  if (message.includes("too many requests") || message.includes("retry after")) {
+    return "Лимит";
+  }
+  if (message.includes("timeout") || message.includes("network") || message.includes("econnreset")) {
+    return "Сеть";
+  }
+  return "Ошибка";
+}
+
+function buildWinnerSubscriptionForfeitedHtml(draw, payoutPrize) {
+  const postLink = buildDrawPostLink(draw);
+  const giveawayWord = postLink
+    ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
+    : "розыгрыше";
+  const prizeLabel = resolveWinnerPrizeLabel(draw, payoutPrize);
+  const prizeHtml = `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}`;
+  return [
+    `<b>😔 Вы выиграли в ${giveawayWord}... Но...</b>`,
+    prizeHtml,
+    "📢 Приз сгорел — вы отписались от канала розыгрыша.",
+    "",
+    "Если это ошибка, пишите в поддержку — @rollerbot_support_bot",
+  ].join("\n");
+}
+
 function buildDrawPostLink(draw) {
   if (!draw?.messageId || !draw?.channelId) {
     return "";
@@ -2215,6 +2260,7 @@ async function notifyWinnersOnFinish(draw) {
         verifiedAt: null,
         status: "failed",
         error: error.message,
+        deliveryFailureReason: formatWinnerDeliveryFailureReason(error.message),
         channelCheckError: error.message,
       };
     }
@@ -2272,6 +2318,112 @@ async function markWinnerNotificationExpired(draw, userId) {
   }
 
   return true;
+}
+
+async function markWinnerSubscriptionForfeited(draw, userId) {
+  if (!draw.winnerNotifications) {
+    draw.winnerNotifications = {};
+  }
+  const notify = draw.winnerNotifications[String(userId)];
+  if (!notify || notify.paidAt || notify.status === "forfeited" || notify.status === "expired") {
+    return false;
+  }
+
+  notify.status = "forfeited";
+  notify.antiFraudFlag = true;
+  notify.channelSubscribed = false;
+  notify.forfeitedAt = new Date().toISOString();
+  notify.forfeitureReason = "unsubscribed";
+  delete notify.verifiedAt;
+  winnerVerificationSessions.delete(winnerVerificationSessionKey(userId, draw.id));
+
+  const payoutPrize =
+    notify.payoutPrize ||
+    getWinnerPayoutText(
+      draw,
+      getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData,
+    );
+
+  if (notify.lastMessageId) {
+    try {
+      await bot.telegram.editMessageText(
+        userId,
+        notify.lastMessageId,
+        undefined,
+        buildWinnerSubscriptionForfeitedHtml(draw, payoutPrize),
+        {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: [] },
+        },
+      );
+    } catch (error) {
+      // Не критично, если не получилось отредактировать старое сообщение.
+    }
+  }
+
+  return true;
+}
+
+async function processWinnerChannelSubscriptions(data) {
+  if (WEB_ONLY) {
+    return false;
+  }
+
+  let hasChanges = false;
+
+  for (const draw of data.draws) {
+    if (draw.status !== DRAW_STATUS.FINISHED || !draw.channelId || !draw.winnerNotifications) {
+      continue;
+    }
+
+    for (const winnerId of draw.winnerIds || []) {
+      const userId = Number(winnerId);
+      if (!Number.isInteger(userId)) {
+        continue;
+      }
+
+      const notify = draw.winnerNotifications[String(userId)];
+      if (!notify?.sentAt || notify.paidAt) {
+        continue;
+      }
+      if (
+        notify.status === "failed" ||
+        notify.status === "forfeited" ||
+        notify.status === "expired"
+      ) {
+        continue;
+      }
+      if (notify.channelSubscribed === false && notify.forfeitureReason === "unsubscribed") {
+        continue;
+      }
+
+      const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
+        maxAttempts: 2,
+      });
+      if (!subscriptionCheck.ok) {
+        continue;
+      }
+
+      notify.channelSubscribed = Boolean(subscriptionCheck.subscribed);
+      notify.channelStatus = subscriptionCheck.status || null;
+      notify.channelCheckedAt = subscriptionCheck.checkedAt || new Date().toISOString();
+      notify.channelCheckError = null;
+      hasChanges = true;
+
+      if (subscriptionCheck.subscribed) {
+        await sleep(150);
+        continue;
+      }
+
+      const forfeited = await markWinnerSubscriptionForfeited(draw, userId);
+      if (forfeited) {
+        hasChanges = true;
+      }
+      await sleep(150);
+    }
+  }
+
+  return hasChanges;
 }
 
 async function processWinnerConfirmTimeouts(data) {
@@ -2970,6 +3122,11 @@ async function schedulerTick() {
     hasChanges = true;
   }
 
+  const subscriptionChanges = await processWinnerChannelSubscriptions(data);
+  if (subscriptionChanges) {
+    hasChanges = true;
+  }
+
   const postCountChanges = await syncStaleActiveDrawPostCounts(data);
   if (postCountChanges) {
     hasChanges = true;
@@ -3448,7 +3605,10 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     : isVerified
     ? `<span class="winner-badge winner-badge-ok">Отметился</span>`
     : isDeliveryFailed
-      ? `<span class="winner-badge winner-badge-danger">Не доставлено</span>`
+      ? `<span class="winner-badge winner-badge-danger">Не доставлено (${escapeHtml(
+          notifyInfo?.deliveryFailureReason ||
+            formatWinnerDeliveryFailureReason(notifyInfo?.error),
+        )})</span>`
     : isExpired
       ? `<span class="winner-badge winner-badge-danger">Не отметился</span>`
       : notifySent
@@ -7235,7 +7395,8 @@ async function renderPanelForUserWithRate(res, webUser, message) {
   if (!WEB_ONLY) {
     const data = readData();
     const timeoutChanges = await processWinnerConfirmTimeouts(data);
-    if (timeoutChanges) {
+    const subscriptionChanges = await processWinnerChannelSubscriptions(data);
+    if (timeoutChanges || subscriptionChanges) {
       writeData(data);
     }
   }
@@ -7313,7 +7474,8 @@ panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res)
     if (!WEB_ONLY) {
       const data = readData();
       const timeoutChanges = await processWinnerConfirmTimeouts(data);
-      if (timeoutChanges) {
+      const subscriptionChanges = await processWinnerChannelSubscriptions(data);
+      if (timeoutChanges || subscriptionChanges) {
         writeData(data);
       }
     }
@@ -7932,6 +8094,7 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
       verifiedAt: null,
       status: "failed",
       error: error.message,
+      deliveryFailureReason: formatWinnerDeliveryFailureReason(error.message),
     };
     writeData(data);
     redirectWithMessage(
@@ -8605,7 +8768,11 @@ async function bootstrap() {
     await syncActiveDrawKeyboards();
     await syncAllOrganizerPanelMenus();
     const data = readData();
-    if (await processWinnerConfirmTimeouts(data)) {
+    let bootDataChanged = await processWinnerConfirmTimeouts(data);
+    if (await processWinnerChannelSubscriptions(data)) {
+      bootDataChanged = true;
+    }
+    if (bootDataChanged) {
       writeData(data);
     }
   }
