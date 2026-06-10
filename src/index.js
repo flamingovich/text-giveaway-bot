@@ -1279,6 +1279,28 @@ function getWinnerPermanentDeliveryForfeitMessage(reason) {
   return "Приз аннулирован — уведомление не доставлено.";
 }
 
+function isWinnerPrizeForfeited(notifyInfo, antiFraud) {
+  return (
+    notifyInfo?.status === "forfeited" ||
+    Boolean(notifyInfo?.antiFraudFlag) ||
+    Boolean(antiFraud?.hasFraudFlag)
+  );
+}
+
+function getWinnerForfeitedDeliveryReason(notifyInfo) {
+  if (!notifyInfo || notifyInfo.status !== "forfeited") {
+    return "";
+  }
+  const reason = getWinnerDeliveryFailureReason(notifyInfo);
+  if (isWinnerDeliveryPermanentFailure(reason)) {
+    return reason;
+  }
+  if (notifyInfo.forfeitureReason === "unsubscribed") {
+    return "Отписка";
+  }
+  return "";
+}
+
 function buildWinnerSubscriptionForfeitedHtml(draw, payoutPrize) {
   const postLink = buildDrawPostLink(draw);
   const giveawayWord = postLink
@@ -2484,13 +2506,18 @@ async function processWinnerChannelSubscriptions(data) {
         continue;
       }
 
-      notify.channelSubscribed = Boolean(subscriptionCheck.subscribed);
+      const wasSubscribed = notify.channelSubscribed;
+      const nextSubscribed = Boolean(subscriptionCheck.subscribed);
+      notify.channelSubscribed = nextSubscribed;
       notify.channelStatus = subscriptionCheck.status || null;
-      notify.channelCheckedAt = subscriptionCheck.checkedAt || new Date().toISOString();
       notify.channelCheckError = null;
-      hasChanges = true;
 
-      if (subscriptionCheck.subscribed) {
+      if (wasSubscribed !== nextSubscribed) {
+        notify.channelCheckedAt = subscriptionCheck.checkedAt || new Date().toISOString();
+        hasChanges = true;
+      }
+
+      if (nextSubscribed) {
         await sleep(150);
         continue;
       }
@@ -3700,10 +3727,12 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const notifySent = Boolean(notifyInfo?.sentAt) && !isDeliveryFailed;
   const isExpired = isWinnerNotificationExpired(notifyInfo, draw);
   const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
+  const isPrizeForfeited = isWinnerPrizeForfeited(notifyInfo, antiFraud);
+  const forfeitedDeliveryReason = getWinnerForfeitedDeliveryReason(notifyInfo);
   const payoutRow = getWinnerPayoutRowHtml(draw, projectData, {
     isPaid,
     isExpired,
-    hasFraudFlag: antiFraud.hasFraudFlag,
+    hasFraudFlag: isPrizeForfeited,
   });
   const refBadge = projectData.selfReportedNonReferral
     ? `<span class="winner-badge winner-badge-warn">Не реф</span>`
@@ -3718,8 +3747,10 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const referralOwnerHtml = referralOwnerLabel
     ? `<div class="winner-card-meta winner-card-ref-owner">${escapeHtml(referralOwnerLabel)}</div>`
     : "";
-  const statusBadge = antiFraud.hasFraudFlag
-    ? `<span class="winner-badge winner-badge-danger">Приз сгорел</span>`
+  const statusBadge = isPrizeForfeited
+    ? `<span class="winner-badge winner-badge-danger">Приз сгорел${
+        forfeitedDeliveryReason ? ` (${escapeHtml(forfeitedDeliveryReason)})` : ""
+      }</span>`
     : isVerified
     ? `<span class="winner-badge winner-badge-ok">Отметился</span>`
     : isDeliveryFailed
@@ -3740,7 +3771,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/notify/${encodeURIComponent(String(winnerId))}">
         <button type="submit" class="winner-action-btn">Оповестить заново</button>
       </form>`
-    : !isPaid && !isExpired && !antiFraud.hasFraudFlag && !isDeliveryFailed
+    : !isPaid && !isExpired && !isPrizeForfeited && !isDeliveryFailed
       ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
           <button type="submit" class="winner-action-btn">Оплатил</button>
         </form>`
@@ -3787,6 +3818,21 @@ function getOwnerDraws(ownerId) {
   );
 }
 
+function summarizeWinnerNotifyForFingerprint(notify) {
+  if (!notify) {
+    return null;
+  }
+  return {
+    status: notify.status || "",
+    paidAt: Boolean(notify.paidAt),
+    verifiedAt: Boolean(notify.verifiedAt),
+    antiFraudFlag: Boolean(notify.antiFraudFlag),
+    deliveryFailureReason: notify.deliveryFailureReason || "",
+    forfeitureReason: notify.forfeitureReason || "",
+    channelSubscribed: notify.channelSubscribed,
+  };
+}
+
 function buildPanelLiveFingerprint(draws, userProfiles) {
   const payload = draws.map((draw) => {
     const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
@@ -3796,7 +3842,7 @@ function buildPanelLiveFingerprint(draws, userProfiles) {
       const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notify);
       return {
         winnerId,
-        notify,
+        notify: summarizeWinnerNotifyForFingerprint(notify),
         referralVerified: Boolean(projectData.referralVerified),
         selfReportedNonReferral: Boolean(projectData.selfReportedNonReferral),
         trc20Address: projectData.trc20Address || "",
@@ -3836,7 +3882,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
         .join("");
 
       return `
-        <article class="history-card${draw.status === DRAW_STATUS.ACTIVE ? " history-card-active" : ""}">
+        <article class="history-card${draw.status === DRAW_STATUS.ACTIVE ? " history-card-active" : ""}" data-draw-id="${escapeHtml(draw.id)}">
           <div class="history-card-head">
             <div class="history-head-top">
               <div class="history-title-row">
@@ -7266,7 +7312,22 @@ ${getPanelFluidTypographyVars()}
 
           const scrollY = window.scrollY;
           const openDetails = captureDetailsState();
+          const preservedThumbs = new Map();
+          root.querySelectorAll(".history-card[data-draw-id] img.history-thumb").forEach((img) => {
+            const drawId = img.closest(".history-card")?.dataset.drawId;
+            if (drawId && img.complete && img.naturalWidth > 0) {
+              preservedThumbs.set(drawId, img);
+            }
+          });
           root.innerHTML = data.html;
+          preservedThumbs.forEach((img, drawId) => {
+            const nextImg = root.querySelector(
+              '.history-card[data-draw-id="' + drawId + '"] img.history-thumb',
+            );
+            if (nextImg && nextImg.src === img.src) {
+              nextImg.replaceWith(img);
+            }
+          });
           root.dataset.version = data.version;
           restoreDetailsState(openDetails);
           window.scrollTo(0, scrollY);
