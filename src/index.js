@@ -1236,6 +1236,49 @@ function formatWinnerDeliveryFailureReason(errorMessage) {
   return "Ошибка";
 }
 
+const WINNER_DELIVERY_PERMANENT_FAILURE_REASONS = new Set(["Блок", "Удалён", "Нет чата"]);
+const WINNER_DELIVERY_RETRYABLE_FAILURE_REASONS = new Set(["Лимит", "Сеть", "Ошибка"]);
+
+function getWinnerDeliveryFailureReason(notifyInfo) {
+  return (
+    notifyInfo?.deliveryFailureReason || formatWinnerDeliveryFailureReason(notifyInfo?.error)
+  );
+}
+
+function isWinnerDeliveryPermanentFailure(reason) {
+  return WINNER_DELIVERY_PERMANENT_FAILURE_REASONS.has(reason);
+}
+
+function isWinnerDeliveryRetryableFailure(reason) {
+  return WINNER_DELIVERY_RETRYABLE_FAILURE_REASONS.has(reason);
+}
+
+function getWinnerDeliveryForfeitureReason(deliveryFailureReason) {
+  if (deliveryFailureReason === "Удалён") {
+    return "deleted_account";
+  }
+  if (deliveryFailureReason === "Блок") {
+    return "bot_blocked";
+  }
+  if (deliveryFailureReason === "Нет чата") {
+    return "no_chat";
+  }
+  return "delivery_failed";
+}
+
+function getWinnerPermanentDeliveryForfeitMessage(reason) {
+  if (reason === "Удалён") {
+    return "Аккаунт победителя удалён — приз аннулирован.";
+  }
+  if (reason === "Блок") {
+    return "Победитель заблокировал бота — приз аннулирован.";
+  }
+  if (reason === "Нет чата") {
+    return "Победитель не открыл чат с ботом — приз аннулирован.";
+  }
+  return "Приз аннулирован — уведомление не доставлено.";
+}
+
 function buildWinnerSubscriptionForfeitedHtml(draw, payoutPrize) {
   const postLink = buildDrawPostLink(draw);
   const giveawayWord = postLink
@@ -1283,6 +1326,48 @@ function getParticipationReplyOptions() {
   return {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
+  };
+}
+
+async function sendParticipationDm(draw, userId) {
+  if (WEB_ONLY || !bot || !draw || !userId) {
+    return;
+  }
+  try {
+    await bot.telegram.sendMessage(
+      userId,
+      buildParticipationSuccessMessage(draw),
+      getParticipationReplyOptions(),
+    );
+  } catch (error) {
+    console.warn(`[join] не удалось отправить «Вы участвуете» в личку ${userId}: ${error.message}`);
+  }
+}
+
+function buildWinnerNotificationFailureRecord(sentBy, error) {
+  const deliveryFailureReason = formatWinnerDeliveryFailureReason(error?.message);
+  const base = {
+    sentAt: new Date().toISOString(),
+    sentBy,
+    verifiedAt: null,
+    error: error?.message || "delivery_failed",
+    deliveryFailureReason,
+    channelCheckError: error?.message || null,
+  };
+
+  if (isWinnerDeliveryPermanentFailure(deliveryFailureReason)) {
+    return {
+      ...base,
+      status: "forfeited",
+      antiFraudFlag: true,
+      forfeitureReason: getWinnerDeliveryForfeitureReason(deliveryFailureReason),
+      forfeitedAt: new Date().toISOString(),
+    };
+  }
+
+  return {
+    ...base,
+    status: "failed",
   };
 }
 
@@ -2254,15 +2339,10 @@ async function notifyWinnersOnFinish(draw) {
       if (!draw.winnerNotifications) {
         draw.winnerNotifications = {};
       }
-      draw.winnerNotifications[String(winnerId)] = {
-        sentAt: new Date().toISOString(),
-        sentBy: "auto_finish",
-        verifiedAt: null,
-        status: "failed",
-        error: error.message,
-        deliveryFailureReason: formatWinnerDeliveryFailureReason(error.message),
-        channelCheckError: error.message,
-      };
+      draw.winnerNotifications[String(winnerId)] = buildWinnerNotificationFailureRecord(
+        "auto_finish",
+        error,
+      );
     }
   }
 }
@@ -2420,6 +2500,35 @@ async function processWinnerChannelSubscriptions(data) {
         hasChanges = true;
       }
       await sleep(150);
+    }
+  }
+
+  return hasChanges;
+}
+
+async function processWinnerPermanentDeliveryForfeitures(data) {
+  let hasChanges = false;
+
+  for (const draw of data.draws) {
+    if (draw.status !== DRAW_STATUS.FINISHED || !draw.winnerNotifications) {
+      continue;
+    }
+
+    for (const notify of Object.values(draw.winnerNotifications)) {
+      if (!notify || notify.status !== "failed" || notify.paidAt) {
+        continue;
+      }
+      const reason = getWinnerDeliveryFailureReason(notify);
+      if (!isWinnerDeliveryPermanentFailure(reason)) {
+        continue;
+      }
+
+      notify.status = "forfeited";
+      notify.antiFraudFlag = true;
+      notify.forfeitureReason = getWinnerDeliveryForfeitureReason(reason);
+      notify.forfeitedAt = notify.forfeitedAt || new Date().toISOString();
+      notify.deliveryFailureReason = reason;
+      hasChanges = true;
     }
   }
 
@@ -2935,6 +3044,7 @@ async function addUserToDraw(drawId, userId, participationMeta = null) {
 
   scheduleDrawPostUpdate(draw.id, false);
   void enrichUserAvatar(userId);
+  void sendParticipationDm(draw, userId);
 
   return {
     ok: true,
@@ -3124,6 +3234,11 @@ async function schedulerTick() {
 
   const subscriptionChanges = await processWinnerChannelSubscriptions(data);
   if (subscriptionChanges) {
+    hasChanges = true;
+  }
+
+  const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
+  if (permanentDeliveryChanges) {
     hasChanges = true;
   }
 
@@ -3579,6 +3694,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const isPaid = Boolean(notifyInfo?.paidAt);
   const isVerified = Boolean(notifyInfo?.verifiedAt) || notifyInfo?.status === "confirmed";
   const isDeliveryFailed = notifyInfo?.status === "failed";
+  const deliveryFailureReason = isDeliveryFailed ? getWinnerDeliveryFailureReason(notifyInfo) : "";
+  const canResendNotification =
+    isDeliveryFailed && isWinnerDeliveryRetryableFailure(deliveryFailureReason);
   const notifySent = Boolean(notifyInfo?.sentAt) && !isDeliveryFailed;
   const isExpired = isWinnerNotificationExpired(notifyInfo, draw);
   const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
@@ -3605,10 +3723,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     : isVerified
     ? `<span class="winner-badge winner-badge-ok">Отметился</span>`
     : isDeliveryFailed
-      ? `<span class="winner-badge winner-badge-danger">Не доставлено (${escapeHtml(
-          notifyInfo?.deliveryFailureReason ||
-            formatWinnerDeliveryFailureReason(notifyInfo?.error),
-        )})</span>`
+      ? `<span class="winner-badge winner-badge-danger">Не доставлено (${escapeHtml(deliveryFailureReason)})</span>`
     : isExpired
       ? `<span class="winner-badge winner-badge-danger">Не отметился</span>`
       : notifySent
@@ -3621,13 +3736,18 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     trcAddress !== "Не указан"
       ? `<button type="button" class="winner-copy-btn" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
       : "";
-  const payButton = isPaid || isExpired || antiFraud.hasFraudFlag || isDeliveryFailed
-    ? ""
-    : `<div class="winner-card-actions">
-        <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
+  const winnerActionButtons = canResendNotification
+    ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/notify/${encodeURIComponent(String(winnerId))}">
+        <button type="submit" class="winner-action-btn">Оповестить заново</button>
+      </form>`
+    : !isPaid && !isExpired && !antiFraud.hasFraudFlag && !isDeliveryFailed
+      ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
           <button type="submit" class="winner-action-btn">Оплатил</button>
-        </form>
-      </div>`;
+        </form>`
+      : "";
+  const winnerActionsHtml = winnerActionButtons
+    ? `<div class="winner-card-actions">${winnerActionButtons}</div>`
+    : "";
   const profileUrl = buildParticipantProfileUrl(winnerId, PANEL_BASE);
   const profileBtn = `<a href="${escapeHtml(profileUrl)}" class="winner-profile-btn" title="Профиль участника" aria-label="Профиль участника">${renderFormIcon("user")}</a>`;
 
@@ -3655,7 +3775,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
           ${copyBtn}
         </div>
       </div>
-      ${payButton}
+      ${winnerActionsHtml}
     </article>
   `;
 }
@@ -7396,7 +7516,8 @@ async function renderPanelForUserWithRate(res, webUser, message) {
     const data = readData();
     const timeoutChanges = await processWinnerConfirmTimeouts(data);
     const subscriptionChanges = await processWinnerChannelSubscriptions(data);
-    if (timeoutChanges || subscriptionChanges) {
+    const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
+    if (timeoutChanges || subscriptionChanges || permanentDeliveryChanges) {
       writeData(data);
     }
   }
@@ -7475,7 +7596,8 @@ panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res)
       const data = readData();
       const timeoutChanges = await processWinnerConfirmTimeouts(data);
       const subscriptionChanges = await processWinnerChannelSubscriptions(data);
-      if (timeoutChanges || subscriptionChanges) {
+      const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
+      if (timeoutChanges || subscriptionChanges || permanentDeliveryChanges) {
         writeData(data);
       }
     }
@@ -8077,6 +8199,43 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
     return;
   }
 
+  const notifyExisting = draw.winnerNotifications?.[String(userId)];
+  if (notifyExisting) {
+    const existingReason = getWinnerDeliveryFailureReason(notifyExisting);
+    if (notifyExisting.paidAt) {
+      redirectWithMessage(res, "Выплата уже отмечена.");
+      return;
+    }
+    if (notifyExisting.status === "forfeited") {
+      redirectWithMessage(
+        res,
+        isWinnerDeliveryPermanentFailure(existingReason)
+          ? getWinnerPermanentDeliveryForfeitMessage(existingReason)
+          : "Приз уже аннулирован.",
+      );
+      return;
+    }
+    if (notifyExisting.status === "confirmed" || notifyExisting.verifiedAt) {
+      redirectWithMessage(res, "Победитель уже прошёл проверку.");
+      return;
+    }
+    if (notifyExisting.status === "expired") {
+      redirectWithMessage(res, "Время подтверждения истекло.");
+      return;
+    }
+    if (notifyExisting.status === "pending") {
+      redirectWithMessage(res, "Уведомление уже отправлено — ждём ответа победителя.");
+      return;
+    }
+    if (
+      notifyExisting.status === "failed" &&
+      !isWinnerDeliveryRetryableFailure(existingReason)
+    ) {
+      redirectWithMessage(res, "Повторная отправка недоступна для этого победителя.");
+      return;
+    }
+  }
+
   await enrichUserAvatar(userId);
 
   try {
@@ -8088,18 +8247,18 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
     if (!draw.winnerNotifications) {
       draw.winnerNotifications = {};
     }
-    draw.winnerNotifications[String(userId)] = {
-      sentAt: new Date().toISOString(),
-      sentBy: ownerId,
-      verifiedAt: null,
-      status: "failed",
-      error: error.message,
-      deliveryFailureReason: formatWinnerDeliveryFailureReason(error.message),
-    };
+    draw.winnerNotifications[String(userId)] = buildWinnerNotificationFailureRecord(ownerId, error);
     writeData(data);
+    const failureReason = getWinnerDeliveryFailureReason(
+      draw.winnerNotifications[String(userId)],
+    );
     redirectWithMessage(
       res,
-      "Не удалось отправить уведомление. Возможно, пользователь не открыл личный чат с ботом."
+      isWinnerDeliveryPermanentFailure(failureReason)
+        ? getWinnerPermanentDeliveryForfeitMessage(failureReason)
+        : isWinnerDeliveryRetryableFailure(failureReason)
+          ? `Не удалось отправить уведомление (${failureReason}). Нажмите «Оповестить заново» позже.`
+          : "Не удалось отправить уведомление.",
     );
     return;
   }
@@ -8770,6 +8929,9 @@ async function bootstrap() {
     const data = readData();
     let bootDataChanged = await processWinnerConfirmTimeouts(data);
     if (await processWinnerChannelSubscriptions(data)) {
+      bootDataChanged = true;
+    }
+    if (await processWinnerPermanentDeliveryForfeitures(data)) {
       bootDataChanged = true;
     }
     if (bootDataChanged) {
