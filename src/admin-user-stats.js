@@ -223,6 +223,10 @@ function buildUserProjectActivityIndex(deps, userProfiles, formatUserLabel) {
     formatted.set(key, {
       participations: entry.participations,
       wins: entry.wins,
+      winningsRub: entry.winningsRub,
+      winningsUsd: entry.winningsUsd,
+      paidRub: entry.paidRub,
+      paidUsd: entry.paidUsd,
       winningsText: formatMoneyTotals(
         entry.winningsRub,
         entry.winningsUsd,
@@ -269,6 +273,10 @@ function getUserProjectActivity(activityIndex, userId, projectId) {
   const fallback = {
     participations: 0,
     wins: 0,
+    winningsRub: 0,
+    winningsUsd: 0,
+    paidRub: 0,
+    paidUsd: 0,
     winningsText: "—",
     payoutsText: "—",
     fraudLabels: [],

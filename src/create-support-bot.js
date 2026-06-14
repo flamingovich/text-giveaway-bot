@@ -84,7 +84,15 @@ function createSupportBot(options) {
   }
 
   function saveChats() {
-    const payload = Object.fromEntries(chats.entries());
+    let payload = {};
+    try {
+      payload = { ...readSupportChats() };
+    } catch {
+      payload = {};
+    }
+    for (const [chatId, state] of chats.entries()) {
+      payload[chatId] = state;
+    }
     writeSupportChats(payload);
   }
 
@@ -149,13 +157,6 @@ function createSupportBot(options) {
     stopTypingAction(chatKey);
     stopStatusAnimation(chatKey);
     clearIdleCloseTimer(chatKey);
-  }
-
-  function resetChatState(chatId) {
-    const chatKey = String(chatId);
-    clearChatTimers(chatKey);
-    chats.delete(chatKey);
-    saveChats();
   }
 
   function isWithinSupportHours(now = DateTime.now().setZone(timezone)) {
@@ -302,7 +303,7 @@ function createSupportBot(options) {
       }
     }
 
-    resetChatState(chatId);
+    clearChatTimers(chatKey);
   }
 
   function touchChatActivity(bot, chatId, state) {
@@ -459,7 +460,7 @@ function createSupportBot(options) {
 
     const chatKey = String(ctx.chat.id);
     clearChatTimers(chatKey);
-    const state = getChatState(ctx.chat.id);
+    const state = mergeChatStateFromDisk(ctx.chat.id);
     syncChatUser(state, ctx.from);
     state.agentName = ai.pickRandomAgentName();
     state.history = [];

@@ -234,6 +234,31 @@ function buildStats(deps, ownerFilter = "") {
   const chartParticipants = chartLabels.map((k) => dayMap.get(k).participants);
   const chartUniqueJoins = chartLabels.map((k) => dayMap.get(k).uniqueJoins.size);
 
+  const participantFirstJoinDay = new Map();
+  for (const draw of draws) {
+    for (const participantId of asArray(draw.participantIds)) {
+      const joinedAt = draw.participantMeta?.[String(participantId)]?.updatedAt;
+      const joinDay = formatStatsDay(joinedAt, timezone);
+      if (!joinDay) {
+        continue;
+      }
+      const userKey = String(participantId);
+      const prev = participantFirstJoinDay.get(userKey);
+      if (!prev || joinDay < prev) {
+        participantFirstJoinDay.set(userKey, joinDay);
+      }
+    }
+  }
+  const chartTotalParticipants = chartLabels.map((day) => {
+    let count = 0;
+    for (const joinDay of participantFirstJoinDay.values()) {
+      if (joinDay <= day) {
+        count += 1;
+      }
+    }
+    return count;
+  });
+
   const recentDraws = [...draws]
     .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
     .slice(0, 50)
@@ -283,6 +308,7 @@ function buildStats(deps, ownerFilter = "") {
     chartDraws,
     chartParticipants,
     chartUniqueJoins,
+    chartTotalParticipants,
     recentDraws,
     organizerRows,
   };
@@ -359,7 +385,97 @@ function buildAdminUserProjectRows(deps) {
   return rows;
 }
 
-function filterAdminUserProjectRows(rows, filters) {
+function formatMoneyTotalsLocal(rub, usd, deps) {
+  const parts = [];
+  if (rub > 0 && deps.formatRubAmount) {
+    parts.push(deps.formatRubAmount(rub));
+  }
+  if (usd > 0 && deps.formatUsdAmount) {
+    parts.push(deps.formatUsdAmount(usd));
+  }
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+function buildAdminUserRows(deps, activityIndex) {
+  const projectRows = buildAdminUserProjectRows(deps);
+  const byUser = new Map();
+
+  for (const row of projectRows) {
+    const activity = getUserProjectActivity(activityIndex, row.userId, row.projectId);
+    let userRow = byUser.get(row.userId);
+    if (!userRow) {
+      userRow = {
+        userId: row.userId,
+        userLabel: row.userLabel,
+        projects: [],
+        participations: 0,
+        wins: 0,
+        winningsRub: 0,
+        winningsUsd: 0,
+        paidRub: 0,
+        paidUsd: 0,
+        fraudLabels: new Set(),
+        fraudDetails: [],
+        fraudDetailKeys: new Set(),
+        hasWallet: false,
+      };
+      byUser.set(row.userId, userRow);
+    }
+
+    userRow.projects.push({
+      projectName: row.projectName,
+      brandKey: row.brandKey,
+      refStatus: row.refStatus,
+      referralOwnerLabel: row.referralOwnerLabel,
+      referralOwnerId: row.referralOwnerId,
+      projectOwnerLabel: row.projectOwnerLabel,
+      hasWallet: row.hasWallet,
+    });
+    if (row.hasWallet) {
+      userRow.hasWallet = true;
+    }
+    userRow.participations += activity.participations;
+    userRow.wins += activity.wins;
+    userRow.winningsRub += activity.winningsRub;
+    userRow.winningsUsd += activity.winningsUsd;
+    userRow.paidRub += activity.paidRub;
+    userRow.paidUsd += activity.paidUsd;
+
+    for (const label of activity.fraudLabels) {
+      userRow.fraudLabels.add(label);
+    }
+    for (const detail of activity.fraudDetails) {
+      const detailKey = `${detail.kind}:${detail.drawId}:${detail.label}:${row.projectId}`;
+      if (userRow.fraudDetailKeys.has(detailKey)) {
+        continue;
+      }
+      userRow.fraudDetailKeys.add(detailKey);
+      userRow.fraudDetails.push({ ...detail, projectName: row.projectName });
+    }
+  }
+
+  return [...byUser.values()]
+    .map((row) => ({
+      userId: row.userId,
+      userLabel: row.userLabel,
+      projects: row.projects,
+      participations: row.participations,
+      wins: row.wins,
+      winningsRub: row.winningsRub,
+      winningsUsd: row.winningsUsd,
+      paidRub: row.paidRub,
+      paidUsd: row.paidUsd,
+      winningsText: formatMoneyTotalsLocal(row.winningsRub, row.winningsUsd, deps),
+      payoutsText: formatMoneyTotalsLocal(row.paidRub, row.paidUsd, deps),
+      fraudLabels: [...row.fraudLabels],
+      fraudDetails: row.fraudDetails,
+      hasFraud: row.fraudDetails.length > 0,
+      hasWallet: row.hasWallet,
+    }))
+    .sort((left, right) => left.userLabel.localeCompare(right.userLabel, "ru"));
+}
+
+function filterAdminUserRows(rows, filters) {
   const q = String(filters.q || "")
     .trim()
     .toLowerCase();
@@ -368,24 +484,30 @@ function filterAdminUserProjectRows(rows, filters) {
   const refFilter = String(filters.ref || "").trim();
 
   return rows.filter((row) => {
-    if (brand && row.brandKey !== brand) {
+    if (brand && !row.projects.some((project) => project.brandKey === brand)) {
       return false;
     }
-    if (refOwnerId && row.referralOwnerId !== refOwnerId) {
+    if (refOwnerId && !row.projects.some((project) => project.referralOwnerId === refOwnerId)) {
       return false;
     }
-    if (refFilter === "ref" && row.refStatus !== "ref") {
+    if (refFilter === "ref" && !row.projects.some((project) => project.refStatus === "ref")) {
       return false;
     }
-    if (refFilter === "non-ref" && row.refStatus !== "non-ref") {
+    if (refFilter === "non-ref" && !row.projects.some((project) => project.refStatus === "non-ref")) {
       return false;
     }
     if (q) {
+      const projectHaystack = row.projects
+        .map(
+          (project) =>
+            `${project.projectName} ${project.referralOwnerLabel} ${project.projectOwnerLabel}`,
+        )
+        .join(" ");
       const fraudHaystack = (row.fraudDetails || [])
         .map((detail) => `${detail.displayText || ""} ${(detail.linkedUserIds || []).join(" ")}`)
         .join(" ");
       const haystack =
-        `${row.userId} ${row.userLabel} ${row.projectName} ${row.referralOwnerLabel} ${(row.fraudLabels || []).join(" ")} ${fraudHaystack}`.toLowerCase();
+        `${row.userId} ${row.userLabel} ${projectHaystack} ${(row.fraudLabels || []).join(" ")} ${fraudHaystack}`.toLowerCase();
       if (!haystack.includes(q)) {
         return false;
       }
@@ -394,17 +516,45 @@ function filterAdminUserProjectRows(rows, filters) {
   });
 }
 
-function collectReferralOwnerOptions(rows, userProfiles) {
+function collectReferralOwnerOptions(rows) {
   const map = new Map();
   for (const row of rows) {
-    if (!row.referralOwnerId) {
-      continue;
+    for (const project of row.projects || []) {
+      if (!project.referralOwnerId) {
+        continue;
+      }
+      map.set(project.referralOwnerId, project.referralOwnerLabel);
     }
-    map.set(row.referralOwnerId, row.referralOwnerLabel);
   }
   return [...map.entries()]
     .map(([id, label]) => ({ id, label }))
     .sort((a, b) => a.label.localeCompare(b.label, "ru"));
+}
+
+function compareAdminUserRows(left, right, sortKey, sortDir) {
+  const dir = sortDir === "asc" ? 1 : -1;
+  if (sortKey === "winnings") {
+    if (left.winningsRub !== right.winningsRub) {
+      return (left.winningsRub - right.winningsRub) * dir;
+    }
+    return (left.winningsUsd - right.winningsUsd) * dir;
+  }
+  if (sortKey === "payouts") {
+    if (left.paidRub !== right.paidRub) {
+      return (left.paidRub - right.paidRub) * dir;
+    }
+    return (left.paidUsd - right.paidUsd) * dir;
+  }
+  return ((left[sortKey] || 0) - (right[sortKey] || 0)) * dir;
+}
+
+function sortAdminUserRows(rows, sortKey, sortDir) {
+  const allowed = new Set(["participations", "wins", "winnings", "payouts"]);
+  if (!allowed.has(sortKey)) {
+    return rows;
+  }
+  const direction = sortDir === "asc" ? "asc" : "desc";
+  return [...rows].sort((left, right) => compareAdminUserRows(left, right, sortKey, direction));
 }
 
 function renderRefStatusBadge(refStatus) {
@@ -417,20 +567,84 @@ function renderRefStatusBadge(refStatus) {
   return '<span class="badge badge-muted">—</span>';
 }
 
+function renderUserProjectsCell(projects) {
+  if (!projects.length) {
+    return "—";
+  }
+  return `<div class="user-projects">${projects
+    .map(
+      (project) => `<div class="user-project-item">
+        <span class="user-project-name">${escapeHtml(project.projectName)}</span>
+        ${renderRefStatusBadge(project.refStatus)}
+        ${project.referralOwnerLabel && project.referralOwnerLabel !== "—" ? `<span class="user-project-ref">${escapeHtml(project.referralOwnerLabel)}</span>` : ""}
+      </div>`,
+    )
+    .join("")}</div>`;
+}
+
 function renderAntiFraudCell(row) {
   if (!row.hasFraud) {
     return '<span class="badge badge-ok">Чисто</span>';
   }
 
-  const badges = row.fraudLabels
-    .map((label) => `<span class="badge badge-danger">${escapeHtml(label)}</span>`)
+  const groups = new Map();
+  for (const detail of row.fraudDetails) {
+    const kind = detail.kind || "other";
+    if (!groups.has(kind)) {
+      groups.set(kind, { label: detail.label, items: [] });
+    }
+    groups.get(kind).items.push(detail);
+  }
+
+  const kindTitles = {
+    ip: "Бот по IP",
+    wallet: "Мультиаккаунт",
+    subscription: "Подписка",
+    other: "Другое",
+  };
+
+  const blocks = [...groups.entries()]
+    .map(([kind, group]) => {
+      const items = group.items
+        .map((detail) => {
+          const drawTitle = detail.drawTitle ? `«${detail.drawTitle}»` : detail.drawId || "—";
+          const projectPart = detail.projectName ? `<span class="fraud-project">${escapeHtml(detail.projectName)}</span>` : "";
+          const linkedPart = detail.linkedUsersText
+            ? `<div class="fraud-linked">${escapeHtml(detail.linkedUsersText)}</div>`
+            : detail.reason
+              ? `<div class="fraud-linked">${escapeHtml(detail.reason)}</div>`
+              : "";
+          return `<div class="fraud-item">
+            ${projectPart}
+            <div class="fraud-draw">${escapeHtml(drawTitle)}</div>
+            ${linkedPart}
+          </div>`;
+        })
+        .join("");
+      const title = kindTitles[kind] || group.label || kind;
+      return `<div class="fraud-group">
+        <div class="fraud-group-title"><span class="badge badge-danger">${escapeHtml(title)}</span></div>
+        ${items}
+      </div>`;
+    })
     .join("");
 
-  const details = row.fraudDetails
-    .map((detail) => `<li>${escapeHtml(detail.displayText)}</li>`)
-    .join("");
+  return `<div class="fraud-panel">${blocks}</div>`;
+}
 
-  return `<div class="fraud-badges">${badges}</div>${details ? `<ul class="fraud-details">${details}</ul>` : ""}`;
+function renderSortHeader(label, columnKey, filters) {
+  const sort = filters.sort || "";
+  const dir = filters.dir === "asc" ? "asc" : "desc";
+  const nextDir = sort === columnKey && dir === "desc" ? "asc" : "desc";
+  const indicator = sort === columnKey ? (dir === "desc" ? " ↓" : " ↑") : "";
+  const params = new URLSearchParams();
+  if (filters.brand) params.set("brand", filters.brand);
+  if (filters.refOwnerId) params.set("refOwnerId", filters.refOwnerId);
+  if (filters.ref) params.set("ref", filters.ref);
+  if (filters.q) params.set("q", filters.q);
+  params.set("sort", columnKey);
+  params.set("dir", nextDir);
+  return `<th><a class="sort-link" href="/admin/users?${params.toString()}">${escapeHtml(label)}${indicator}</a></th>`;
 }
 
 function renderUsersPage(deps, viewModel) {
@@ -455,11 +669,8 @@ function renderUsersPage(deps, viewModel) {
     .map(
       (row) => `<tr>
         <td>${escapeHtml(row.userLabel)}<div class="mono">${escapeHtml(row.userId)}</div></td>
-        <td>${escapeHtml(row.projectName)}</td>
-        <td>${renderRefStatusBadge(row.refStatus)}</td>
+        <td>${renderUserProjectsCell(row.projects)}</td>
         <td>${renderAntiFraudCell(row)}</td>
-        <td>${escapeHtml(row.referralOwnerLabel)}${row.referralOwnerId ? `<div class="mono">${escapeHtml(row.referralOwnerId)}</div>` : ""}</td>
-        <td>${escapeHtml(row.projectOwnerLabel)}</td>
         <td>${row.hasWallet ? '<span class="badge badge-ok">Есть</span>' : '<span class="badge badge-muted">Нет</span>'}</td>
         <td>${row.participations}</td>
         <td>${row.wins}</td>
@@ -474,6 +685,8 @@ function renderUsersPage(deps, viewModel) {
   if (filters.refOwnerId) queryBase.set("refOwnerId", filters.refOwnerId);
   if (filters.ref) queryBase.set("ref", filters.ref);
   if (filters.q) queryBase.set("q", filters.q);
+  if (filters.sort) queryBase.set("sort", filters.sort);
+  if (filters.dir) queryBase.set("dir", filters.dir);
 
   const prevPage = page > 1 ? page - 1 : null;
   const nextPage = page < totalPages ? page + 1 : null;
@@ -504,7 +717,7 @@ function renderUsersPage(deps, viewModel) {
 
     <section class="panel">
       <h2>Фильтры</h2>
-      <p class="hint">Показывает, на каком проекте (бренде) пользователь чей реф. Данные из SQLite (<code>data/giveaway.db</code>).</p>
+      <p class="hint">Один пользователь — одна строка; проекты и реф-статус показаны в колонке «Проекты». Данные из SQLite (<code>data/giveaway.db</code>).</p>
       <form class="filters" method="get" action="/admin/users">
         <label>
           <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Бренд / проект</span>
@@ -544,19 +757,16 @@ function renderUsersPage(deps, viewModel) {
         <thead>
           <tr>
             <th>Пользователь</th>
-            <th>Проект</th>
-            <th>Реф</th>
+            <th>Проекты</th>
             <th>Антифрод</th>
-            <th>Реф организатора</th>
-            <th>Владелец проекта</th>
             <th>Кошелёк</th>
-            <th>Участий</th>
-            <th>Побед</th>
-            <th>Выигрыши</th>
-            <th>Выплаты</th>
+            ${renderSortHeader("Участия", "participations", filters)}
+            ${renderSortHeader("Побед", "wins", filters)}
+            ${renderSortHeader("Выигрыши", "winnings", filters)}
+            ${renderSortHeader("Выплаты", "payouts", filters)}
           </tr>
         </thead>
-        <tbody>${tableRows || "<tr><td colspan='11'>Нет записей по выбранным фильтрам</td></tr>"}</tbody>
+        <tbody>${tableRows || "<tr><td colspan='8'>Нет записей по выбранным фильтрам</td></tr>"}</tbody>
       </table>
       </div>
       <div class="pager">
@@ -632,6 +842,20 @@ function getAdminBaseStyles() {
     .fraud-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
     .fraud-details { margin: 4px 0 0; padding-left: 16px; color: #94a3b8; font-size: 12px; max-width: 360px; }
     .fraud-details li { margin-bottom: 2px; }
+    .fraud-panel { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
+    .fraud-group { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 10px; }
+    .fraud-group-title { margin-bottom: 6px; }
+    .fraud-item { padding: 6px 0; border-top: 1px solid #1e293b; font-size: 12px; }
+    .fraud-item:first-of-type { border-top: 0; padding-top: 0; }
+    .fraud-project { display: inline-block; color: #93c5fd; margin-right: 6px; font-size: 11px; }
+    .fraud-draw { color: #e2e8f0; font-weight: 600; margin-bottom: 2px; }
+    .fraud-linked { color: #94a3b8; line-height: 1.35; }
+    .user-projects { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
+    .user-project-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .user-project-name { font-weight: 600; color: #e2e8f0; }
+    .user-project-ref { font-size: 11px; color: #94a3b8; }
+    .sort-link { color: #cbd5e1; text-decoration: none; }
+    .sort-link:hover { color: #93c5fd; text-decoration: underline; }
   `;
 }
 
@@ -718,10 +942,15 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
 
   const chartPayload = JSON.stringify({
     labels: stats.chartLabels.map((label) => label.slice(5)),
-    draws: stats.chartDraws,
-    participants: stats.chartParticipants,
     uniqueJoins: stats.chartUniqueJoins,
+    totalParticipants: stats.chartTotalParticipants,
     status: stats.statusCounts,
+    referrals: stats.organizerRows
+      .filter((row) => row.referrals > 0)
+      .map((row) => ({
+        label: labelForUser(row.id, userProfiles),
+        count: row.referrals,
+      })),
   });
 
   return `<!doctype html>
@@ -753,7 +982,6 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
       <div class="stat"><span>Активных</span><b>${stats.totals.active}</b></div>
       <div class="stat"><span>Завершённых</span><b>${stats.totals.finished}</b></div>
       <div class="stat"><span>Участников (уник.)</span><b>${stats.totals.uniqueParticipants}</b></div>
-      <div class="stat"><span>Рефералов${selectedOwner ? "" : " (все)"}</span><b>${stats.totals.referrals}</b></div>
     </div>
 
     <section class="panel">
@@ -775,16 +1003,16 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
       <h2>Графики (14 дней)</h2>
       <div class="charts-grid">
         <div class="chart-card" style="grid-column: 1 / -1;">
-          <h3>Розыгрыши и участники</h3>
+          <h3>Участники</h3>
           <div class="chart-box"><canvas id="chartActivity"></canvas></div>
-        </div>
-        <div class="chart-card">
-          <h3>Новые участники по дням</h3>
-          <div class="chart-box chart-box-sm"><canvas id="chartJoins"></canvas></div>
         </div>
         <div class="chart-card">
           <h3>Статусы розыгрышей</h3>
           <div class="chart-box chart-box-sm"><canvas id="chartStatus"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <h3>Рефералы по организаторам</h3>
+          <div class="chart-box chart-box-sm"><canvas id="chartReferrals"></canvas></div>
         </div>
       </div>
     </section>
@@ -834,17 +1062,17 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
             labels: payload.labels,
             datasets: [
               {
-                label: "Новых розыгрышей",
-                data: payload.draws,
-                borderColor: "#60a5fa",
-                backgroundColor: "rgba(96, 165, 250, 0.18)",
+                label: "Новые участники",
+                data: payload.uniqueJoins,
+                borderColor: "#facc15",
+                backgroundColor: "rgba(250, 204, 21, 0.18)",
                 fill: true,
                 tension: 0.3,
                 yAxisID: "y",
               },
               {
-                label: "Записей участия",
-                data: payload.participants,
+                label: "Всего участников",
+                data: payload.totalParticipants,
                 borderColor: "#4ade80",
                 backgroundColor: "rgba(74, 222, 128, 0.12)",
                 fill: true,
@@ -861,41 +1089,14 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
                 position: "left",
                 ticks: { color: axisColor, precision: 0 },
                 grid: { color: gridColor },
-                title: { display: true, text: "Розыгрыши", color: axisColor },
+                title: { display: true, text: "Новые", color: axisColor },
               },
               y1: {
                 position: "right",
                 ticks: { color: axisColor, precision: 0 },
                 grid: { drawOnChartArea: false },
-                title: { display: true, text: "Участия", color: axisColor },
+                title: { display: true, text: "Всего", color: axisColor },
               },
-            },
-          },
-        });
-      }
-
-      const joinsCtx = document.getElementById("chartJoins");
-      if (joinsCtx) {
-        new Chart(joinsCtx, {
-          type: "bar",
-          data: {
-            labels: payload.labels,
-            datasets: [
-              {
-                label: "Уникальных вступлений",
-                data: payload.uniqueJoins,
-                backgroundColor: "rgba(250, 204, 21, 0.75)",
-                borderColor: "#eab308",
-                borderWidth: 1,
-                borderRadius: 6,
-              },
-            ],
-          },
-          options: {
-            ...commonOptions,
-            scales: {
-              x: { ticks: { color: axisColor }, grid: { color: gridColor } },
-              y: { ticks: { color: axisColor, precision: 0 }, grid: { color: gridColor } },
             },
           },
         });
@@ -927,6 +1128,36 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
             plugins: {
               ...commonOptions.plugins,
               legend: { position: "bottom", labels: { color: axisColor } },
+            },
+          },
+        });
+      }
+
+      const referralsCtx = document.getElementById("chartReferrals");
+      if (referralsCtx) {
+        const refs = payload.referrals || [];
+        const refColors = [
+          "#60a5fa", "#4ade80", "#facc15", "#f472b6", "#a78bfa", "#fb923c",
+          "#22d3ee", "#f87171", "#34d399", "#818cf8", "#fcd34d", "#c084fc",
+        ];
+        new Chart(referralsCtx, {
+          type: "pie",
+          data: {
+            labels: refs.map((item) => item.label),
+            datasets: [
+              {
+                data: refs.map((item) => item.count),
+                backgroundColor: refs.map((_, index) => refColors[index % refColors.length]),
+                borderColor: "#0f172a",
+                borderWidth: 2,
+              },
+            ],
+          },
+          options: {
+            ...commonOptions,
+            plugins: {
+              ...commonOptions.plugins,
+              legend: { position: "bottom", labels: { color: axisColor, boxWidth: 12, font: { size: 11 } } },
             },
           },
         });
@@ -1192,6 +1423,8 @@ function registerAdminDashboard(app, deps) {
       refOwnerId: String(req.query.refOwnerId || "").trim(),
       ref: String(req.query.ref || "").trim(),
       q: String(req.query.q || "").trim(),
+      sort: String(req.query.sort || "").trim(),
+      dir: String(req.query.dir || "desc").trim(),
     };
     const page = Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1);
 
@@ -1200,11 +1433,13 @@ function registerAdminDashboard(app, deps) {
     const activityIndex = buildUserProjectActivityIndex(deps, profiles, (userId) =>
       labelForUser(userId, profiles),
     );
-    const allRows = buildAdminUserProjectRows(deps).map((row) => ({
-      ...row,
-      ...getUserProjectActivity(activityIndex, row.userId, row.projectId),
-    }));
-    const filteredRows = filterAdminUserProjectRows(allRows, filters);
+    const projectRows = buildAdminUserProjectRows(deps);
+    const allRows = sortAdminUserRows(
+      buildAdminUserRows(deps, activityIndex),
+      filters.sort,
+      filters.dir,
+    );
+    const filteredRows = filterAdminUserRows(allRows, filters);
     const totalPages = Math.max(1, Math.ceil(filteredRows.length / USERS_PAGE_SIZE));
     const safePage = Math.min(page, totalPages);
     const offset = (safePage - 1) * USERS_PAGE_SIZE;
@@ -1212,9 +1447,9 @@ function registerAdminDashboard(app, deps) {
 
     const stats = {
       usersTotal: Object.keys(profiles.users || {}).length,
-      bindingsTotal: allRows.length,
-      refsTotal: allRows.filter((row) => row.refStatus === "ref").length,
-      nonRefsTotal: allRows.filter((row) => row.refStatus === "non-ref").length,
+      bindingsTotal: projectRows.length,
+      refsTotal: projectRows.filter((row) => row.refStatus === "ref").length,
+      nonRefsTotal: projectRows.filter((row) => row.refStatus === "non-ref").length,
     };
 
     res.type("html").send(
@@ -1226,7 +1461,7 @@ function registerAdminDashboard(app, deps) {
         totalAll: allRows.length,
         filters,
         brands: collectBrandOptions(projectsList),
-        refOwners: collectReferralOwnerOptions(allRows, profiles),
+        refOwners: collectReferralOwnerOptions(allRows),
         stats,
       }),
     );
