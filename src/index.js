@@ -1223,7 +1223,9 @@ function buildWinnerDepositAddressRequestHtml(draw) {
   return [
     "✅ Проверка пройдена!",
     "",
-    `Теперь пришлите адрес депозита TRC-20 с проекта ${projectLink} одним сообщением.`,
+    `Отправьте <b>АКТУАЛЬНЫЙ</b> адрес депозита TRC-20 с проекта ${projectLink} одним сообщением.`,
+    "Если он будет неактуальный — приз улетит вникуда!",
+    "",
     "Пример: <code>TWn.....8Nd</code>",
     "",
     `У вас есть ${WINNER_DEPOSIT_ADDRESS_MINUTES} минут — иначе приз сгорит.`,
@@ -3310,12 +3312,19 @@ async function tryAutoJoinDraw(draw, userId) {
   return { joined: false };
 }
 
-async function sendTrc20Guide(ctx) {
+async function sendTrc20Guide(ctx, options = {}) {
+  const projectLinkHtml = options.projectId
+    ? buildProjectLinkHtml(options.projectId)
+    : null;
+  const step1 = projectLinkHtml
+    ? `Шаг 1/3: откройте проект ${projectLinkHtml} и нажмите кнопку депозита.`
+    : "Шаг 1/3: откройте проект и нажмите кнопку депозита.";
   const stepTexts = [
-    "Шаг 1/3: откройте проект и нажмите кнопку депозита.",
+    step1,
     "Шаг 2/3: выберите криптовалюту и сеть Tether TRC-20.",
     "Шаг 3/3: скопируйте адрес кошелька кнопкой «Копировать».",
   ];
+  const useHtml = Boolean(projectLinkHtml);
 
   const sentMessageIds = [];
 
@@ -3324,7 +3333,11 @@ async function sendTrc20Guide(ctx) {
     if (!fs.existsSync(imagePath)) {
       continue;
     }
-    const photoMessage = await ctx.replyWithPhoto({ source: imagePath }, { caption: stepTexts[i] });
+    const photoOptions = { caption: stepTexts[i] };
+    if (useHtml && i === 0) {
+      photoOptions.parse_mode = "HTML";
+    }
+    const photoMessage = await ctx.replyWithPhoto({ source: imagePath }, photoOptions);
     sentMessageIds.push(photoMessage.message_id);
   }
 
@@ -9296,7 +9309,7 @@ bot.action(/^wp:guide:(.+)$/, async (ctx) => {
       return;
     }
     await ctx.answerCbQuery();
-    await sendTrc20Guide(ctx);
+    await sendTrc20Guide(ctx, { projectId: draw.projectId });
   } catch (error) {
     console.error("Ошибка гайда TRC-20 для победителя:", error);
     try {
