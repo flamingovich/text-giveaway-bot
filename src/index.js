@@ -1034,6 +1034,15 @@ function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired, hasFraud
 }
 
 const DEFAULT_WINNER_CONFIRM_MINUTES = 30;
+const WINNER_DEPOSIT_ADDRESS_MINUTES = 20;
+
+function drawAsksWalletOnJoin(draw) {
+  return draw?.askWalletOnJoin !== false;
+}
+
+function drawAsksWinnerDepositAddress(draw) {
+  return Boolean(draw?.projectId) && !drawAsksWalletOnJoin(draw);
+}
 const WINNER_NOTIFY_SEND_ATTEMPTS = 3;
 const WINNER_NOTIFY_SEND_RETRY_DELAYS_MS = [2000, 5000];
 
@@ -1104,7 +1113,7 @@ function isWinnerNotificationExpired(notifyInfo, draw = null) {
   if (notifyInfo.status === "expired") {
     return true;
   }
-  if (notifyInfo.verifiedAt || notifyInfo.status === "confirmed") {
+  if (notifyInfo.verifiedAt || notifyInfo.status === "confirmed" || notifyInfo.status === "awaiting_address") {
     return false;
   }
   if (notifyInfo.status === "forfeited" || notifyInfo.antiFraudFlag) {
@@ -1201,10 +1210,70 @@ function buildWinnerWinMessageHtml(draw, payoutPrize, options = {}) {
 function buildWinnerExpiredText(draw) {
   const windowLabel = formatWinnerConfirmWindowAfterResults(draw);
   return [
-    `⏰ Ваш приз сгорел, так как вы не отметились вовремя (<i>${escapeHtml(windowLabel)} после итогов</i>).`,
+    "⏰ Приз сгорел — вы не подтвердили получение вовремя.",
+    "",
+    `Срок был: <i>${escapeHtml(windowLabel)} после итогов</i>.`,
     "",
     "Если вы считаете, что произошла ошибка, пишите в поддержку — @rollerbot_support_bot",
   ].join("\n");
+}
+
+function buildWinnerDepositAddressRequestHtml(draw) {
+  const projectLink = draw.projectId ? buildProjectLinkHtml(draw.projectId) : "<b>проекте</b>";
+  return [
+    "✅ Проверка пройдена!",
+    "",
+    `Теперь пришлите адрес депозита TRC-20 с проекта ${projectLink} одним сообщением.`,
+    "Пример: <code>TWn.....8Nd</code>",
+    "",
+    `У вас есть ${WINNER_DEPOSIT_ADDRESS_MINUTES} минут — иначе приз сгорит.`,
+  ].join("\n");
+}
+
+function buildWinnerDepositAddressReceivedHtml(address) {
+  return [
+    `✅ Адрес получен: <code>${escapeHtml(address)}</code>`,
+    "Ожидайте выплату от организатора.",
+  ].join("\n");
+}
+
+function buildWinnerDepositAddressExpiredText() {
+  return [
+    `⏰ Приз сгорел — вы не успели отправить адрес депозита (${WINNER_DEPOSIT_ADDRESS_MINUTES} минут).`,
+    "",
+    "Если вы считаете, что произошла ошибка, пишите в поддержку — @rollerbot_support_bot",
+  ].join("\n");
+}
+
+function getWinnerDepositAddressKeyboard(drawId) {
+  return Markup.inlineKeyboard([
+    Markup.button.callback("Где взять адрес кошелька?", `wp:guide:${drawId}`),
+  ]);
+}
+
+function getWinnerPanelTrcDisplay(draw, notifyInfo, projectData) {
+  if (drawAsksWinnerDepositAddress(draw)) {
+    if (notifyInfo?.status === "awaiting_address") {
+      return { text: "Ожидание адреса", copyable: false };
+    }
+    if (
+      notifyInfo?.forfeitureReason === "address_timeout" ||
+      (notifyInfo?.status === "forfeited" && notifyInfo?.addressExpired)
+    ) {
+      return { text: "Не успел отправить адрес", copyable: false };
+    }
+    const fromNotify = String(notifyInfo?.trc20Address || "").trim();
+    if (fromNotify && fromNotify !== "не указан" && fromNotify !== "Не указан") {
+      return { text: fromNotify, copyable: true };
+    }
+    return { text: "Не указан", copyable: false };
+  }
+
+  const fromProfile = String(projectData?.trc20Address || "").trim();
+  if (fromProfile) {
+    return { text: fromProfile, copyable: true };
+  }
+  return { text: "Не указан", copyable: false };
 }
 
 function formatWinnerDeliveryFailureReason(errorMessage) {
@@ -1297,6 +1366,9 @@ function getWinnerForfeitedDeliveryReason(notifyInfo) {
   }
   if (notifyInfo.forfeitureReason === "unsubscribed") {
     return "Отписка";
+  }
+  if (notifyInfo.forfeitureReason === "address_timeout") {
+    return "Нет адреса";
   }
   return "";
 }
@@ -2240,7 +2312,9 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     ...notifyExisting,
     ...(subscriptionCheck?.ok ? { channelSubscribed: subscriptionCheck.subscribed } : {}),
   });
-  const trc = projectData.trc20Address || "не указан";
+  const trc = drawAsksWinnerDepositAddress(draw)
+    ? ""
+    : projectData.trc20Address || "не указан";
   const payoutPrize = getWinnerPayoutText(draw, projectData, {
     hasFraudFlag: antiFraud.hasFraudFlag,
   });
@@ -2287,16 +2361,24 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     ? DateTime.now().setZone(TIMEZONE).plus({ [windowCfg.unit]: windowCfg.value }).toISO()
     : null;
 
-  const message = await bot.telegram.sendMessage(
-    userId,
-    [
-      buildWinnerWinMessageHtml(draw, payoutPrize, {
-        antiFraud: false,
-      }),
-      "",
+  const winMessageLines = [
+    buildWinnerWinMessageHtml(draw, payoutPrize, {
+      antiFraud: false,
+    }),
+    "",
+  ];
+  if (drawAsksWinnerDepositAddress(draw)) {
+    winMessageLines.push("Подтвердите, что вы человек — выберите правильный ответ ниже.");
+  } else {
+    winMessageLines.push(
       "Пройди проверку для подтверждения и получения приза 👇",
       `${task.a} + ${task.b} = ?`,
-    ].join("\n"),
+    );
+  }
+
+  const message = await bot.telegram.sendMessage(
+    userId,
+    winMessageLines.join("\n"),
     {
       parse_mode: "HTML",
       ...Markup.inlineKeyboard(
@@ -2378,7 +2460,7 @@ async function markWinnerNotificationExpired(draw, userId) {
   }
 
   const notify = draw.winnerNotifications[String(userId)];
-  if (notify.status === "expired") {
+  if (notify.status === "expired" || notify.status === "awaiting_address" || notify.status === "confirmed") {
     return false;
   }
 
@@ -2420,6 +2502,55 @@ async function markWinnerNotificationExpired(draw, userId) {
   }
 
   return true;
+}
+
+async function markWinnerDepositAddressExpired(draw, userId) {
+  if (!draw.winnerNotifications) {
+    return false;
+  }
+  const notify = draw.winnerNotifications[String(userId)];
+  if (!notify || notify.status !== "awaiting_address") {
+    return false;
+  }
+
+  notify.status = "forfeited";
+  notify.antiFraudFlag = true;
+  notify.forfeitureReason = "address_timeout";
+  notify.addressExpired = true;
+  notify.forfeitedAt = new Date().toISOString();
+
+  try {
+    await bot.telegram.sendMessage(userId, buildWinnerDepositAddressExpiredText(), {
+      parse_mode: "HTML",
+    });
+  } catch {
+    // ignore
+  }
+
+  return true;
+}
+
+async function requestWinnerDepositAddress(draw, userId, notify) {
+  const addressExpiresAt = DateTime.now()
+    .setZone(TIMEZONE)
+    .plus({ minutes: WINNER_DEPOSIT_ADDRESS_MINUTES })
+    .toISO();
+
+  notify.status = "awaiting_address";
+  notify.addressExpiresAt = addressExpiresAt;
+  notify.trc20Address = "";
+
+  const message = await bot.telegram.sendMessage(
+    userId,
+    buildWinnerDepositAddressRequestHtml(draw),
+    {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+      ...getWinnerDepositAddressKeyboard(draw.id),
+    },
+  );
+  notify.addressPromptMessageId = message.message_id;
+  return message;
 }
 
 async function markWinnerSubscriptionForfeited(draw, userId) {
@@ -2579,6 +2710,7 @@ async function processWinnerConfirmTimeouts(data) {
 
       if (
         notify.status === "confirmed" ||
+        notify.status === "awaiting_address" ||
         notify.status === "expired" ||
         notify.status === "forfeited" ||
         notify.status === "failed"
@@ -2600,6 +2732,44 @@ async function processWinnerConfirmTimeouts(data) {
       }
 
       const changed = await markWinnerNotificationExpired(draw, userId);
+      if (changed) {
+        hasChanges = true;
+      }
+    }
+  }
+
+  return hasChanges;
+}
+
+async function processWinnerDepositAddressTimeouts(data) {
+  const now = DateTime.now().setZone(TIMEZONE);
+  let hasChanges = false;
+
+  for (const draw of data.draws) {
+    if (draw.status !== DRAW_STATUS.FINISHED || !draw.winnerNotifications) {
+      continue;
+    }
+    if (!drawAsksWinnerDepositAddress(draw)) {
+      continue;
+    }
+
+    for (const [userIdRaw, notify] of Object.entries(draw.winnerNotifications)) {
+      const userId = Number(userIdRaw);
+      if (!Number.isInteger(userId)) {
+        continue;
+      }
+      if (notify.status !== "awaiting_address" || notify.paidAt) {
+        continue;
+      }
+
+      const expiresAt = notify.addressExpiresAt
+        ? DateTime.fromISO(notify.addressExpiresAt, { zone: TIMEZONE })
+        : null;
+      if (!expiresAt?.isValid || expiresAt > now) {
+        continue;
+      }
+
+      const changed = await markWinnerDepositAddressExpired(draw, userId);
       if (changed) {
         hasChanges = true;
       }
@@ -3167,6 +3337,74 @@ async function sendTrc20Guide(ctx) {
   return sentMessageIds;
 }
 
+function findAwaitingWinnerDepositAddress(userId) {
+  const data = readData();
+  const userKey = String(userId);
+  let best = null;
+  for (const draw of data.draws || []) {
+    if (draw.status !== DRAW_STATUS.FINISHED || !drawAsksWinnerDepositAddress(draw)) {
+      continue;
+    }
+    const notify = draw.winnerNotifications?.[userKey];
+    if (!notify || notify.status !== "awaiting_address") {
+      continue;
+    }
+    const expiresAt = notify.addressExpiresAt
+      ? DateTime.fromISO(notify.addressExpiresAt, { zone: TIMEZONE })
+      : null;
+    if (expiresAt?.isValid && expiresAt <= DateTime.now().setZone(TIMEZONE)) {
+      continue;
+    }
+    if (
+      !best ||
+      String(notify.verifiedAt || notify.addressExpiresAt || "") >
+        String(best.notify.verifiedAt || best.notify.addressExpiresAt || "")
+    ) {
+      best = { data, draw, notify };
+    }
+  }
+  return best;
+}
+
+async function tryHandleWinnerDepositAddressMessage(ctx) {
+  const userId = ctx.from?.id;
+  if (!userId) {
+    return false;
+  }
+
+  const pending = findAwaitingWinnerDepositAddress(userId);
+  if (!pending) {
+    return false;
+  }
+
+  const text = String(ctx.message?.text || "").trim();
+  if (text.startsWith("/")) {
+    return false;
+  }
+
+  if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(text)) {
+    await ctx.reply(
+      "Неверный формат TRC-20 адреса.\nПример: <code>TWn.....8Nd</code>",
+      { parse_mode: "HTML" },
+    );
+    return true;
+  }
+
+  const { data, draw, notify } = pending;
+  const liveNotify = draw.winnerNotifications?.[String(userId)];
+  if (!liveNotify || liveNotify.status !== "awaiting_address") {
+    return false;
+  }
+
+  liveNotify.trc20Address = text;
+  liveNotify.status = "confirmed";
+  liveNotify.addressReceivedAt = new Date().toISOString();
+  writeData(data);
+
+  await ctx.reply(buildWinnerDepositAddressReceivedHtml(text), { parse_mode: "HTML" });
+  return true;
+}
+
 async function startWinnersFlow(ctx, drawId) {
   if (ctx.chat?.type !== "private") {
     await ctx.reply("Откройте личный чат с ботом.");
@@ -3256,6 +3494,11 @@ async function schedulerTick() {
 
   const timeoutChanges = await processWinnerConfirmTimeouts(data);
   if (timeoutChanges) {
+    hasChanges = true;
+  }
+
+  const addressTimeoutChanges = await processWinnerDepositAddressTimeouts(data);
+  if (addressTimeoutChanges) {
     hasChanges = true;
   }
 
@@ -3716,10 +3959,12 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const avatar = meta.avatarFileId
     ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="winner-card-avatar" />`
     : `<div class="winner-card-avatar winner-card-avatar-fallback" style="${getAvatarFallbackStyle(winnerId)}">${escapeHtml(initial)}</div>`;
-  const trcAddress = projectData.trc20Address || "Не указан";
   const notifyInfo = winnerNotifications[String(winnerId)];
+  const trcDisplay = getWinnerPanelTrcDisplay(draw, notifyInfo, projectData);
+  const trcAddress = trcDisplay.text;
   const isPaid = Boolean(notifyInfo?.paidAt);
   const isVerified = Boolean(notifyInfo?.verifiedAt) || notifyInfo?.status === "confirmed";
+  const isAwaitingAddress = notifyInfo?.status === "awaiting_address";
   const isDeliveryFailed = notifyInfo?.status === "failed";
   const deliveryFailureReason = isDeliveryFailed ? getWinnerDeliveryFailureReason(notifyInfo) : "";
   const canResendNotification =
@@ -3731,7 +3976,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const forfeitedDeliveryReason = getWinnerForfeitedDeliveryReason(notifyInfo);
   const payoutRow = getWinnerPayoutRowHtml(draw, projectData, {
     isPaid,
-    isExpired,
+    isExpired: isExpired || notifyInfo?.forfeitureReason === "address_timeout",
     hasFraudFlag: isPrizeForfeited,
   });
   const refBadge = projectData.selfReportedNonReferral
@@ -3751,6 +3996,8 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     ? `<span class="winner-badge winner-badge-danger">Приз сгорел${
         forfeitedDeliveryReason ? ` (${escapeHtml(forfeitedDeliveryReason)})` : ""
       }</span>`
+    : isAwaitingAddress
+      ? `<span class="winner-badge">Ожидает адрес</span>`
     : isVerified
     ? `<span class="winner-badge winner-badge-ok">Отметился</span>`
     : isDeliveryFailed
@@ -3763,15 +4010,21 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const antiFraudBadges = antiFraud.labels
     .map((label) => `<span class="winner-badge winner-badge-danger">${escapeHtml(label)}</span>`)
     .join("");
-  const copyBtn =
-    trcAddress !== "Не указан"
+  const copyBtn = trcDisplay.copyable
       ? `<button type="button" class="winner-copy-btn" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
       : "";
+  const canMarkPaid =
+    !isPaid &&
+    !isExpired &&
+    !isPrizeForfeited &&
+    !isDeliveryFailed &&
+    !isAwaitingAddress &&
+    (!drawAsksWinnerDepositAddress(draw) || trcDisplay.copyable);
   const winnerActionButtons = canResendNotification
     ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/notify/${encodeURIComponent(String(winnerId))}">
         <button type="submit" class="winner-action-btn">Оповестить заново</button>
       </form>`
-    : !isPaid && !isExpired && !isPrizeForfeited && !isDeliveryFailed
+    : canMarkPaid
       ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
           <button type="submit" class="winner-action-btn">Оплатил</button>
         </form>`
@@ -3830,6 +4083,8 @@ function summarizeWinnerNotifyForFingerprint(notify) {
     deliveryFailureReason: notify.deliveryFailureReason || "",
     forfeitureReason: notify.forfeitureReason || "",
     channelSubscribed: notify.channelSubscribed,
+    trc20Address: notify.trc20Address || "",
+    addressExpiresAt: notify.addressExpiresAt || "",
   };
 }
 
@@ -3845,7 +4100,9 @@ function buildPanelLiveFingerprint(draws, userProfiles) {
         notify: summarizeWinnerNotifyForFingerprint(notify),
         referralVerified: Boolean(projectData.referralVerified),
         selfReportedNonReferral: Boolean(projectData.selfReportedNonReferral),
-        trc20Address: projectData.trc20Address || "",
+        trc20Address: drawAsksWinnerDepositAddress(draw)
+          ? notify.trc20Address || ""
+          : projectData.trc20Address || "",
         antiFraudLabels: antiFraud.labels,
       };
     });
@@ -4494,6 +4751,63 @@ ${getPanelFluidTypographyVars()}
     }
     .draw-block-confirm {
       padding: 8px 10px;
+    }
+    .draw-check-field {
+      margin-top: 6px;
+      overflow: visible;
+      max-height: none;
+    }
+    .draw-check-label {
+      display: flex !important;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      margin: 0 !important;
+      padding: 0 !important;
+      min-height: 0 !important;
+      height: auto !important;
+      line-height: 1.2 !important;
+      font-weight: 500 !important;
+      color: inherit !important;
+      font-size: inherit !important;
+    }
+    .draw-check {
+      appearance: auto !important;
+      -webkit-appearance: checkbox !important;
+      width: 16px !important;
+      height: 16px !important;
+      min-width: 16px !important;
+      max-width: 16px !important;
+      min-height: 16px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border-radius: 4px !important;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 35%, transparent) !important;
+      background: var(--tg-theme-secondary-bg-color, #fff) !important;
+      accent-color: var(--tg-theme-button-color, var(--primary));
+      flex-shrink: 0;
+      box-shadow: none !important;
+    }
+    .draw-check-text {
+      display: block;
+      min-width: 0;
+      flex: 1;
+      line-height: 1.2;
+    }
+    .draw-check-title {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--tg-theme-text-color, var(--text));
+      line-height: 1.2;
+    }
+    .draw-check-hint {
+      display: block;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.3;
+      color: var(--tg-theme-hint-color, var(--sub));
+      opacity: 0.9;
     }
     .projects-list,
     .channels-list,
@@ -6575,6 +6889,14 @@ ${getPanelFluidTypographyVars()}
                 </div>
               </div>
             </div>
+            <div class="draw-field draw-check-field">
+              <label class="draw-check-label">
+                <input class="draw-check" type="checkbox" name="askWalletOnJoin" value="1" checked />
+                <span class="draw-check-text">
+                  <span class="draw-check-title">Просить кошелёк при участии</span>
+                </span>
+              </label>
+            </div>
           </div>
 
           <input type="hidden" name="publishTarget" value="channel" />
@@ -7576,9 +7898,15 @@ async function renderPanelForUserWithRate(res, webUser, message) {
   if (!WEB_ONLY) {
     const data = readData();
     const timeoutChanges = await processWinnerConfirmTimeouts(data);
+    const addressTimeoutChanges = await processWinnerDepositAddressTimeouts(data);
     const subscriptionChanges = await processWinnerChannelSubscriptions(data);
     const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
-    if (timeoutChanges || subscriptionChanges || permanentDeliveryChanges) {
+    if (
+      timeoutChanges ||
+      addressTimeoutChanges ||
+      subscriptionChanges ||
+      permanentDeliveryChanges
+    ) {
       writeData(data);
     }
   }
@@ -7656,9 +7984,15 @@ panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res)
     if (!WEB_ONLY) {
       const data = readData();
       const timeoutChanges = await processWinnerConfirmTimeouts(data);
+      const addressTimeoutChanges = await processWinnerDepositAddressTimeouts(data);
       const subscriptionChanges = await processWinnerChannelSubscriptions(data);
       const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
-      if (timeoutChanges || subscriptionChanges || permanentDeliveryChanges) {
+      if (
+        timeoutChanges ||
+        addressTimeoutChanges ||
+        subscriptionChanges ||
+        permanentDeliveryChanges
+      ) {
         writeData(data);
       }
     }
@@ -8094,6 +8428,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       winnerNotifications: {},
       winnerConfirmValue: normalizedWinnerConfirmValue,
       winnerConfirmUnit: normalizedWinnerConfirmUnit,
+      askWalletOnJoin: String(body.askWalletOnJoin || "") === "1",
       publishTarget,
     };
 
@@ -8699,6 +9034,13 @@ bot.command("refresh_posts", async (ctx) => {
 bot.on("text", async (ctx) => {
   upsertUserMeta(ctx.from);
 
+  if (ctx.chat?.type === "private") {
+    const handled = await tryHandleWinnerDepositAddressMessage(ctx);
+    if (handled) {
+      return;
+    }
+  }
+
   if (!isAdmin(ctx)) {
     return;
   }
@@ -8857,8 +9199,12 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
       return;
     }
 
-    if (notify.verifiedAt || notify.status === "confirmed") {
-      await ctx.answerCbQuery("Вы уже прошли проверку ✅");
+    if (notify.verifiedAt || notify.status === "confirmed" || notify.status === "awaiting_address") {
+      await ctx.answerCbQuery(
+        notify.status === "awaiting_address"
+          ? "Проверка уже пройдена — пришлите адрес депозита."
+          : "Вы уже прошли проверку ✅",
+      );
       return;
     }
 
@@ -8890,6 +9236,36 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
 
     winnerVerificationSessions.delete(sessionKey);
     notify.verifiedAt = new Date().toISOString();
+
+    if (drawAsksWinnerDepositAddress(draw)) {
+      try {
+        await requestWinnerDepositAddress(draw, userId, notify);
+        writeData(data);
+        await ctx.answerCbQuery("Проверка пройдена ✅");
+      } catch (error) {
+        notify.status = "awaiting_address";
+        notify.addressExpiresAt = DateTime.now()
+          .setZone(TIMEZONE)
+          .plus({ minutes: WINNER_DEPOSIT_ADDRESS_MINUTES })
+          .toISO();
+        writeData(data);
+        await ctx.answerCbQuery("Проверка пройдена ✅");
+        try {
+          await ctx.reply(
+            buildWinnerDepositAddressRequestHtml(draw),
+            {
+              parse_mode: "HTML",
+              link_preview_options: { is_disabled: true },
+              ...getWinnerDepositAddressKeyboard(draw.id),
+            },
+          );
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+
     notify.status = "confirmed";
     writeData(data);
 
@@ -8901,6 +9277,29 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
       await ctx.answerCbQuery("Не удалось обработать ответ. Попробуйте ещё раз.");
     } catch {
       // ignore secondary callback errors
+    }
+  }
+});
+
+bot.action(/^wp:guide:(.+)$/, async (ctx) => {
+  const drawId = ctx.match[1];
+  const userId = ctx.from.id;
+  try {
+    const data = readData();
+    const draw = data.draws.find((item) => item.id === drawId);
+    const notify = draw?.winnerNotifications?.[String(userId)];
+    if (!draw || !notify || notify.status !== "awaiting_address") {
+      await ctx.answerCbQuery("Сейчас адрес не ожидается.");
+      return;
+    }
+    await ctx.answerCbQuery();
+    await sendTrc20Guide(ctx);
+  } catch (error) {
+    console.error("Ошибка гайда TRC-20 для победителя:", error);
+    try {
+      await ctx.answerCbQuery("Не удалось отправить гайд.");
+    } catch {
+      // ignore
     }
   }
 });
@@ -8989,6 +9388,9 @@ async function bootstrap() {
     await syncAllOrganizerPanelMenus();
     const data = readData();
     let bootDataChanged = await processWinnerConfirmTimeouts(data);
+    if (await processWinnerDepositAddressTimeouts(data)) {
+      bootDataChanged = true;
+    }
     if (await processWinnerChannelSubscriptions(data)) {
       bootDataChanged = true;
     }

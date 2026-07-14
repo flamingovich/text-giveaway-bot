@@ -416,6 +416,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           <button type="button" class="join-btn join-btn-secondary" id="refConfirmBtn"><span class="join-btn-label">Подтвердить статус реферала</span></button>
           <div id="refConfirmStatus" class="join-ref-status hidden" role="status"></div>
           <button type="button" class="join-btn join-btn-primary join-btn-locked" id="registrationDoneBtn" disabled>${JOIN_BTN_LOCK}<span class="join-btn-label">Я зарегистрировался</span></button>
+          <button type="button" class="join-btn join-btn-secondary" id="registrationNonRefBtn"><span class="join-btn-label">Я не реферал</span></button>
         </div>`,
       )}
 
@@ -1323,7 +1324,29 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       backdrop.setAttribute("aria-hidden", "true");
     }
 
-    function openJoinBoostSheet(payload) {
+    function getBoostDismissStorageKey() {
+      return "joinBoostDismissed:" + String(drawId || "");
+    }
+
+    function wasJoinBoostDismissedForDraw() {
+      if (!drawId) return false;
+      try {
+        return window.localStorage.getItem(getBoostDismissStorageKey()) === "1";
+      } catch {
+        return false;
+      }
+    }
+
+    function markJoinBoostDismissedForDraw() {
+      if (!drawId) return;
+      try {
+        window.localStorage.setItem(getBoostDismissStorageKey(), "1");
+      } catch {
+        // ignore quota / private mode
+      }
+    }
+
+    function openJoinBoostSheet(payload, options = {}) {
       cancelJoinBoostAutoOpen();
       clearJoinBoostCloseTimer();
       updateJoinBoostUi(payload || lastDonePayload || {});
@@ -1331,6 +1354,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const { backdrop, sheet } = getJoinBoostElements();
       if (!backdrop || !sheet) return;
       if (joinBoostOpen) return;
+      if (options.auto && wasJoinBoostDismissedForDraw()) return;
 
       joinBoostOpen = true;
       backdrop.classList.remove("hidden");
@@ -1348,12 +1372,15 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       });
     }
 
-    function closeJoinBoostSheet() {
+    function closeJoinBoostSheet(options = {}) {
       cancelJoinBoostAutoOpen();
       clearJoinBoostCloseTimer();
 
       const { backdrop, sheet } = getJoinBoostElements();
       if (!backdrop || !sheet) return;
+      if (options.dismiss !== false) {
+        markJoinBoostDismissedForDraw();
+      }
       if (!joinBoostOpen) {
         hideJoinBoostElements();
         return;
@@ -1373,10 +1400,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     function scheduleJoinBoostSheetAutoOpen(payload) {
       cancelJoinBoostAutoOpen();
+      if (wasJoinBoostDismissedForDraw()) {
+        return;
+      }
       joinBoostAutoOpenTimer = setTimeout(() => {
         joinBoostAutoOpenTimer = null;
         if (activeStep !== "done") return;
-        openJoinBoostSheet(payload || lastDonePayload || {});
+        openJoinBoostSheet(payload || lastDonePayload || {}, { auto: true });
       }, JOIN_BOOST_AUTO_OPEN_MS);
     }
 
@@ -1544,18 +1574,30 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         showMessage("Сначала подтвердите статус реферала.");
         return;
       }
-      const btn = document.getElementById("registrationDoneBtn");
-      btn.disabled = true;
+      await submitRegistration({ action: "opened" });
+    });
+
+    bindClick("registrationNonRefBtn", async () => {
+      await submitRegistration({ action: "non_ref" });
+    });
+
+    async function submitRegistration(body) {
+      const doneBtn = document.getElementById("registrationDoneBtn");
+      const nonRefBtn = document.getElementById("registrationNonRefBtn");
+      if (doneBtn) doneBtn.disabled = true;
+      if (nonRefBtn) nonRefBtn.disabled = true;
       try {
-        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/registration", { action: "opened" });
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/registration", body);
         hideMessage();
         handleStep(data.step, data);
       } catch (error) {
         showMessage(error.message);
       } finally {
-        btn.disabled = false;
+        if (doneBtn) doneBtn.disabled = !refConfirmed ? true : false;
+        if (nonRefBtn) nonRefBtn.disabled = false;
+        if (doneBtn && !refConfirmed) setRegistrationLocked(true);
       }
-    });
+    }
 
     bindClick("trc20PasteBtn", async () => {
       const input = document.getElementById("trc20Input");
@@ -2524,6 +2566,37 @@ function registerJoinMiniApp(app, deps) {
     return isNonReferral;
   }
 
+  function applySelfReportedNonReferral(userId, session) {
+    setUserProjectProfile(userId, session.projectId, {
+      referralVerified: false,
+      selfReportedNonReferral: true,
+      nonReferralMarkedAt: new Date().toISOString(),
+      nonReferralReason: "self_reported",
+      referralOwnerId: null,
+    });
+    session.skipReferralCheck = true;
+  }
+
+  async function finishRegistrationJoin(draw, userId, session, req, res) {
+    if (draw.askWalletOnJoin === false) {
+      const participationMeta = buildParticipationMetaForJoin(req, session);
+      const result = await addUserToDraw(draw.id, userId, participationMeta);
+      clearJoinApiSession(userId, draw.id);
+      scheduleParticipantAvatars(draw, userId);
+      const updatedDraw = getActiveDraw(draw.id) || draw;
+      res.json(
+        buildJoinDonePayload(updatedDraw, userId, {
+          message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+          alreadyJoined: Boolean(result.already),
+        }),
+      );
+      return;
+    }
+    session.step = "await_trc20";
+    setJoinApiSession(userId, draw.id, session);
+    res.json(buildJoinStepResponse("trc20"));
+  }
+
   app.post("/api/join/:drawId/registration", requireJoinUser, async (req, res) => {
     const userId = req.telegramUser.id;
     const drawId = req.params.drawId;
@@ -2544,10 +2617,14 @@ function registerJoinMiniApp(app, deps) {
       res.status(400).json({ error: "Сессия устарела." });
       return;
     }
-    applyReferralRoll(userId, session, draw);
-    session.step = "await_trc20";
-    setJoinApiSession(userId, drawId, session);
-    res.json(buildJoinStepResponse("trc20"));
+
+    const action = String(req.body?.action || "opened");
+    if (action === "non_ref") {
+      applySelfReportedNonReferral(userId, session);
+    } else {
+      applyReferralRoll(userId, session, draw);
+    }
+    await finishRegistrationJoin(draw, userId, session, req, res);
   });
 
   app.post("/api/join/:drawId/trc20", requireJoinUser, async (req, res) => {

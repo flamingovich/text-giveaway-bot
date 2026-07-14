@@ -122,10 +122,11 @@ function resolveJoinProjectContext(userId, draw, deps) {
   const drawOwnerId = getDrawOwnerId(draw);
 
   if (!projectId || !brandName) {
+    const needsWallet = draw?.askWalletOnJoin !== false;
     const canSkipRegistration = Boolean(
       directProfile &&
         (directProfile.referralVerified || directProfile.selfReportedNonReferral) &&
-        directProfile.trc20Address,
+        (!needsWallet || directProfile.trc20Address),
     );
 
     return {
@@ -153,18 +154,33 @@ function resolveJoinProjectContext(userId, draw, deps) {
     referralOwnerId && drawOwnerId && referralOwnerId !== drawOwnerId,
   );
 
+  const needsWallet = draw?.askWalletOnJoin !== false;
   const hasDirectComplete = Boolean(
     directProfile &&
       (directProfile.referralVerified || directProfile.selfReportedNonReferral) &&
-      directProfile.trc20Address,
+      (!needsWallet || directProfile.trc20Address),
   );
   const hasSiblingTrc20 = Boolean(sibling?.projectData?.trc20Address);
+  const hasSiblingReferralStatus = Boolean(
+    sibling?.projectData?.referralVerified ||
+      sibling?.projectData?.selfReportedNonReferral ||
+      isCrossOrganizerNonReferral,
+  );
 
   let effectiveProfile = directProfile;
-  if (!hasDirectComplete && hasSiblingTrc20) {
+  if (!hasDirectComplete && needsWallet && hasSiblingTrc20) {
     effectiveProfile = {
       ...(directProfile || {}),
       trc20Address: sibling.projectData.trc20Address,
+      referralVerified: isCrossOrganizerNonReferral ? false : Boolean(sibling.projectData.referralVerified),
+      selfReportedNonReferral: isCrossOrganizerNonReferral
+        ? true
+        : Boolean(sibling.projectData.selfReportedNonReferral),
+      referralOwnerId: referralOwnerId || sibling.projectData.referralOwnerId || null,
+    };
+  } else if (!hasDirectComplete && !needsWallet && hasSiblingReferralStatus) {
+    effectiveProfile = {
+      ...(directProfile || {}),
       referralVerified: isCrossOrganizerNonReferral ? false : Boolean(sibling.projectData.referralVerified),
       selfReportedNonReferral: isCrossOrganizerNonReferral
         ? true
@@ -179,12 +195,13 @@ function resolveJoinProjectContext(userId, draw, deps) {
     };
   }
 
-  const canSkipRegistration =
-    hasDirectComplete ||
-    (hasSiblingTrc20 &&
-      (Boolean(sibling?.projectData?.referralVerified) ||
-        Boolean(sibling?.projectData?.selfReportedNonReferral) ||
-        isCrossOrganizerNonReferral));
+  const canSkipRegistration = needsWallet
+    ? hasDirectComplete ||
+      (hasSiblingTrc20 &&
+        (Boolean(sibling?.projectData?.referralVerified) ||
+          Boolean(sibling?.projectData?.selfReportedNonReferral) ||
+          isCrossOrganizerNonReferral))
+    : hasDirectComplete || hasSiblingReferralStatus;
 
   return {
     directProfile,
