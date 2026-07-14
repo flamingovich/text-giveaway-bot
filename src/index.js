@@ -2368,7 +2368,10 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     "",
   ];
   if (drawAsksWinnerDepositAddress(draw)) {
-    winMessageLines.push("Подтвердите, что вы человек — выберите правильный ответ ниже.");
+    winMessageLines.push(
+      "Подтвердите, что вы человек — выберите правильный ответ ниже.",
+      `${task.a} + ${task.b} = ?`,
+    );
   } else {
     winMessageLines.push(
       "Пройди проверку для подтверждения и получения приза 👇",
