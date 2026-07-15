@@ -1248,10 +1248,33 @@ function buildWinnerDepositAddressExpiredText() {
   ].join("\n");
 }
 
-function getWinnerDepositAddressKeyboard(drawId) {
-  return Markup.inlineKeyboard([
-    Markup.button.callback("Где взять адрес кошелька?", `wp:guide:${drawId}`),
+function getWinnerDepositAddressKeyboard(draw) {
+  const drawId = typeof draw === "string" ? draw : draw?.id;
+  const projectId = typeof draw === "object" && draw ? draw.projectId : null;
+  const project = projectId ? getProjectById(projectId) : null;
+  const refLink = String(project?.refLink || "").trim();
+  const projectName = String(project?.name || "").trim() || "проект";
+  const rows = [];
+
+  if (refLink) {
+    rows.push([
+      {
+        text: `Перейти на ${projectName}`,
+        url: refLink,
+        style: "primary",
+      },
+    ]);
+  }
+
+  rows.push([
+    {
+      text: "Где взять адрес кошелька?",
+      callback_data: `wp:guide:${drawId}`,
+      style: "danger",
+    },
   ]);
+
+  return Markup.inlineKeyboard(rows);
 }
 
 function getWinnerPanelTrcDisplay(draw, notifyInfo, projectData) {
@@ -1599,21 +1622,154 @@ function buildActiveDrawsDigestTelegramContent(draws) {
   };
 }
 
+function ensureActiveDrawsDigestStore(data) {
+  if (!data.activeDrawsDigestReminders || typeof data.activeDrawsDigestReminders !== "object") {
+    data.activeDrawsDigestReminders = {};
+  }
+  return data.activeDrawsDigestReminders;
+}
+
+function normalizeActiveDrawsDigestEntry(raw) {
+  if (!raw) {
+    return null;
+  }
+  if (Array.isArray(raw)) {
+    return {
+      messageIds: raw.filter(Boolean),
+      drawIds: null,
+      ownerId: null,
+    };
+  }
+  if (typeof raw !== "object") {
+    return null;
+  }
+  return {
+    messageIds: Array.isArray(raw.messageIds) ? raw.messageIds.filter(Boolean) : [],
+    drawIds: Array.isArray(raw.drawIds) ? raw.drawIds.map(String) : null,
+    ownerId: raw.ownerId != null ? Number(raw.ownerId) : null,
+  };
+}
+
+function getActiveDrawsDigestEntry(data, channelId) {
+  const store = ensureActiveDrawsDigestStore(data);
+  return normalizeActiveDrawsDigestEntry(store[String(channelId)]);
+}
+
+function setActiveDrawsDigestEntry(data, channelId, entry) {
+  const store = ensureActiveDrawsDigestStore(data);
+  const key = String(channelId);
+  if (!entry || !Array.isArray(entry.messageIds) || entry.messageIds.length === 0) {
+    delete store[key];
+    return;
+  }
+  store[key] = {
+    messageIds: entry.messageIds,
+    drawIds: Array.isArray(entry.drawIds) ? entry.drawIds.map(String) : [],
+    ownerId: entry.ownerId != null ? Number(entry.ownerId) : null,
+  };
+}
+
+function listRemainingDrawsForActiveDigest(data, channelId, entry) {
+  const channelKey = String(channelId);
+  if (Array.isArray(entry?.drawIds) && entry.drawIds.length > 0) {
+    const byId = new Map((data.draws || []).map((draw) => [String(draw.id), draw]));
+    return entry.drawIds
+      .map((id) => byId.get(String(id)))
+      .filter(
+        (draw) =>
+          draw &&
+          String(draw.channelId) === channelKey &&
+          listActiveDrawsForDigest([draw]).length > 0,
+      );
+  }
+
+  return listActiveDrawsForDigest(data.draws || []).filter((draw) => {
+    if (String(draw.channelId) !== channelKey) {
+      return false;
+    }
+    if (entry?.ownerId != null) {
+      return itemBelongsToOwner(draw, entry.ownerId);
+    }
+    return true;
+  });
+}
+
 async function deleteActiveDrawsDigestMessages(data, channelId) {
   if (WEB_ONLY || !channelId) {
     return;
   }
-  if (!data.activeDrawsDigestReminders || typeof data.activeDrawsDigestReminders !== "object") {
-    data.activeDrawsDigestReminders = {};
-  }
-  const key = String(channelId);
-  const messageIds = Array.isArray(data.activeDrawsDigestReminders[key])
-    ? data.activeDrawsDigestReminders[key]
-    : [];
+  const entry = getActiveDrawsDigestEntry(data, channelId);
+  const messageIds = entry?.messageIds || [];
   for (const messageId of messageIds) {
     await safeDeleteMessage(channelId, messageId);
   }
-  data.activeDrawsDigestReminders[key] = [];
+  setActiveDrawsDigestEntry(data, channelId, null);
+}
+
+async function editActiveDrawsDigestMessage(channelId, messageId, draws) {
+  const content = buildActiveDrawsDigestTelegramContent(draws);
+  await bot.telegram.editMessageText(channelId, messageId, undefined, content.text, {
+    entities: content.entities,
+    link_preview_options: content.link_preview_options,
+  });
+}
+
+async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
+  if (WEB_ONLY || !changedDraw?.channelId || !changedDraw?.id) {
+    return;
+  }
+
+  const channelId = String(changedDraw.channelId);
+  const entry = getActiveDrawsDigestEntry(data, channelId);
+  if (!entry || entry.messageIds.length === 0) {
+    return;
+  }
+
+  if (Array.isArray(entry.drawIds) && entry.drawIds.length > 0) {
+    if (!entry.drawIds.map(String).includes(String(changedDraw.id))) {
+      return;
+    }
+  } else if (
+    entry.ownerId != null &&
+    !itemBelongsToOwner(changedDraw, entry.ownerId)
+  ) {
+    return;
+  }
+
+  const remaining = listRemainingDrawsForActiveDigest(data, channelId, entry);
+  if (remaining.length === 0) {
+    await deleteActiveDrawsDigestMessages(data, channelId);
+    return;
+  }
+
+  const messageId = entry.messageIds[0];
+  try {
+    await editActiveDrawsDigestMessage(channelId, messageId, remaining);
+    for (const extraId of entry.messageIds.slice(1)) {
+      await safeDeleteMessage(channelId, extraId);
+    }
+    setActiveDrawsDigestEntry(data, channelId, {
+      messageIds: [messageId],
+      drawIds: remaining.map((draw) => String(draw.id)),
+      ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+    });
+  } catch (error) {
+    console.error(
+      `Не удалось обновить дайджест активных розыгрышей в канале ${channelId}:`,
+      error.message,
+    );
+    if (/message to edit not found|message can't be edited|message is not modified/i.test(error.message || "")) {
+      if (/message is not modified/i.test(error.message || "")) {
+        setActiveDrawsDigestEntry(data, channelId, {
+          messageIds: [messageId],
+          drawIds: remaining.map((draw) => String(draw.id)),
+          ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+        });
+        return;
+      }
+      await deleteActiveDrawsDigestMessages(data, channelId);
+    }
+  }
 }
 
 async function sendActiveDrawsDigestForChannel(data, channelId, draws) {
@@ -1623,11 +1779,11 @@ async function sendActiveDrawsDigestForChannel(data, channelId, draws) {
     entities: content.entities,
     link_preview_options: content.link_preview_options,
   });
-  if (!data.activeDrawsDigestReminders || typeof data.activeDrawsDigestReminders !== "object") {
-    data.activeDrawsDigestReminders = {};
-  }
-  const key = String(channelId);
-  data.activeDrawsDigestReminders[key] = message?.message_id ? [message.message_id] : [];
+  setActiveDrawsDigestEntry(data, channelId, {
+    messageIds: message?.message_id ? [message.message_id] : [],
+    drawIds: draws.map((draw) => String(draw.id)),
+    ownerId: draws[0]?.ownerId != null ? Number(draws[0].ownerId) : null,
+  });
   return message;
 }
 
@@ -2400,7 +2556,7 @@ function pickWinners(draw) {
   return participants.slice(0, Math.min(draw.winnersCount, participants.length));
 }
 
-async function finishDraw(draw) {
+async function finishDraw(draw, data = null) {
   await deleteDrawReminderMessages(draw);
   draw.winnerIds = pickWinners(draw);
   draw.winnerNotifications = {};
@@ -2408,6 +2564,9 @@ async function finishDraw(draw) {
   await updateDrawPost(draw, true);
   void ensureUserAvatars([...(draw.participantIds || []), ...(draw.winnerIds || [])], { limit: 100 });
   await notifyWinnersOnFinish(draw);
+  if (data) {
+    await syncActiveDrawsDigestAfterDrawChange(data, draw);
+  }
 }
 
 async function sendWinnerVerificationNotification(draw, userId, sentBy, subscriptionCheck = null) {
@@ -2655,7 +2814,7 @@ async function requestWinnerDepositAddress(draw, userId, notify) {
     {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
-      ...getWinnerDepositAddressKeyboard(draw.id),
+      ...getWinnerDepositAddressKeyboard(draw),
     },
   );
   notify.addressPromptMessageId = message.message_id;
@@ -3603,7 +3762,7 @@ async function schedulerTick() {
       if (draw.status === DRAW_STATUS.ACTIVE && draw.endAt) {
         const endAt = DateTime.fromISO(draw.endAt, { zone: TIMEZONE });
         if (endAt.isValid && endAt <= now) {
-          await finishDraw(draw);
+          await finishDraw(draw, data);
           hasChanges = true;
         }
       }
@@ -8703,7 +8862,7 @@ panelRouter.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer,
   }
 
   try {
-    await finishDraw(draw);
+    await finishDraw(draw, data);
     writeData(data);
     redirectWithMessage(res, "Розыгрыш завершен вручную.");
   } catch (error) {
@@ -8743,6 +8902,7 @@ panelRouter.post("/draws/:id/delete", webAuth.requireAuth, requireOrganizer, asy
   }
 
   data.draws = data.draws.filter((item) => item.id !== draw.id);
+  await syncActiveDrawsDigestAfterDrawChange(data, draw);
   writeData(data);
   redirectWithMessage(res, "Розыгрыш удалён.");
 });
@@ -9430,7 +9590,7 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
             {
               parse_mode: "HTML",
               link_preview_options: { is_disabled: true },
-              ...getWinnerDepositAddressKeyboard(draw.id),
+              ...getWinnerDepositAddressKeyboard(draw),
             },
           );
         } catch {
