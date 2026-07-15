@@ -34,6 +34,7 @@ const {
   tgCustomEmojiHtml,
   buildDrawPostCaptionPayload,
   buildDrawPostFinishedPayload,
+  buildActiveDrawsDigestPayload,
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
 } = require("./draw-post-emojis");
@@ -1517,6 +1518,11 @@ function getDrawDurationLabel(draw) {
 }
 
 function formatTimeUntilDrawEnd(draw) {
+  const label = formatTimeUntilDrawEndLabel(draw);
+  return label ? label.toUpperCase() : null;
+}
+
+function formatTimeUntilDrawEndLabel(draw) {
   if (!draw?.endAt) {
     return null;
   }
@@ -1529,19 +1535,117 @@ function formatTimeUntilDrawEnd(draw) {
     return null;
   }
   const totalMinutes = Math.max(1, Math.ceil(endAt.diff(now, "minutes").minutes));
+  if (totalMinutes >= 1440) {
+    const days = Math.max(1, Math.floor(totalMinutes / 1440));
+    return formatDurationRu(days, "days");
+  }
   if (totalMinutes >= 60) {
     const hours = Math.max(1, Math.floor(totalMinutes / 60));
-    return formatDurationRu(hours, "hours").toUpperCase();
+    return formatDurationRu(hours, "hours");
   }
-  return formatDurationRu(totalMinutes, "minutes").toUpperCase();
+  return formatDurationRu(totalMinutes, "minutes");
 }
 
 function canSendDrawReminder(draw) {
   return (
     draw.status === DRAW_STATUS.ACTIVE &&
     Boolean(draw.messageId && draw.channelId) &&
-    Boolean(formatTimeUntilDrawEnd(draw))
+    Boolean(formatTimeUntilDrawEndLabel(draw))
   );
+}
+
+function listActiveDrawsForDigest(draws) {
+  return (draws || []).filter(
+    (draw) =>
+      draw.status === DRAW_STATUS.ACTIVE &&
+      Boolean(draw.messageId && draw.channelId),
+  );
+}
+
+function getDrawPrizeAmountUsd(draw) {
+  if (draw.prizeType === "money_usd") {
+    return getDrawPrizeAmount(draw);
+  }
+  if (draw.prizeType === "money_rub") {
+    const rub = getDrawPrizeAmount(draw);
+    const usd = convertRubToUsdt(rub);
+    return Number.isFinite(usd) && usd > 0 ? usd : 0;
+  }
+  return 0;
+}
+
+function buildActiveDrawsDigestTelegramContent(draws) {
+  const items = draws.map((draw) => {
+    const timeLeftLabel = formatTimeUntilDrawEndLabel(draw);
+    const endManual = draw.endMode === "manual" || !draw.endAt || !timeLeftLabel;
+    return {
+      prizeLabel: formatDrawPrizePlain(draw),
+      winnersCount: Math.max(1, Number(draw.winnersCount) || 1),
+      timeLeftLabel: timeLeftLabel || "",
+      postUrl: buildDrawPostLink(draw),
+      endManual,
+    };
+  });
+  const totalUsd = draws.reduce((sum, draw) => sum + getDrawPrizeAmountUsd(draw), 0);
+  const payload = buildActiveDrawsDigestPayload({
+    headerPrizeLabel: formatUsdPrizeForPost(totalUsd),
+    usePremiumEmoji: DRAW_POST_PREMIUM_EMOJI,
+    items,
+  });
+  return {
+    text: payload.caption,
+    entities: payload.caption_entities,
+    link_preview_options: { is_disabled: true },
+  };
+}
+
+async function deleteActiveDrawsDigestMessages(data, channelId) {
+  if (WEB_ONLY || !channelId) {
+    return;
+  }
+  if (!data.activeDrawsDigestReminders || typeof data.activeDrawsDigestReminders !== "object") {
+    data.activeDrawsDigestReminders = {};
+  }
+  const key = String(channelId);
+  const messageIds = Array.isArray(data.activeDrawsDigestReminders[key])
+    ? data.activeDrawsDigestReminders[key]
+    : [];
+  for (const messageId of messageIds) {
+    await safeDeleteMessage(channelId, messageId);
+  }
+  data.activeDrawsDigestReminders[key] = [];
+}
+
+async function sendActiveDrawsDigestForChannel(data, channelId, draws) {
+  await deleteActiveDrawsDigestMessages(data, channelId);
+  const content = buildActiveDrawsDigestTelegramContent(draws);
+  const message = await bot.telegram.sendMessage(channelId, content.text, {
+    entities: content.entities,
+    link_preview_options: content.link_preview_options,
+  });
+  if (!data.activeDrawsDigestReminders || typeof data.activeDrawsDigestReminders !== "object") {
+    data.activeDrawsDigestReminders = {};
+  }
+  const key = String(channelId);
+  data.activeDrawsDigestReminders[key] = message?.message_id ? [message.message_id] : [];
+  return message;
+}
+
+async function sendActiveDrawsDigestReminders(data, draws) {
+  const byChannel = new Map();
+  for (const draw of draws) {
+    const channelId = String(draw.channelId);
+    if (!byChannel.has(channelId)) {
+      byChannel.set(channelId, []);
+    }
+    byChannel.get(channelId).push(draw);
+  }
+  let sent = 0;
+  for (const [channelId, channelDraws] of byChannel.entries()) {
+    await sendActiveDrawsDigestForChannel(data, channelId, channelDraws);
+    sent += 1;
+  }
+  return sent;
 }
 
 function buildDrawReminderReplyHtml(draw) {
@@ -1633,6 +1737,7 @@ function getDrawPostTelegramContent(draw, options = {}) {
       prizeLabel: formatDrawPrizePlain(draw),
       winners,
       resultsUrl: getWinnersChannelUrl(draw.id),
+      postTitle: draw.postTitle || "",
     });
     let text = payload.caption || "";
     if (forCaption && text.length > 1000) {
@@ -1645,14 +1750,13 @@ function getDrawPostTelegramContent(draw, options = {}) {
     };
   }
 
-  const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const payload = buildDrawPostCaptionPayload({
     usePremiumEmoji: DRAW_POST_PREMIUM_EMOJI,
-    prizeLabel: formatDrawPrizeForPost(draw),
-    projectName: project?.name || "",
-    projectRefLink: project?.refLink || "",
+    prizeLabel: formatDrawPrizePlain(draw),
     winnersCount: draw.winnersCount,
     durationLabel: getDrawDurationLabel(draw),
+    endManual: draw.endMode === "manual" || !draw.endAt,
+    postTitle: draw.postTitle || "",
     includeWinners: false,
   });
 
@@ -4269,6 +4373,16 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
 function renderPanelLiveHtml(draws, projects, userProfiles) {
   const drawsStats = computeDrawStats(draws, userProfiles);
   const drawBlocks = renderDrawHistoryBlocks(draws, projects, userProfiles);
+  const activeDigestDraws = listActiveDrawsForDigest(draws);
+  const activeDigestCount = activeDigestDraws.length;
+  const remindActiveHtml =
+    activeDigestCount > 0
+      ? `<form method="post" action="${PANEL_BASE}/draws/remind-active" class="history-remind-active-form">
+          <button type="submit" class="history-action-btn history-remind-active-btn">
+            Напомнить про розыгрыши (${activeDigestCount} шт.)
+          </button>
+        </form>`
+      : "";
   return `
       <section class="card history-section">
         <h2 class="create-title draw-history-title">
@@ -4293,6 +4407,7 @@ function renderPanelLiveHtml(draws, projects, userProfiles) {
             <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidAllTime)}</span>
           </div>
         </div>
+        ${remindActiveHtml}
       </section>
 
       <section>
@@ -6638,6 +6753,13 @@ ${getPanelFluidTypographyVars()}
       margin: 0;
       width: 100%;
     }
+    .history-remind-active-form {
+      margin: 14px 0 0;
+      width: 100%;
+    }
+    .history-remind-active-btn {
+      width: 100%;
+    }
     .history-action-btn {
       width: 100%;
       padding: 11px 14px;
@@ -6806,6 +6928,10 @@ ${getPanelFluidTypographyVars()}
           </div>
 
           <div class="draw-block">
+            <div class="draw-field">
+              ${drawLabel("gift", "Заголовок")}
+              <input class="draw-input" name="postTitle" type="text" maxlength="120" placeholder="Необязательно — только в посте" />
+            </div>
             <div class="draw-row-2">
               <div class="draw-field">
                 ${drawLabel("prize", "Приз")}
@@ -8284,6 +8410,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
     const prizeAmountRaw = String(body.prizeAmount || body.prizeAmountRub || "").replace(/\s+/g, "");
     const prizeAmount = Number(prizeAmountRaw);
     const prizeCustomText = (body.prizeCustomText || "").trim();
+    const postTitle = String(body.postTitle || "").trim().slice(0, 120);
     const imageClipboardData = (body.imageClipboardData || "").trim();
     const endAfterValue = Number(body.endAfterValue);
     const endAfterUnit = ["minutes", "hours", "days"].includes(body.endAfterUnit)
@@ -8424,6 +8551,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       status: publishMode === "now" ? DRAW_STATUS.ACTIVE : DRAW_STATUS.SCHEDULED,
       projectId: projectId || null,
       channelId,
+      postTitle,
       prizeType,
       prize,
       prizeAmountRub: prizeType === "money_rub" ? Math.floor(prizeAmount) : null,
@@ -8503,6 +8631,36 @@ panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer
   } catch (error) {
     console.error("Ошибка публикации через веб:", error);
     redirectWithMessage(res, `Не удалось опубликовать: ${error.message}`);
+  }
+});
+
+panelRouter.post("/draws/remind-active", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+  const data = readData();
+  const ownedDraws = filterByOwner(data.draws || [], req.webUser.id);
+  const activeDraws = listActiveDrawsForDigest(ownedDraws);
+
+  if (activeDraws.length === 0) {
+    redirectWithMessage(res, "Нет активных розыгрышей с постом в канале.");
+    return;
+  }
+
+  if (WEB_ONLY) {
+    redirectWithMessage(res, "В web-only режиме напоминания в канал недоступны.");
+    return;
+  }
+
+  try {
+    const channelsSent = await sendActiveDrawsDigestReminders(data, activeDraws);
+    writeData(data);
+    redirectWithMessage(
+      res,
+      channelsSent === 1
+        ? `Напоминание о ${activeDraws.length} активных розыгрышах отправлено в канал.`
+        : `Напоминание о ${activeDraws.length} активных розыгрышах отправлено в ${channelsSent} каналов.`,
+    );
+  } catch (error) {
+    console.error("Ошибка отправки дайджеста активных розыгрышей:", error);
+    redirectWithMessage(res, `Не удалось отправить напоминание: ${error.message}`);
   }
 });
 

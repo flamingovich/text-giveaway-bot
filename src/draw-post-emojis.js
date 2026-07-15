@@ -15,6 +15,7 @@ class CaptionBuilder {
   constructor() {
     this.text = "";
     this.entities = [];
+    this._blockquoteStart = null;
   }
 
   append(raw) {
@@ -25,6 +26,25 @@ class CaptionBuilder {
 
   pushEntity(entity) {
     this.entities.push(entity);
+  }
+
+  openBlockquote() {
+    this._blockquoteStart = this.text.length;
+  }
+
+  closeBlockquote() {
+    if (this._blockquoteStart == null) {
+      return;
+    }
+    const length = this.text.length - this._blockquoteStart;
+    if (length > 0) {
+      this.pushEntity({
+        type: "blockquote",
+        offset: this._blockquoteStart,
+        length,
+      });
+    }
+    this._blockquoteStart = null;
   }
 
   addEmoji(key, options = {}) {
@@ -60,6 +80,20 @@ class CaptionBuilder {
       this.pushEntity({ type: "bold", offset: span.offset, length: span.length });
     }
     return span;
+  }
+
+  addBoldPrizeAmount(prizeLabel) {
+    const { amount, currency } = splitPrizeLabel(prizeLabel);
+    const dotIdx = amount.indexOf(".");
+    const beforeDot = dotIdx >= 0 ? amount.slice(0, dotIdx) : amount;
+    const afterDot = dotIdx >= 0 ? amount.slice(dotIdx + 1) : "";
+    this.addBold(beforeDot);
+    if (dotIdx >= 0) {
+      this.append(".");
+    }
+    if (afterDot || currency) {
+      this.addBold(`${afterDot}${currency}`);
+    }
   }
 }
 
@@ -102,6 +136,16 @@ function formatUsdPrizeForPost(amount) {
   return `${stylizeZeroAsCyrillicO(withDots)}$`;
 }
 
+function appendOptionalPostTitle(builder, postTitle) {
+  const title = String(postTitle || "").trim();
+  if (!title) {
+    return false;
+  }
+  builder.addBold(title);
+  builder.append("\n\n");
+  return true;
+}
+
 /**
  * @returns {{ mode: 'entities', caption: string, caption_entities: object[] } | { mode: 'html', caption: string }}
  */
@@ -109,10 +153,10 @@ function buildDrawPostCaptionPayload(data) {
   const {
     usePremiumEmoji = true,
     prizeLabel,
-    projectName = "",
-    projectRefLink = "",
     winnersCount = 1,
     durationLabel = "",
+    endManual = false,
+    postTitle = "",
     includeWinners = false,
   } = data;
 
@@ -121,48 +165,32 @@ function buildDrawPostCaptionPayload(data) {
   }
 
   const b = new CaptionBuilder();
-  const { amount, currency } = splitPrizeLabel(prizeLabel);
   const useCustom = Boolean(usePremiumEmoji);
 
-  // 🎁 РОЗЫГРЫШ НА 1.ООО₽ 🎁
-  b.addEmoji("gift", { custom: useCustom, bold: true });
-  const dotIdx = amount.indexOf(".");
-  const beforeDot = dotIdx >= 0 ? amount.slice(0, dotIdx) : amount;
-  const afterDot = dotIdx >= 0 ? amount.slice(dotIdx + 1) : "";
-  b.addBold(` РОЗЫГРЫШ НА ${beforeDot}`);
-  if (dotIdx >= 0) {
-    b.append(".");
-  }
-  if (afterDot || currency) {
-    b.addBold(`${afterDot}${currency}`);
-  }
-  b.append(" ");
-  b.addEmoji("gift", { custom: useCustom, bold: true });
+  appendOptionalPostTitle(b, postTitle);
 
-  // 💎 НУЖНО 👉 Быть рефом на Покердом
-  b.append("\n\n");
-  b.addEmoji("diamond", { custom: useCustom });
-  b.append(" ");
-  b.addBold("НУЖНО");
-  b.append(" ");
-  b.addEmoji("point", { custom: useCustom });
-  b.append(" Быть рефом на ");
-  if (projectName) {
-    if (projectRefLink) {
-      b.addTextLink(projectName, projectRefLink, { bold: true });
-    } else {
-      b.addBold(projectName);
-    }
-  }
+  // 🎁 РОЗЫГРЫШ НА 4О$
+  b.addEmoji("gift", { custom: useCustom, bold: true });
+  b.addBold(" РОЗЫГРЫШ НА ");
+  b.addBoldPrizeAmount(prizeLabel);
+  b.append("\n");
 
-  b.append("\n\n");
+  b.openBlockquote();
   b.addEmoji("people", { custom: useCustom });
-  b.append(` Призовых мест: ${winnersCount}\n`);
+  b.append(" Призовых мест: ");
+  b.addBold(String(winnersCount));
+  b.append("\n");
   b.addEmoji("clock", { custom: useCustom });
-  b.append(" Итоги через ");
-  b.addBold(durationLabel);
+  if (endManual) {
+    b.append(" ");
+    b.addBold("Итоги по команде создателя");
+  } else {
+    b.append(" Итоги через ");
+    b.addBold(durationLabel || "—");
+  }
+  b.closeBlockquote();
 
-  b.append("\n\n");
+  b.append("\n");
   const downAlt = DRAW_POST_EMOJI.down.alt;
   b.addBold(`${downAlt} Жми кнопку, для участия ${downAlt}`);
 
@@ -175,40 +203,113 @@ function buildDrawPostCaptionPayload(data) {
 
 /**
  * Пост с итогами розыгрыша (caption + caption_entities).
- * @param {{ prizeLabel: string, winners: { displayName: string, url: string }[], resultsUrl: string }} data
+ * @param {{ prizeLabel: string, winners: { displayName: string, url: string }[], resultsUrl: string, postTitle?: string }} data
  */
 function buildDrawPostFinishedPayload(data) {
   const {
     prizeLabel = "",
     winners = [],
     resultsUrl = "",
+    postTitle = "",
   } = data;
 
   const b = new CaptionBuilder();
 
-  b.append("🎉");
-  b.addBold(`ИТОГИ РОЗЫГРЫША ${prizeLabel} `);
+  appendOptionalPostTitle(b, postTitle);
 
-  b.append("\n\n🏆");
-  b.addBold(" Победители: \n");
+  b.append("🎉");
+  b.addBold(" ИТОГИ НА ");
+  b.addBoldPrizeAmount(prizeLabel);
+  b.append("\n");
+
+  b.openBlockquote();
+  b.append("🏆");
+  b.addBold(" Победители:");
   if (winners.length > 0) {
     winners.forEach((winner) => {
-      b.append("• ");
+      b.append("\n• ");
       if (winner.url) {
         b.addTextLink(winner.displayName, winner.url);
       } else {
         b.append(winner.displayName);
       }
-      b.append("\n");
     });
   } else {
-    b.append("не определены\n");
+    b.append("\nне определены");
   }
+  b.closeBlockquote();
 
   if (resultsUrl) {
     b.append("\n🔎 ");
-    b.addTextLink("Проверить Результаты", resultsUrl, { bold: true });
+    b.addTextLink("Проверить Результаты", resultsUrl);
   }
+
+  return {
+    mode: "entities",
+    caption: b.text,
+    caption_entities: b.entities,
+  };
+}
+
+/**
+ * Дайджест активных розыгрышей для напоминания в канал.
+ * @param {{
+ *   headerPrizeLabel: string,
+ *   usePremiumEmoji?: boolean,
+ *   items: Array<{
+ *     prizeLabel: string,
+ *     winnersCount: number,
+ *     timeLeftLabel: string,
+ *     postUrl: string,
+ *     endManual?: boolean,
+ *   }>
+ * }} data
+ */
+function buildActiveDrawsDigestPayload(data) {
+  const {
+    headerPrizeLabel = "0$",
+    usePremiumEmoji = true,
+    items = [],
+  } = data;
+
+  const b = new CaptionBuilder();
+  const useCustom = Boolean(usePremiumEmoji);
+  const headerNoun = items.length === 1 ? "АКТИВНЫЙ РОЗЫГРЫШ" : "АКТИВНЫЕ РОЗЫГРЫШИ";
+
+  b.addBold(`🏆 ${headerNoun} НА ${headerPrizeLabel}`);
+  b.append("\n\n");
+
+  items.forEach((item, index) => {
+    if (index > 0) {
+      b.append("\n\n");
+    }
+
+    b.addEmoji("gift", { custom: useCustom });
+    b.append(" РОЗЫГРЫШ НА ");
+    b.addBoldPrizeAmount(item.prizeLabel);
+    b.append(" ");
+    b.addEmoji("point", { custom: useCustom });
+    b.append(" ");
+    if (item.postUrl) {
+      b.addTextLink("КЛИК", item.postUrl, { bold: true });
+    } else {
+      b.addBold("КЛИК");
+    }
+    b.append("\n");
+
+    b.openBlockquote();
+    b.addEmoji("people", { custom: useCustom });
+    b.append(" Призовых мест: ");
+    b.addBold(String(item.winnersCount));
+    b.append("\n");
+    b.addEmoji("clock", { custom: useCustom });
+    if (item.endManual || !item.timeLeftLabel) {
+      b.append(" Итоги по команде создателя");
+    } else {
+      b.append(` Итоги через ${item.timeLeftLabel}`);
+    }
+    b.closeBlockquote();
+  });
 
   return {
     mode: "entities",
@@ -223,6 +324,7 @@ module.exports = {
   tgCustomEmojiHtml,
   buildDrawPostCaptionPayload,
   buildDrawPostFinishedPayload,
+  buildActiveDrawsDigestPayload,
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
   stylizeZeroAsCyrillicO,
