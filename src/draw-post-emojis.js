@@ -112,6 +112,12 @@ function stylizeZeroAsCyrillicO(text) {
   return String(text).replace(/0/g, "О");
 }
 
+function formatRefLinkDisplay(url) {
+  return String(url || "")
+    .trim()
+    .replace(/^https?:\/\//i, "");
+}
+
 function splitPrizeLabel(prizeLabel) {
   const label = String(prizeLabel || "");
   if (label.endsWith("₽")) {
@@ -147,6 +153,25 @@ function appendOptionalPostTitle(builder, postTitle) {
 }
 
 /**
+ * @param {{ emoji?: string, name: string, url: string, displayUrl?: string }} projectLine
+ */
+function appendOptionalProjectLine(builder, projectLine) {
+  if (!projectLine?.name || !projectLine?.url) {
+    return false;
+  }
+  const emoji = String(projectLine.emoji || "").trim();
+  if (emoji) {
+    builder.append(`${emoji} `);
+  }
+  builder.addTextLink(projectLine.name, projectLine.url, { bold: true });
+  builder.append(" » ");
+  const displayUrl = formatRefLinkDisplay(projectLine.displayUrl || projectLine.url);
+  builder.addTextLink(displayUrl || projectLine.url, projectLine.url, { bold: true });
+  builder.append("\n");
+  return true;
+}
+
+/**
  * @returns {{ mode: 'entities', caption: string, caption_entities: object[] } | { mode: 'html', caption: string }}
  */
 function buildDrawPostCaptionPayload(data) {
@@ -157,6 +182,7 @@ function buildDrawPostCaptionPayload(data) {
     durationLabel = "",
     endManual = false,
     postTitle = "",
+    projectLine = null,
     includeWinners = false,
   } = data;
 
@@ -168,6 +194,7 @@ function buildDrawPostCaptionPayload(data) {
   const useCustom = Boolean(usePremiumEmoji);
 
   appendOptionalPostTitle(b, postTitle);
+  appendOptionalProjectLine(b, projectLine);
 
   // 🎁 РОЗЫГРЫШ НА 4О$
   b.addEmoji("gift", { custom: useCustom, bold: true });
@@ -203,7 +230,7 @@ function buildDrawPostCaptionPayload(data) {
 
 /**
  * Пост с итогами розыгрыша (caption + caption_entities).
- * @param {{ prizeLabel: string, winners: { displayName: string, url: string }[], resultsUrl: string, postTitle?: string }} data
+ * @param {{ prizeLabel: string, winners: { displayName: string, url: string }[], resultsUrl: string, postTitle?: string, projectLine?: object|null }} data
  */
 function buildDrawPostFinishedPayload(data) {
   const {
@@ -211,11 +238,13 @@ function buildDrawPostFinishedPayload(data) {
     winners = [],
     resultsUrl = "",
     postTitle = "",
+    projectLine = null,
   } = data;
 
   const b = new CaptionBuilder();
 
   appendOptionalPostTitle(b, postTitle);
+  appendOptionalProjectLine(b, projectLine);
 
   b.append("🎉");
   b.addBold(" ИТОГИ НА ");
@@ -327,6 +356,7 @@ module.exports = {
   buildActiveDrawsDigestPayload,
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
+  formatRefLinkDisplay,
   stylizeZeroAsCyrillicO,
   splitPrizeLabel,
 };

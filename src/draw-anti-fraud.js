@@ -1,11 +1,44 @@
 const IP_FRAUD_MIN_CLUSTER_SIZE = 3;
 const IP_FRAUD_SHARE_RATIO = 0.1;
 
+function defaultNormalizeWalletAddress(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+/** Профильный TRC20 + адрес только для антифрода (после победы без кошелька на join). */
+function listProjectWalletAddresses(projectData, normalizeWalletAddress = defaultNormalizeWalletAddress) {
+  const out = [];
+  for (const raw of [projectData?.trc20Address, projectData?.antifraudTrc20Address]) {
+    const wallet = normalizeWalletAddress(raw);
+    if (wallet && !out.includes(wallet)) {
+      out.push(wallet);
+    }
+  }
+  return out;
+}
+
+function buildGlobalWalletOwners(userProfiles, normalizeWalletAddress = defaultNormalizeWalletAddress) {
+  const map = new Map();
+  for (const [userId, node] of Object.entries(userProfiles?.users || {})) {
+    for (const projectData of Object.values(node?.projects || {})) {
+      for (const wallet of listProjectWalletAddresses(projectData, normalizeWalletAddress)) {
+        if (!map.has(wallet)) {
+          map.set(wallet, new Set());
+        }
+        map.get(wallet).add(String(userId));
+      }
+    }
+  }
+  return map;
+}
+
 function hasNormalParticipantProfile(projectData, draw) {
   if (!draw?.projectId) {
     return true;
   }
-  const wallet = String(projectData?.trc20Address || "").trim();
+  const wallet =
+    String(projectData?.trc20Address || "").trim() ||
+    String(projectData?.antifraudTrc20Address || "").trim();
   const completedRegistration = Boolean(
     projectData?.referralVerified || projectData?.selfReportedNonReferral,
   );
@@ -37,17 +70,20 @@ function evaluateIpFraud(draw, userId, userProfiles, signals, deps) {
 
   const linkedByIp = listParticipantsOnIp(draw, userId, ipHash, getDrawParticipantMeta);
   const { projectData } = getUserProfileBundle(userProfiles, userId, draw.projectId);
-  const wallet = normalizeWalletAddress(projectData?.trc20Address);
+  const wallets = listProjectWalletAddresses(projectData, normalizeWalletAddress);
   const totalParticipants = draw.participantIds?.length || 0;
 
-  if (wallet) {
+  if (wallets.length > 0) {
+    const walletSet = new Set(wallets);
     const linkedByIpAndWallet = linkedByIp.filter((participantId) => {
       const { projectData: otherProjectData } = getUserProfileBundle(
         userProfiles,
         participantId,
         draw.projectId,
       );
-      return normalizeWalletAddress(otherProjectData?.trc20Address) === wallet;
+      return listProjectWalletAddresses(otherProjectData, normalizeWalletAddress).some((wallet) =>
+        walletSet.has(wallet),
+      );
     });
     if (linkedByIpAndWallet.length > 0) {
       return {
@@ -88,6 +124,8 @@ function evaluateIpFraud(draw, userId, userProfiles, signals, deps) {
 module.exports = {
   IP_FRAUD_MIN_CLUSTER_SIZE,
   IP_FRAUD_SHARE_RATIO,
+  listProjectWalletAddresses,
+  buildGlobalWalletOwners,
   hasNormalParticipantProfile,
   evaluateIpFraud,
 };

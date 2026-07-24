@@ -37,8 +37,10 @@ const {
   buildActiveDrawsDigestPayload,
   formatRubPrizeForPost,
   formatUsdPrizeForPost,
+  formatRefLinkDisplay,
 } = require("./draw-post-emojis");
-const { evaluateIpFraud } = require("./draw-anti-fraud");
+const { evaluateIpFraud, listProjectWalletAddresses, buildGlobalWalletOwners } = require("./draw-anti-fraud");
+const { checkWalletHasTransactions } = require("./tron-wallet-check");
 const {
   DATA_DIR,
   UPLOADS_DIR,
@@ -68,6 +70,7 @@ const SUPER_ADMIN_IDS = (process.env.SUPER_ADMIN_IDS || process.env.ADMIN_IDS ||
   .filter(Number.isFinite);
 const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
+const COUNTDOWN_MINUTE_THROTTLE_MS = Number(process.env.COUNTDOWN_MINUTE_THROTTLE_MS || 5 * 60_000);
 const PANEL_POLL_MS = Number(process.env.PANEL_POLL_MS || 8_000);
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
@@ -740,19 +743,39 @@ function collectDrawParticipantSignals(draw, userProfiles) {
     }
 
     const { projectData } = getUserProfileBundle(userProfiles, participantId, draw.projectId);
-    const wallet = normalizeWalletAddress(projectData?.trc20Address);
-    if (wallet) {
+    const wallets = listProjectWalletAddresses(projectData, normalizeWalletAddress);
+    const notifyWallet = normalizeWalletAddress(
+      draw.winnerNotifications?.[String(participantId)]?.trc20Address,
+    );
+    if (notifyWallet && !wallets.includes(notifyWallet)) {
+      wallets.push(notifyWallet);
+    }
+    for (const wallet of wallets) {
       byWallet.set(wallet, (byWallet.get(wallet) || 0) + 1);
     }
   }
 
-  return { byIp, byWallet };
+  return {
+    byIp,
+    byWallet,
+    globalWalletOwners: buildGlobalWalletOwners(userProfiles, normalizeWalletAddress),
+  };
+}
+
+function getWinnerEffectiveWallets(projectData, notifyInfo = null) {
+  const wallets = listProjectWalletAddresses(projectData, normalizeWalletAddress);
+  const notifyWallet = normalizeWalletAddress(notifyInfo?.trc20Address);
+  if (notifyWallet && !wallets.includes(notifyWallet)) {
+    wallets.push(notifyWallet);
+  }
+  return wallets;
 }
 
 function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = null, notifyInfo = null) {
   const labels = [];
-  const participantMeta = getDrawParticipantMeta(draw, winnerId);
   const signals = precomputedSignals || collectDrawParticipantSignals(draw, userProfiles);
+  const globalWalletOwners =
+    signals.globalWalletOwners || buildGlobalWalletOwners(userProfiles, normalizeWalletAddress);
 
   const ipFraud = evaluateIpFraud(draw, winnerId, userProfiles, signals, {
     getDrawParticipantMeta,
@@ -764,8 +787,14 @@ function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = n
   }
 
   const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
-  const wallet = normalizeWalletAddress(projectData?.trc20Address);
-  if (wallet && (signals.byWallet.get(wallet) || 0) > 1) {
+  const wallets = getWinnerEffectiveWallets(projectData, notifyInfo);
+  const multiAccount = wallets.some((wallet) => {
+    if ((signals.byWallet.get(wallet) || 0) > 1) {
+      return true;
+    }
+    return (globalWalletOwners.get(wallet)?.size || 0) > 1;
+  });
+  if (multiAccount) {
     labels.push("Мультиаккаунт");
   }
   if (notifyInfo?.channelSubscribed === false) {
@@ -1569,6 +1598,72 @@ function formatTimeUntilDrawEndLabel(draw) {
   return formatDurationRu(totalMinutes, "minutes");
 }
 
+function isMinuteCountdownLabel(label) {
+  return /минут/i.test(String(label || ""));
+}
+
+function markDrawCountdownCache(draw, label = null) {
+  const nextLabel = label != null ? label : formatTimeUntilDrawEndLabel(draw);
+  if (!nextLabel) {
+    return;
+  }
+  draw.postTimeLeftLabel = nextLabel;
+  draw.postTimeLeftUpdatedAt = new Date().toISOString();
+}
+
+function shouldUpdateDrawCountdownPost(draw, newLabel) {
+  if (!draw?.messageId || !draw?.channelId || draw.status !== DRAW_STATUS.ACTIVE) {
+    return false;
+  }
+  if (draw.endMode === "manual" || !draw.endAt || !newLabel) {
+    return false;
+  }
+  if (String(draw.postTimeLeftLabel || "") === String(newLabel)) {
+    return false;
+  }
+  if (isMinuteCountdownLabel(newLabel) && isMinuteCountdownLabel(draw.postTimeLeftLabel)) {
+    const lastAt = Date.parse(draw.postTimeLeftUpdatedAt || "");
+    if (Number.isFinite(lastAt) && Date.now() - lastAt < COUNTDOWN_MINUTE_THROTTLE_MS) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function drawShowsProjectInPost(draw) {
+  return Boolean(draw?.projectId) && draw?.showProjectInPost !== false;
+}
+
+function getDrawPostProjectLine(draw) {
+  if (!drawShowsProjectInPost(draw)) {
+    return null;
+  }
+  const project = getProjectById(draw.projectId);
+  const url = String(project?.refLink || "").trim();
+  const name = String(project?.name || "").trim();
+  if (!project || !url || !name) {
+    return null;
+  }
+  return {
+    emoji: String(project.emoji || "").trim() || "💚",
+    name,
+    url,
+    displayUrl: formatRefLinkDisplay(url),
+  };
+}
+
+function getActivePostDurationParts(draw) {
+  const endManual = draw.endMode === "manual" || !draw.endAt;
+  if (endManual) {
+    return { endManual: true, durationLabel: "" };
+  }
+  const timeLeft = formatTimeUntilDrawEndLabel(draw);
+  return {
+    endManual: false,
+    durationLabel: timeLeft || "1 минуту",
+  };
+}
+
 function canSendDrawReminder(draw) {
   return (
     draw.status === DRAW_STATUS.ACTIVE &&
@@ -1638,6 +1733,8 @@ function normalizeActiveDrawsDigestEntry(raw) {
       messageIds: raw.filter(Boolean),
       drawIds: null,
       ownerId: null,
+      timeLeftKey: null,
+      timeLeftUpdatedAt: null,
     };
   }
   if (typeof raw !== "object") {
@@ -1647,6 +1744,8 @@ function normalizeActiveDrawsDigestEntry(raw) {
     messageIds: Array.isArray(raw.messageIds) ? raw.messageIds.filter(Boolean) : [],
     drawIds: Array.isArray(raw.drawIds) ? raw.drawIds.map(String) : null,
     ownerId: raw.ownerId != null ? Number(raw.ownerId) : null,
+    timeLeftKey: raw.timeLeftKey != null ? String(raw.timeLeftKey) : null,
+    timeLeftUpdatedAt: raw.timeLeftUpdatedAt || null,
   };
 }
 
@@ -1666,6 +1765,8 @@ function setActiveDrawsDigestEntry(data, channelId, entry) {
     messageIds: entry.messageIds,
     drawIds: Array.isArray(entry.drawIds) ? entry.drawIds.map(String) : [],
     ownerId: entry.ownerId != null ? Number(entry.ownerId) : null,
+    timeLeftKey: entry.timeLeftKey != null ? String(entry.timeLeftKey) : null,
+    timeLeftUpdatedAt: entry.timeLeftUpdatedAt || null,
   };
 }
 
@@ -1752,6 +1853,8 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
       messageIds: [messageId],
       drawIds: remaining.map((draw) => String(draw.id)),
       ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+      timeLeftKey: buildDigestTimeLeftKey(remaining),
+      timeLeftUpdatedAt: new Date().toISOString(),
     });
   } catch (error) {
     console.error(
@@ -1764,6 +1867,8 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
           messageIds: [messageId],
           drawIds: remaining.map((draw) => String(draw.id)),
           ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+          timeLeftKey: buildDigestTimeLeftKey(remaining),
+          timeLeftUpdatedAt: new Date().toISOString(),
         });
         return;
       }
@@ -1783,6 +1888,8 @@ async function sendActiveDrawsDigestForChannel(data, channelId, draws) {
     messageIds: message?.message_id ? [message.message_id] : [],
     drawIds: draws.map((draw) => String(draw.id)),
     ownerId: draws[0]?.ownerId != null ? Number(draws[0].ownerId) : null,
+    timeLeftKey: buildDigestTimeLeftKey(draws),
+    timeLeftUpdatedAt: new Date().toISOString(),
   });
   return message;
 }
@@ -1883,6 +1990,7 @@ function getWinnerMentionLink(userProfiles, winnerId) {
 
 function getDrawPostTelegramContent(draw, options = {}) {
   const { includeWinners = false, forCaption = false } = options;
+  const projectLine = getDrawPostProjectLine(draw);
 
   if (includeWinners) {
     const userProfiles = readUserProjectProfiles();
@@ -1894,6 +2002,7 @@ function getDrawPostTelegramContent(draw, options = {}) {
       winners,
       resultsUrl: getWinnersChannelUrl(draw.id),
       postTitle: draw.postTitle || "",
+      projectLine,
     });
     let text = payload.caption || "";
     if (forCaption && text.length > 1000) {
@@ -1906,13 +2015,15 @@ function getDrawPostTelegramContent(draw, options = {}) {
     };
   }
 
+  const { endManual, durationLabel } = getActivePostDurationParts(draw);
   const payload = buildDrawPostCaptionPayload({
     usePremiumEmoji: DRAW_POST_PREMIUM_EMOJI,
     prizeLabel: formatDrawPrizePlain(draw),
     winnersCount: draw.winnersCount,
-    durationLabel: getDrawDurationLabel(draw),
-    endManual: draw.endMode === "manual" || !draw.endAt,
+    durationLabel,
+    endManual,
     postTitle: draw.postTitle || "",
+    projectLine,
     includeWinners: false,
   });
 
@@ -2258,6 +2369,7 @@ async function publishDrawToChannel(draw) {
   }
 
   markDrawPostParticipantCount(draw);
+  markDrawCountdownCache(draw);
   draw.awaitingChannelPost = false;
 }
 
@@ -2384,6 +2496,7 @@ async function linkDrawChannelPost(draw, post) {
     draw,
     Number.isFinite(postedCount) ? postedCount : getDrawParticipantCount(draw),
   );
+  markDrawCountdownCache(draw);
   return true;
 }
 
@@ -2485,6 +2598,9 @@ async function updateDrawPost(draw, includeWinners) {
         captionOpts,
       );
       markDrawPostParticipantCount(draw);
+      if (!includeWinners && draw.status === DRAW_STATUS.ACTIVE) {
+        markDrawCountdownCache(draw);
+      }
       return;
     }
 
@@ -2497,6 +2613,9 @@ async function updateDrawPost(draw, includeWinners) {
       textOpts,
     );
     markDrawPostParticipantCount(draw);
+    if (!includeWinners && draw.status === DRAW_STATUS.ACTIVE) {
+      markDrawCountdownCache(draw);
+    }
   } catch (error) {
     if (isIgnorableTelegramEditError(error)) {
       return;
@@ -3056,6 +3175,112 @@ async function refreshDrawPostKeyboard(draw) {
 
   await bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup);
   markDrawPostParticipantCount(draw, count);
+}
+
+async function syncActiveDrawCountdownPosts(data) {
+  if (WEB_ONLY) {
+    return false;
+  }
+
+  let updated = 0;
+  for (const draw of data.draws || []) {
+    const newLabel = formatTimeUntilDrawEndLabel(draw);
+    if (!shouldUpdateDrawCountdownPost(draw, newLabel)) {
+      continue;
+    }
+    try {
+      await updateDrawPost(draw, false);
+      updated += 1;
+      await sleep(350);
+    } catch (error) {
+      if (!isIgnorableTelegramEditError(error)) {
+        console.warn(`[countdown] пост ${draw.id}: ${error.message}`);
+      }
+    }
+  }
+  return updated > 0;
+}
+
+function buildDigestTimeLeftKey(draws) {
+  return (draws || [])
+    .map((draw) => `${draw.id}:${formatTimeUntilDrawEndLabel(draw) || "manual"}`)
+    .join("|");
+}
+
+function shouldThrottleDigestMinuteUpdate(entry, remaining) {
+  const anyMinute = remaining.some((draw) => isMinuteCountdownLabel(formatTimeUntilDrawEndLabel(draw)));
+  if (!anyMinute) {
+    return false;
+  }
+  const lastAt = Date.parse(entry?.timeLeftUpdatedAt || "");
+  return Number.isFinite(lastAt) && Date.now() - lastAt < COUNTDOWN_MINUTE_THROTTLE_MS;
+}
+
+async function syncActiveDrawsDigestCountdowns(data) {
+  if (WEB_ONLY) {
+    return false;
+  }
+
+  const store = ensureActiveDrawsDigestStore(data);
+  let updated = 0;
+
+  for (const channelId of Object.keys(store)) {
+    const entry = getActiveDrawsDigestEntry(data, channelId);
+    if (!entry?.messageIds?.length) {
+      continue;
+    }
+    const remaining = listRemainingDrawsForActiveDigest(data, channelId, entry);
+    if (remaining.length === 0) {
+      await deleteActiveDrawsDigestMessages(data, channelId);
+      updated += 1;
+      continue;
+    }
+
+    const timeKey = buildDigestTimeLeftKey(remaining);
+    if (entry.timeLeftKey === timeKey) {
+      continue;
+    }
+    if (shouldThrottleDigestMinuteUpdate(entry, remaining) && entry.timeLeftKey) {
+      const prevMinuteOnly =
+        String(entry.timeLeftKey || "").includes("минут") && timeKey.includes("минут");
+      if (prevMinuteOnly) {
+        continue;
+      }
+    }
+
+    const messageId = entry.messageIds[0];
+    try {
+      await editActiveDrawsDigestMessage(channelId, messageId, remaining);
+      for (const extraId of entry.messageIds.slice(1)) {
+        await safeDeleteMessage(channelId, extraId);
+      }
+      setActiveDrawsDigestEntry(data, channelId, {
+        messageIds: [messageId],
+        drawIds: remaining.map((draw) => String(draw.id)),
+        ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+        timeLeftKey: timeKey,
+        timeLeftUpdatedAt: new Date().toISOString(),
+      });
+      updated += 1;
+      await sleep(350);
+    } catch (error) {
+      if (/message is not modified/i.test(error.message || "")) {
+        setActiveDrawsDigestEntry(data, channelId, {
+          messageIds: [messageId],
+          drawIds: remaining.map((draw) => String(draw.id)),
+          ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+          timeLeftKey: timeKey,
+          timeLeftUpdatedAt: new Date().toISOString(),
+        });
+        continue;
+      }
+      if (!isIgnorableTelegramEditError(error)) {
+        console.warn(`[countdown] дайджест ${channelId}: ${error.message}`);
+      }
+    }
+  }
+
+  return updated > 0;
 }
 
 async function syncStaleActiveDrawPostCounts(data) {
@@ -3675,12 +3900,69 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
     return false;
   }
 
+  const walletCheck = await checkWalletHasTransactions(text);
+  const forceNonReferralByWallet = walletCheck.ok && walletCheck.hasTransactions;
+  const checkedAt = new Date().toISOString();
+
   liveNotify.trc20Address = text;
+  liveNotify.addressReceivedAt = checkedAt;
+  liveNotify.walletTxCheckedAt = checkedAt;
+  liveNotify.walletTxCount = walletCheck.txCount;
+  liveNotify.walletHasTransactions = forceNonReferralByWallet;
+
+  if (draw.projectId) {
+    const profilePayload = {
+      antifraudTrc20Address: text,
+      antifraudWalletSource: "winner_deposit",
+      antifraudWalletSavedAt: checkedAt,
+      walletTxCheckedAt: checkedAt,
+      walletTxCount: walletCheck.txCount,
+      walletHasTransactions: forceNonReferralByWallet,
+    };
+    if (forceNonReferralByWallet) {
+      profilePayload.selfReportedNonReferral = true;
+      profilePayload.referralVerified = false;
+      profilePayload.referralOwnerId = null;
+      profilePayload.nonReferralReason = "wallet_has_transactions";
+    }
+    setUserProjectProfile(userId, draw.projectId, profilePayload);
+  }
+
+  const userProfiles = readUserProjectProfiles();
+  const { projectData } = getUserProfileBundle(userProfiles, userId, draw.projectId);
+  const antiFraud = getWinnerAntiFraud(draw, userId, userProfiles, null, liveNotify);
+
+  if (antiFraud.hasFraudFlag) {
+    liveNotify.status = "forfeited";
+    liveNotify.antiFraudFlag = true;
+    liveNotify.forfeitureReason = "antifraud";
+    liveNotify.forfeitedAt = checkedAt;
+    liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: true });
+    writeData(data);
+    await ctx.reply(
+      [
+        "⚠️ Адрес сохранён, но приз аннулирован антифрод-системой.",
+        antiFraud.labels.length ? `Причина: ${antiFraud.labels.join(", ")}.` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    return true;
+  }
+
   liveNotify.status = "confirmed";
-  liveNotify.addressReceivedAt = new Date().toISOString();
+  liveNotify.antiFraudFlag = false;
+  liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: false });
   writeData(data);
 
-  await ctx.reply(buildWinnerDepositAddressReceivedHtml(text), { parse_mode: "HTML" });
+  const receivedLines = [buildWinnerDepositAddressReceivedHtml(text)];
+  if (forceNonReferralByWallet) {
+    receivedLines.push(
+      "",
+      "На этом кошельке уже были транзакции в блокчейне — выплата как для не-реферала.",
+    );
+  }
+  await ctx.reply(receivedLines.join("\n"), { parse_mode: "HTML" });
   return true;
 }
 
@@ -3793,6 +4075,16 @@ async function schedulerTick() {
 
   const postCountChanges = await syncStaleActiveDrawPostCounts(data);
   if (postCountChanges) {
+    hasChanges = true;
+  }
+
+  const countdownPostChanges = await syncActiveDrawCountdownPosts(data);
+  if (countdownPostChanges) {
+    hasChanges = true;
+  }
+
+  const digestCountdownChanges = await syncActiveDrawsDigestCountdowns(data);
+  if (digestCountdownChanges) {
     hasChanges = true;
   }
 
@@ -4137,17 +4429,24 @@ function drawLabel(iconType, text) {
 
 function renderProjectCard(project) {
   const refLink = project.refLink || "";
+  const emoji = String(project.emoji || "").trim();
+  const promoCode = String(project.promoCode || "").trim();
   return `
     <article class="project-card">
       <div class="project-card-head">
         <div class="project-card-body">
-          <h3 class="project-card-name">${escapeHtml(project.name)}</h3>
+          <h3 class="project-card-name">${emoji ? `${escapeHtml(emoji)} ` : ""}${escapeHtml(project.name)}</h3>
           ${
             refLink
               ? `<a class="project-card-link" href="${escapeHtml(refLink)}" target="_blank" rel="noopener noreferrer">
                   <span class="draw-ico">${renderFormIcon("link")}</span>
                   <span class="project-card-link-text">${escapeHtml(refLink)}</span>
                 </a>`
+              : ""
+          }
+          ${
+            promoCode
+              ? `<div class="project-card-promo">Промокод: <code>${escapeHtml(promoCode)}</code></div>`
               : ""
           }
         </div>
@@ -4159,6 +4458,8 @@ function renderProjectCard(project) {
             data-project-id="${escapeHtml(project.id)}"
             data-project-name="${escapeHtml(project.name)}"
             data-project-ref="${escapeHtml(refLink)}"
+            data-project-emoji="${escapeHtml(emoji)}"
+            data-project-promo="${escapeHtml(promoCode)}"
           >${renderFormIcon("edit")}</button>
           <form method="post" action="${PANEL_BASE}/projects/${encodeURIComponent(project.id)}/delete" class="project-delete-form">
             <button
@@ -7198,6 +7499,14 @@ ${getPanelFluidTypographyVars()}
                 </span>
               </label>
             </div>
+            <div class="draw-field draw-check-field">
+              <label class="draw-check-label">
+                <input class="draw-check" type="checkbox" name="showProjectInPost" value="1" checked />
+                <span class="draw-check-text">
+                  <span class="draw-check-title">Указывать проект в посте</span>
+                </span>
+              </label>
+            </div>
           </div>
 
           <input type="hidden" name="publishTarget" value="channel" />
@@ -7235,6 +7544,14 @@ ${getPanelFluidTypographyVars()}
             <div class="draw-field">
               ${drawLabel("link", "Реферальная ссылка")}
               <input class="draw-input" name="refLink" type="url" placeholder="https://..." required />
+            </div>
+            <div class="draw-field">
+              ${drawLabel("gift", "Эмодзи для проекта")}
+              <input class="draw-input" name="emoji" type="text" maxlength="16" placeholder="💚" />
+            </div>
+            <div class="draw-field">
+              ${drawLabel("confirm", "Промокод")}
+              <input class="draw-input" name="promoCode" type="text" maxlength="64" placeholder="Необязательно" />
             </div>
           </div>
           <div class="project-form-footer">
@@ -7787,12 +8104,16 @@ ${getPanelFluidTypographyVars()}
       const submitBtn = document.getElementById("project-submit-btn");
       const nameInput = form?.querySelector('[name="name"]');
       const refInput = form?.querySelector('[name="refLink"]');
+      const emojiInput = form?.querySelector('[name="emoji"]');
+      const promoInput = form?.querySelector('[name="promoCode"]');
       if (!form || !cancelBtn || !submitLabel || !nameInput || !refInput) return;
 
       function resetProjectForm() {
         form.action = "${PANEL_BASE}/projects";
         nameInput.value = "";
         refInput.value = "";
+        if (emojiInput) emojiInput.value = "";
+        if (promoInput) promoInput.value = "";
         cancelBtn.style.display = "none";
         submitLabel.textContent = "Добавить проект";
         if (submitBtn) {
@@ -7807,6 +8128,8 @@ ${getPanelFluidTypographyVars()}
           form.action = "${PANEL_BASE}/projects/" + encodeURIComponent(projectId) + "/update";
           nameInput.value = btn.dataset.projectName || "";
           refInput.value = btn.dataset.projectRef || "";
+          if (emojiInput) emojiInput.value = btn.dataset.projectEmoji || "";
+          if (promoInput) promoInput.value = btn.dataset.projectPromo || "";
           cancelBtn.style.display = "";
           submitLabel.textContent = "Сохранить";
           if (submitBtn) {
@@ -8453,8 +8776,10 @@ function parseProjectFormBody(req) {
   const body = req.body || {};
   const name = (body.name || "").trim();
   const refLink = (body.refLink || "").trim();
+  const emoji = String(body.emoji || "").trim().slice(0, 16);
+  const promoCode = String(body.promoCode || "").trim().slice(0, 64);
   const logoClipboardData = (body.logoClipboardData || "").trim();
-  return { name, refLink, logoClipboardData };
+  return { name, refLink, emoji, promoCode, logoClipboardData };
 }
 
 function resolveProjectLogoUpload(req, logoClipboardData, previousLogoPath = "") {
@@ -8470,7 +8795,7 @@ function resolveProjectLogoUpload(req, logoClipboardData, previousLogoPath = "")
 
 panelRouter.post("/projects", webAuth.requireAuth, requireOrganizer, (req, res) => {
   const ownerId = req.webUser.id;
-  const { name, refLink } = parseProjectFormBody(req);
+  const { name, refLink, emoji, promoCode } = parseProjectFormBody(req);
 
   if (!name || !refLink) {
     redirectWithMessage(res, "Укажите название проекта и реф-ссылку.");
@@ -8482,6 +8807,8 @@ panelRouter.post("/projects", webAuth.requireAuth, requireOrganizer, (req, res) 
     id: createProjectId(),
     name,
     refLink,
+    emoji,
+    promoCode,
     logoPath: "",
     ownerId,
     createdAt: new Date().toISOString(),
@@ -8500,7 +8827,7 @@ panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrga
     return;
   }
 
-  const { name, refLink } = parseProjectFormBody(req);
+  const { name, refLink, emoji, promoCode } = parseProjectFormBody(req);
   if (!name || !refLink) {
     redirectWithMessage(res, "Укажите название проекта и реф-ссылку.");
     return;
@@ -8517,6 +8844,8 @@ panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrga
     ...projectsData.projects[index],
     name,
     refLink,
+    emoji,
+    promoCode,
   };
   writeProjects(projectsData);
   redirectWithMessage(res, "Проект обновлён.");
@@ -8732,6 +9061,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       winnerConfirmValue: normalizedWinnerConfirmValue,
       winnerConfirmUnit: normalizedWinnerConfirmUnit,
       askWalletOnJoin: String(body.askWalletOnJoin || "") === "1",
+      showProjectInPost: String(body.showProjectInPost || "") === "1",
       publishTarget,
     };
 
@@ -9103,6 +9433,7 @@ registerAdminDashboard(app, {
   isMoneyPrizeType,
   normalizeWalletAddress,
   evaluateIpFraud,
+  listProjectWalletAddresses,
   formatRubAmount,
   formatUsdAmount,
 });

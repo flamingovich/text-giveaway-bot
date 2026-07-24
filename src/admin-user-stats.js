@@ -43,10 +43,19 @@ function collectDrawFraudLinks(draw, userId, userProfiles, signals, deps) {
     getUserProfileBundle,
     normalizeWalletAddress,
     evaluateIpFraud,
+    listProjectWalletAddresses,
   } = deps;
   const links = [];
   const { projectData } = getUserProfileBundle(userProfiles, userId, draw.projectId);
-  const wallet = normalizeWalletAddress(projectData?.trc20Address);
+  const wallets = listProjectWalletAddresses
+    ? listProjectWalletAddresses(projectData, normalizeWalletAddress)
+    : [normalizeWalletAddress(projectData?.trc20Address)].filter(Boolean);
+  const notifyWallet = normalizeWalletAddress(
+    draw.winnerNotifications?.[String(userId)]?.trc20Address,
+  );
+  if (notifyWallet && !wallets.includes(notifyWallet)) {
+    wallets.push(notifyWallet);
+  }
   const drawTitle = String(draw.title || draw.id || "—").trim();
 
   const ipFraud = evaluateIpFraud(draw, userId, userProfiles, signals, {
@@ -65,25 +74,41 @@ function collectDrawFraudLinks(draw, userId, userProfiles, signals, deps) {
     });
   }
 
-  if (wallet && (signals.byWallet.get(wallet) || 0) > 1) {
+  const globalWalletOwners = signals.globalWalletOwners;
+  for (const wallet of wallets) {
+    const drawShare = (signals.byWallet.get(wallet) || 0) > 1;
+    const globalShare = (globalWalletOwners?.get(wallet)?.size || 0) > 1;
+    if (!drawShare && !globalShare) {
+      continue;
+    }
     const linkedUserIds = findLinkedParticipantIds(draw, userId, (participantId) => {
       const { projectData: otherProjectData } = getUserProfileBundle(
         userProfiles,
         participantId,
         draw.projectId,
       );
-      return normalizeWalletAddress(otherProjectData?.trc20Address) === wallet;
+      const otherWallets = listProjectWalletAddresses
+        ? listProjectWalletAddresses(otherProjectData, normalizeWalletAddress)
+        : [normalizeWalletAddress(otherProjectData?.trc20Address)].filter(Boolean);
+      const otherNotify = normalizeWalletAddress(
+        draw.winnerNotifications?.[String(participantId)]?.trc20Address,
+      );
+      return otherWallets.includes(wallet) || otherNotify === wallet;
     });
+    const globalOthers = globalShare
+      ? [...(globalWalletOwners.get(wallet) || [])].filter((id) => String(id) !== String(userId))
+      : [];
+    const uniqueLinked = [...new Set([...linkedUserIds.map(String), ...globalOthers])];
     links.push({
       label: "Мультиаккаунт",
       kind: "wallet",
       drawId: draw.id,
       drawTitle,
-      linkedUserIds,
+      linkedUserIds: uniqueLinked,
       wallet,
-      reason: linkedUserIds.length
-        ? `Общий TRC20-кошелёк с участниками: ${linkedUserIds.join(", ")}`
-        : "Общий TRC20-кошелёк с другими участниками",
+      reason: uniqueLinked.length
+        ? `Общий TRC20-кошелёк с аккаунтами: ${uniqueLinked.join(", ")}`
+        : "Общий TRC20-кошелёк с другими аккаунтами",
     });
   }
 
