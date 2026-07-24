@@ -148,7 +148,6 @@ function appendOptionalPostTitle(builder, postTitle) {
     return false;
   }
   builder.addBold(title);
-  builder.append("\n\n");
   return true;
 }
 
@@ -167,8 +166,32 @@ function appendOptionalProjectLine(builder, projectLine) {
   builder.append(" » ");
   const displayUrl = formatRefLinkDisplay(projectLine.displayUrl || projectLine.url);
   builder.addTextLink(displayUrl || projectLine.url, projectLine.url, { bold: true });
-  builder.append("\n");
   return true;
+}
+
+/**
+ * ЗАГОЛОВОК
+ * ПРОЕКТ
+ * (пустая строка)
+ * ТЕЛО
+ */
+function appendPostHeaderBlock(builder, postTitle, projectLine) {
+  const hasTitle = appendOptionalPostTitle(builder, postTitle);
+  if (hasTitle) {
+    builder.append("\n");
+    if (appendOptionalProjectLine(builder, projectLine)) {
+      builder.append("\n\n");
+      return true;
+    }
+    // заголовок без проекта — пустая строка перед телом
+    builder.append("\n");
+    return true;
+  }
+  if (appendOptionalProjectLine(builder, projectLine)) {
+    builder.append("\n\n");
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -193,8 +216,7 @@ function buildDrawPostCaptionPayload(data) {
   const b = new CaptionBuilder();
   const useCustom = Boolean(usePremiumEmoji);
 
-  appendOptionalPostTitle(b, postTitle);
-  appendOptionalProjectLine(b, projectLine);
+  appendPostHeaderBlock(b, postTitle, projectLine);
 
   // 🎁 РОЗЫГРЫШ НА 4О$
   b.addEmoji("gift", { custom: useCustom, bold: true });
@@ -243,8 +265,7 @@ function buildDrawPostFinishedPayload(data) {
 
   const b = new CaptionBuilder();
 
-  appendOptionalPostTitle(b, postTitle);
-  appendOptionalProjectLine(b, projectLine);
+  appendPostHeaderBlock(b, postTitle, projectLine);
 
   b.append("🎉");
   b.addBold(" ИТОГИ НА ");
