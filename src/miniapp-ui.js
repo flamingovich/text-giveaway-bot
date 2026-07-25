@@ -1259,6 +1259,20 @@ function getJoinFlowStyles() {
       max-width: 260px;
     }
 
+    body.join-flow .join-ref-status-error .join-ref-status-text {
+      white-space: nowrap;
+      max-width: none;
+    }
+
+    body.join-flow .join-btn-secondary.join-btn-locked {
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, var(--tg-theme-secondary-bg-color, #232f42));
+      color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 88%, transparent);
+      border: 1.5px dashed color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 42%, transparent);
+      box-shadow: none;
+      opacity: 1;
+      cursor: not-allowed;
+    }
+
     body.join-flow .join-ref-status-error {
       background: color-mix(in srgb, #a12626 12%, var(--tg-theme-secondary-bg-color, #fff));
       color: #c62828;

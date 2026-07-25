@@ -426,9 +426,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             <span class="join-btn-label">Перейти на ${projectName}</span>
           </a>
-          <button type="button" class="join-btn join-btn-secondary" id="refConfirmBtn"><span class="join-btn-label">Подтвердить статус реферала</span></button>
+          <button type="button" class="join-btn join-btn-secondary join-btn-locked" id="refConfirmBtn" disabled><span class="join-btn-label">Подтвердить статус реферала</span></button>
           <div id="refConfirmStatus" class="join-ref-status hidden" role="status"></div>
-          <button type="button" class="join-btn join-btn-primary join-btn-locked" id="registrationDoneBtn" disabled>${JOIN_BTN_LOCK}<span class="join-btn-label">Я зарегистрировался</span></button>
           <button type="button" class="join-btn join-btn-secondary" id="registrationNonRefBtn"><span class="join-btn-label">Я не реферал</span></button>
         </div>`,
       )}
@@ -618,7 +617,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     let mockRecaptchaBound = false;
     let refConfirmAttempts = 0;
     let refConfirmed = false;
+    let projectLinkOpened = false;
     const REF_CONFIRM_LABEL = "Подтвердить статус реферала";
+    const REF_CONFIRM_ERROR_TEXT = "Аккаунт не найден. Попробуйте ещё\u00A0раз.";
     const JOIN_BTN_SPINNER = ${JSON.stringify(JOIN_BTN_SPINNER)};
     const JOIN_BTN_LOCK = ${JSON.stringify(JOIN_BTN_LOCK)};
     const JOIN_BTN_CHECK = ${JSON.stringify(JOIN_BTN_CHECK)};
@@ -644,12 +645,24 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       status.innerHTML = "";
     }
 
+    function setRefConfirmLocked(locked) {
+      const btn = document.getElementById("refConfirmBtn");
+      if (!btn || refConfirmed || btn.classList.contains("is-done")) return;
+      btn.disabled = locked;
+      btn.classList.toggle("join-btn-locked", locked);
+      if (!btn.classList.contains("is-loading")) {
+        btn.innerHTML = locked
+          ? JOIN_BTN_LOCK + '<span class="join-btn-label">' + REF_CONFIRM_LABEL + "</span>"
+          : '<span class="join-btn-label">' + REF_CONFIRM_LABEL + "</span>";
+      }
+    }
+
     function setRefConfirmIdle() {
       const btn = document.getElementById("refConfirmBtn");
       if (!btn) return;
-      btn.disabled = false;
       btn.classList.remove("is-loading", "is-done");
       btn.innerHTML = '<span class="join-btn-label">' + REF_CONFIRM_LABEL + "</span>";
+      setRefConfirmLocked(!projectLinkOpened);
     }
 
     function setRefConfirmLoading() {
@@ -665,19 +678,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const btn = document.getElementById("refConfirmBtn");
       if (!btn) return;
       btn.disabled = true;
-      btn.classList.remove("is-loading");
+      btn.classList.remove("is-loading", "join-btn-locked");
       btn.classList.add("is-done");
       btn.innerHTML = JOIN_BTN_CHECK + '<span class="join-btn-label">Реферал подтверждён</span>';
-    }
-
-    function setRegistrationLocked(locked) {
-      const btn = document.getElementById("registrationDoneBtn");
-      if (!btn) return;
-      btn.disabled = locked;
-      btn.classList.toggle("join-btn-locked", locked);
-      btn.innerHTML = locked
-        ? JOIN_BTN_LOCK + '<span class="join-btn-label">Я зарегистрировался</span>'
-        : '<span class="join-btn-label">Я зарегистрировался</span>';
     }
 
     function initData() {
@@ -1575,12 +1578,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     function resetRefConfirmUi() {
       refConfirmAttempts = 0;
       refConfirmed = false;
+      projectLinkOpened = false;
       const refStatus = document.getElementById("refConfirmStatus");
+      hideRefStatus();
       setRefConfirmIdle();
-      if (refStatus) {
-        hideRefStatus();
-      }
-      setRegistrationLocked(true);
     }
 
     function bindClick(id, handler) {
@@ -1588,10 +1589,19 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (el) el.addEventListener("click", handler);
     }
 
+    const projectLinkEl = document.getElementById("projectLink");
+    if (projectLinkEl) {
+      projectLinkEl.addEventListener("click", () => {
+        projectLinkOpened = true;
+        if (!refConfirmed) {
+          setRefConfirmLocked(false);
+        }
+      });
+    }
+
     bindClick("refConfirmBtn", async () => {
       const btn = document.getElementById("refConfirmBtn");
-      const status = document.getElementById("refConfirmStatus");
-      if (!btn || refConfirmed || btn.disabled) return;
+      if (!btn || refConfirmed || btn.disabled || !projectLinkOpened) return;
 
       const isFirstAttempt = refConfirmAttempts === 0;
       setRefConfirmLoading();
@@ -1607,21 +1617,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
       if (isFirstAttempt) {
         setRefConfirmIdle();
-        showRefStatus("error", "Аккаунт не найден. Попробуйте ещё раз.");
+        showRefStatus("error", REF_CONFIRM_ERROR_TEXT);
         return;
       }
 
       refConfirmed = true;
       setRefConfirmDone();
       showRefStatus("ok", "Аккаунт подтверждён");
-      setRegistrationLocked(false);
-    });
-
-    bindClick("registrationDoneBtn", async () => {
-      if (!refConfirmed) {
-        showMessage("Сначала подтвердите статус реферала.");
-        return;
-      }
       await submitRegistration({ action: "opened" });
     });
 
@@ -1630,10 +1632,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     async function submitRegistration(body) {
-      const doneBtn = document.getElementById("registrationDoneBtn");
       const nonRefBtn = document.getElementById("registrationNonRefBtn");
-      if (doneBtn) doneBtn.disabled = true;
+      const refBtn = document.getElementById("refConfirmBtn");
       if (nonRefBtn) nonRefBtn.disabled = true;
+      if (refBtn && !refBtn.classList.contains("is-done")) refBtn.disabled = true;
       try {
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/registration", body);
         hideMessage();
@@ -1641,9 +1643,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       } catch (error) {
         showMessage(error.message);
       } finally {
-        if (doneBtn) doneBtn.disabled = !refConfirmed ? true : false;
         if (nonRefBtn) nonRefBtn.disabled = false;
-        if (doneBtn && !refConfirmed) setRegistrationLocked(true);
+        if (refBtn && !refConfirmed) {
+          setRefConfirmLocked(!projectLinkOpened);
+        }
       }
     }
 
