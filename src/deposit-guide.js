@@ -98,12 +98,13 @@ function validateDepositAddress(address, networkId) {
   return network.validate(address);
 }
 
-function buildNetworkForfeitWarningHtml(networkId) {
+function buildNetworkForfeitWarningHtml(_networkId) {
+  return "⚠️ Очень важно: Если сеть будет неверной — <b>приз НЕ ПРИДЁТ</b>! Перепроверяйте сеть!";
+}
+
+function buildGuideNetworkPickWarning(networkId) {
   const network = getDepositNetworkMeta(networkId);
-  return [
-    `<b>⚠️ Очень важно:</b> отправьте адрес именно в сети <b>${network.shortLabel}</b> (${network.label}).`,
-    "Если сеть будет неверной — <b>приз сгорит</b> без возможности восстановления!",
-  ].join("\n");
+  return `⚠️ Важно! Выбирайте именно ${network.selectLabel}!`;
 }
 
 function buildJoinWalletStepPayload(project, networkId) {
@@ -155,12 +156,12 @@ function buildJoinWalletStepPayload(project, networkId) {
       },
       {
         num: 2,
-        text: "Выберите криптовалюту Tether (USDT)",
+        text: "Выберите криптовалюту",
         imageUrl: "/assets/trc20-guide/rp_guide/rp_step2.jpg",
       },
       {
         num: 3,
-        text: `Выберите сеть ${network.selectLabel}`,
+        text: `Выберите сеть ${network.selectLabel}. ${buildGuideNetworkPickWarning(network.id)}`,
         imageUrl: `/assets/trc20-guide/rp_guide/${network.rpStep3Image}`,
       },
       {
@@ -172,14 +173,15 @@ function buildJoinWalletStepPayload(project, networkId) {
   };
 }
 
-function buildWinnerDepositAddressRequestHtml(_draw, project, networkId, winnerDepositMinutes) {
+function buildWinnerDepositAddressRequestHtml(_draw, project, networkId, winnerDepositMinutes, projectLinkHtml) {
   const network = getDepositNetworkMeta(networkId);
-  const projectName = String(project?.name || "проекте").trim();
+  const projectPart =
+    projectLinkHtml || `<b>${String(project?.name || "проекте").replace(/&/g, "&amp;").replace(/</g, "&lt;")}</b>`;
   return [
     "✅ Проверка пройдена!",
     "",
-    `Отправьте <b>АКТУАЛЬНЫЙ</b> адрес депозита <b>${network.shortLabel}</b> (${network.label}) с проекта <b>${projectName}</b> одним сообщением.`,
-    buildNetworkForfeitWarningHtml(networkId),
+    `Отправьте <b>АКТУАЛЬНЫЙ</b> адрес пополнения ${projectPart} в сети <b>${network.shortLabel}</b> (${network.selectLabel}).`,
+    "⚠️ Очень важно: Если сеть будет неверной — <b>приз НЕ ПРИДЁТ</b>! Перепроверяйте сеть!",
     "",
     `Пример: <code>${network.addressExample}</code>`,
     "",
@@ -207,8 +209,8 @@ function buildBotGuideStepTexts(project, networkId, projectLinkHtml) {
     : "Шаг 1/4: откройте проект и нажмите кнопку депозита.";
   return [
     step1,
-    "Шаг 2/4: выберите криптовалюту Tether (USDT).",
-    `Шаг 3/4: выберите сеть <b>${network.selectLabel}</b>.`,
+    "Шаг 2/4: выберите криптовалюту",
+    `Шаг 3/4: выберите сеть ${network.selectLabel}\n${buildGuideNetworkPickWarning(networkId)}`,
     "Шаг 4/4: скопируйте адрес кнопкой «Копировать».",
   ];
 }

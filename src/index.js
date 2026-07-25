@@ -1387,11 +1387,13 @@ function buildWinnerExpiredText(draw) {
 function buildWinnerDepositAddressRequestHtml(draw, networkId) {
   const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const resolvedNetwork = resolveDepositNetworkForProject(project, networkId);
+  const projectLinkHtml = draw.projectId ? buildProjectLinkHtml(draw.projectId) : null;
   return buildDepositAddressRequestHtml(
     draw,
     project,
     resolvedNetwork,
     WINNER_DEPOSIT_ADDRESS_MINUTES,
+    projectLinkHtml,
   );
 }
 
