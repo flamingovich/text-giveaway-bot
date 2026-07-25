@@ -22,6 +22,12 @@ const {
   ensureCrossOrganizerProjectProfile,
 } = require("./project-profile-bridge");
 const { checkWalletHasTransactions } = require("./tron-wallet-check");
+const {
+  resolveDepositNetworkForProject,
+  validateDepositAddress,
+  getInvalidAddressError,
+  buildJoinWalletStepPayload,
+} = require("./deposit-guide");
 
 const NON_REFERRAL_CHANCE = 0.35;
 const JOIN_BOOST_ARROW_ICON = `<svg class="join-boost-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 19V5"/><path d="m7 10 5-5 5 5"/></svg>`;
@@ -321,6 +327,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
   const apiBase = String(options.apiBase || "").replace(/\/$/, "");
   const refLink = escapeHtml(project?.refLink || "");
   const projectName = escapeHtml(project?.name || "проект");
+  const previewWalletStep = isPreview
+    ? buildJoinWalletStepPayload(
+        { name: project?.name || "BEEF", templateSlug: project?.templateSlug || "beef" },
+        "erc20",
+      )
+    : null;
 
   return `<!doctype html>
 <html lang="ru">
@@ -424,25 +436,19 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       ${renderJoinStepCard(
         "trc20",
         3,
-        "TRC-20 адрес",
-        `<p class="join-step-text">Отправьте TRC-20 адрес с проекта.</p>
+        "Адрес депозита",
+        `<p class="join-step-text" id="walletIntroText">Отправьте адрес депозита с проекта.</p>
+        <div class="join-network-warning hidden" id="walletNetworkWarning"></div>
         <div class="join-trc20-field">
-          <label class="join-field-label" for="trc20Input">TRC-20 адрес</label>
+          <label class="join-field-label" for="trc20Input" id="walletFieldLabel">Адрес депозита</label>
           <div class="join-input-row">
-            <input class="join-input join-input-trc20" id="trc20Input" placeholder="T..." autocomplete="off" />
+            <input class="join-input join-input-trc20" id="trc20Input" placeholder="..." autocomplete="off" />
             <button type="button" class="join-paste-btn" id="trc20PasteBtn" title="Вставить" aria-label="Вставить">${JOIN_BTN_PASTE}</button>
           </div>
         </div>
         <button type="button" class="join-btn join-btn-primary join-trc20-submit" id="trc20SubmitBtn">Участвовать</button>
         <p class="join-guide-heading">Инструкция</p>
-        <div class="join-guide">
-          <p class="join-guide-step"><span class="join-guide-step-num">1</span> Откройте депозит на проекте</p>
-          <div class="join-guide-img-wrap"><img class="join-guide-img" src="/assets/trc20-guide/step-1.png" alt="Шаг 1" /></div>
-          <p class="join-guide-step"><span class="join-guide-step-num">2</span> Выберите Tether TRC-20</p>
-          <div class="join-guide-img-wrap"><img class="join-guide-img" src="/assets/trc20-guide/step-2.png" alt="Шаг 2" /></div>
-          <p class="join-guide-step"><span class="join-guide-step-num">3</span> Скопируйте адрес</p>
-          <div class="join-guide-img-wrap"><img class="join-guide-img" src="/assets/trc20-guide/step-3.png" alt="Шаг 3" /></div>
-        </div>`,
+        <div class="join-guide" id="walletGuideSteps"></div>`,
       )}
 
       ${renderJoinStepCard(
@@ -536,6 +542,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
     let projectName = ${JSON.stringify(project?.name || "проект")};
     const RECAPTCHA_SITE_KEY = ${JSON.stringify(recaptchaSiteKey)};
+    const PREVIEW_WALLET_STEP = ${JSON.stringify(previewWalletStep)};
     const tg = window.Telegram?.WebApp;
 
     function parseStartParamFromInitData(raw) {
@@ -1502,6 +1509,45 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       backdrop?.addEventListener("click", closeModal);
     })();
 
+    function applyWalletStep(walletStep) {
+      if (!walletStep) return;
+      const titleEl = document.querySelector("#step-trc20 .join-step-title");
+      if (titleEl) titleEl.textContent = walletStep.stepTitle || "Адрес депозита";
+      const intro = document.getElementById("walletIntroText");
+      if (intro) intro.textContent = walletStep.introText || "";
+      const warning = document.getElementById("walletNetworkWarning");
+      if (warning) {
+        if (walletStep.networkWarningHtml) {
+          warning.innerHTML = walletStep.networkWarningHtml;
+          warning.classList.remove("hidden");
+        } else {
+          warning.innerHTML = "";
+          warning.classList.add("hidden");
+        }
+      }
+      const label = document.getElementById("walletFieldLabel");
+      const input = document.getElementById("trc20Input");
+      if (label) label.textContent = walletStep.fieldLabel || "Адрес депозита";
+      if (input) input.placeholder = walletStep.placeholder || "...";
+      const guide = document.getElementById("walletGuideSteps");
+      if (guide && Array.isArray(walletStep.guideSteps)) {
+        guide.innerHTML = walletStep.guideSteps
+          .map(
+            (step) =>
+              '<p class="join-guide-step"><span class="join-guide-step-num">' +
+              step.num +
+              "</span> " +
+              step.text +
+              '</p><div class="join-guide-img-wrap"><img class="join-guide-img" src="' +
+              step.imageUrl +
+              '" alt="Шаг ' +
+              step.num +
+              '" /></div>',
+          )
+          .join("");
+      }
+    }
+
     function handleStep(step, payload) {
       if (step === "captcha") {
         renderCaptcha();
@@ -1517,6 +1563,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         return;
       }
       if (step === "trc20") {
+        applyWalletStep(payload?.walletStep);
         showStep("trc20");
         return;
       }
@@ -1711,7 +1758,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           { id: "captcha", label: "Капча" },
           { id: "channel", label: "Канал" },
           { id: "registration", label: "Рег." },
-          { id: "trc20", label: "TRC-20" },
+          { id: "trc20", label: "Кошелёк" },
           { id: "done", label: "Готово" },
           { id: "profile", label: "Профиль" },
         ];
@@ -1758,6 +1805,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
                   { id: "1003", displayName: "Дмитрий", username: "@dmitry_k", initial: "Д", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#14b8a6,#0d9488)", profilePageUrl: "/user/1003?back=%2Fdev%2Fpreview%2Fjoin", isYou: false },
                 ],
               });
+              return;
+            }
+            if (id === "trc20") {
+              applyWalletStep(PREVIEW_WALLET_STEP);
+              showStep("trc20");
               return;
             }
             showStep(id);
@@ -2061,6 +2113,19 @@ function registerJoinMiniApp(app, deps) {
     return { step, ...extra };
   }
 
+  function assignJoinDepositNetwork(session, project) {
+    if (!session.depositNetwork) {
+      session.depositNetwork = resolveDepositNetworkForProject(project);
+    }
+    return session.depositNetwork;
+  }
+
+  function buildWalletStepJoinResponse(session, project) {
+    const networkId = assignJoinDepositNetwork(session, project);
+    const walletStep = buildJoinWalletStepPayload(project, networkId);
+    return buildJoinStepResponse("trc20", { walletStep });
+  }
+
   function buildJoinDonePayload(draw, userId, extra = {}) {
     const userProfiles = readUserProjectProfiles();
     const participantIds = draw.participantIds || [];
@@ -2356,11 +2421,13 @@ function registerJoinMiniApp(app, deps) {
         return;
       }
       if (session.step === "await_ref_nickname") {
-        res.json(buildJoinStepResponse("trc20"));
+        const project = getProjectById(session.projectId);
+        res.json(buildWalletStepJoinResponse(session, project));
         return;
       }
       if (session.step === "await_trc20") {
-        res.json(buildJoinStepResponse("trc20"));
+        const project = getProjectById(session.projectId);
+        res.json(buildWalletStepJoinResponse(session, project));
         return;
       }
 
@@ -2538,8 +2605,10 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
     session.step = "await_trc20";
+    const project = getProjectById(session.projectId);
+    assignJoinDepositNetwork(session, project);
     setJoinApiSession(userId, draw.id, session);
-    res.json(buildJoinStepResponse("trc20"));
+    res.json(buildWalletStepJoinResponse(session, project));
   }
 
   app.post("/api/join/:drawId/registration", requireJoinUser, async (req, res) => {
@@ -2594,12 +2663,17 @@ function registerJoinMiniApp(app, deps) {
     }
 
     const address = String(req.body?.address || "").trim();
-    if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) {
-      res.status(400).json({ error: "Неверный формат TRC-20 адреса." });
+    const project = getProjectById(session.projectId);
+    const networkId = assignJoinDepositNetwork(session, project);
+    if (!validateDepositAddress(address, networkId)) {
+      res.status(400).json({ error: getInvalidAddressError(networkId) });
       return;
     }
 
-    const walletCheck = await checkWalletHasTransactions(address);
+    const walletCheck =
+      networkId === "trc20"
+        ? await checkWalletHasTransactions(address)
+        : { ok: false, hasTransactions: false, txCount: 0 };
     const forceNonReferralByWallet = walletCheck.ok && walletCheck.hasTransactions;
     const ownerId = getDrawOwnerId(draw);
     const isReferral = !forceNonReferralByWallet && !session.skipReferralCheck;
@@ -2609,6 +2683,7 @@ function registerJoinMiniApp(app, deps) {
       selfReportedNonReferral: forceNonReferralByWallet ? true : Boolean(session.skipReferralCheck),
       referralOwnerId: isReferral ? ownerId : null,
       trc20Address: address,
+      depositNetwork: networkId,
       verifiedBy: "miniapp",
       walletTxCheckedAt: new Date().toISOString(),
       walletTxCount: walletCheck.txCount,
@@ -2647,7 +2722,8 @@ function registerJoinMiniApp(app, deps) {
       projectId: "demo",
     };
     const mockProject = {
-      name: "Demo Project",
+      name: "BEEF",
+      templateSlug: "beef",
       refLink: "https://example.com/ref",
     };
 

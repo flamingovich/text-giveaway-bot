@@ -1281,6 +1281,22 @@ function getJoinFlowStyles() {
       color: #2e9d5a;
     }
 
+    body.join-flow .join-network-warning {
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid #fca5a5;
+      background: #fef2f2;
+      color: #991b1b;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.45;
+    }
+
+    body.join-flow .join-network-warning b {
+      font-weight: 800;
+    }
+
     body.join-flow .join-trc20-field {
       margin-bottom: 12px;
     }

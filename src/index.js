@@ -42,6 +42,20 @@ const {
 const { evaluateIpFraud, listProjectWalletAddresses, buildGlobalWalletOwners } = require("./draw-anti-fraud");
 const { checkWalletHasTransactions } = require("./tron-wallet-check");
 const {
+  BRAND_PROJECT_TEMPLATES,
+  resolveDepositNetworkForProject,
+  getDepositNetworkMeta,
+  getInvalidAddressError,
+  validateDepositAddress,
+  buildWinnerDepositAddressRequestHtml: buildDepositAddressRequestHtml,
+  buildBotGuideStepTexts,
+  getBotGuideImagePaths,
+  buildBotGuideFooterNote,
+  buildBrandProjectId,
+  isBrandTemplateProject,
+  isPokerdomProject,
+} = require("./deposit-guide");
+const {
   DATA_DIR,
   UPLOADS_DIR,
   ensureStorage,
@@ -87,12 +101,6 @@ const RECAPTCHA_SECRET_KEY = process.env.RECAPTCHA_SECRET_KEY || "";
 const JOIN_MINI_APP_SHORT_NAME = (process.env.JOIN_MINI_APP_SHORT_NAME || "join").replace(/^\/+/, "");
 const WINNERS_MINI_APP_SHORT_NAME = (process.env.WINNERS_MINI_APP_SHORT_NAME || "winners").replace(/^\/+/, "");
 let BOT_USERNAME = (process.env.BOT_USERNAME || "").replace("@", "");
-const TRC20_GUIDE_IMAGES = [
-  path.join(__dirname, "..", "assets", "trc20-guide", "step-1.png"),
-  path.join(__dirname, "..", "assets", "trc20-guide", "step-2.png"),
-  path.join(__dirname, "..", "assets", "trc20-guide", "step-3.png"),
-];
-
 if (!BOT_TOKEN || BOT_TOKEN === "your_telegram_bot_token") {
   throw new Error(
     "Укажите BOT_TOKEN в .env (скопируйте из @BotFather). Файл: " +
@@ -293,6 +301,134 @@ function migrateClearDeviceFraud() {
     writeData(data);
     console.log("Сняты антифрод-блокировки по fingerprint устройства.");
   }
+}
+
+function collectProjectOwnerIds() {
+  const ownerIds = new Set();
+  for (const project of readProjects().projects || []) {
+    if (project.ownerId != null) {
+      ownerIds.add(Number(project.ownerId));
+    }
+  }
+  for (const draw of readData().draws || []) {
+    const ownerId = draw.ownerId != null ? Number(draw.ownerId) : Number(draw.createdBy);
+    if (Number.isFinite(ownerId)) {
+      ownerIds.add(ownerId);
+    }
+  }
+  for (const channel of readKnownChannels().channels || []) {
+    if (channel.ownerId != null) {
+      ownerIds.add(Number(channel.ownerId));
+    }
+  }
+  if (ownerIds.size === 0) {
+    ownerIds.add(getDefaultOwnerId());
+  }
+  return ownerIds;
+}
+
+function matchProjectTemplateSlug(project) {
+  const slug = String(project?.templateSlug || "").trim().toLowerCase();
+  if (slug && BRAND_PROJECT_TEMPLATES.some((item) => item.templateSlug === slug)) {
+    return slug;
+  }
+  const name = String(project?.name || "").trim().toLowerCase();
+  const byName = BRAND_PROJECT_TEMPLATES.find((item) => item.name.toLowerCase() === name);
+  return byName?.templateSlug || null;
+}
+
+function ensureBrandProjectTemplatesForOwner(ownerId, projectsData, options = {}) {
+  const clearFields = options.clearFields === true;
+  const ownerProjects = (projectsData.projects || []).filter((item) => itemBelongsToOwner(item, ownerId));
+  const idRemap = new Map();
+
+  for (const oldProject of ownerProjects) {
+    const slug = matchProjectTemplateSlug(oldProject);
+    if (slug) {
+      idRemap.set(oldProject.id, buildBrandProjectId(slug, ownerId));
+    }
+  }
+
+  const nextProjects = (projectsData.projects || []).filter((item) => !itemBelongsToOwner(item, ownerId));
+  for (const template of BRAND_PROJECT_TEMPLATES) {
+    const id = buildBrandProjectId(template.templateSlug, ownerId);
+    const previous = ownerProjects.find(
+      (item) => item.id === id || matchProjectTemplateSlug(item) === template.templateSlug,
+    );
+    nextProjects.push({
+      id,
+      name: template.name,
+      templateSlug: template.templateSlug,
+      isTemplate: true,
+      refLink: clearFields ? "" : String(previous?.refLink || "").trim(),
+      emoji: clearFields ? "" : String(previous?.emoji || "").trim(),
+      promoCode: clearFields ? "" : String(previous?.promoCode || "").trim(),
+      logoPath: previous?.logoPath || "",
+      ownerId,
+      createdAt: previous?.createdAt || new Date().toISOString(),
+    });
+    if (previous && previous.id !== id) {
+      idRemap.set(previous.id, id);
+    }
+  }
+
+  projectsData.projects = nextProjects;
+  return idRemap;
+}
+
+function migrateBrandProjectTemplates() {
+  const markerPath = path.join(DATA_DIR, ".brand-project-templates-v1");
+  if (fs.existsSync(markerPath)) {
+    return;
+  }
+
+  const projectsData = readProjects();
+  const drawsData = readData();
+  const ownerIds = collectProjectOwnerIds();
+  const globalRemap = new Map();
+
+  for (const oldProject of projectsData.projects || []) {
+    const ownerId = oldProject.ownerId != null ? Number(oldProject.ownerId) : getDefaultOwnerId();
+    const slug = matchProjectTemplateSlug(oldProject);
+    if (slug) {
+      globalRemap.set(oldProject.id, buildBrandProjectId(slug, ownerId));
+    }
+  }
+
+  for (const ownerId of ownerIds) {
+    ensureBrandProjectTemplatesForOwner(ownerId, projectsData, { clearFields: true });
+  }
+
+  for (const draw of drawsData.draws || []) {
+    if (!draw.projectId) {
+      continue;
+    }
+    if (globalRemap.has(draw.projectId)) {
+      draw.projectId = globalRemap.get(draw.projectId);
+    }
+  }
+
+  writeProjects(projectsData);
+  writeData(drawsData);
+  fs.writeFileSync(markerPath, new Date().toISOString(), "utf8");
+  console.log("Миграция заготовленных проектов выполнена: Pokerdom, BEEF, FUGU, IRIS.");
+}
+
+function syncBrandProjectTemplatesForOrganizer(ownerId) {
+  const projectsData = readProjects();
+  const hasAllTemplates = BRAND_PROJECT_TEMPLATES.every((template) =>
+    (projectsData.projects || []).some(
+      (project) =>
+        itemBelongsToOwner(project, ownerId) &&
+        project.templateSlug === template.templateSlug &&
+        project.isTemplate,
+    ),
+  );
+  if (hasAllTemplates) {
+    return;
+  }
+  ensureBrandProjectTemplatesForOwner(ownerId, projectsData, { clearFields: false });
+  writeProjects(projectsData);
 }
 
 function getProjectById(projectId, ownerId = null) {
@@ -1248,18 +1384,15 @@ function buildWinnerExpiredText(draw) {
   ].join("\n");
 }
 
-function buildWinnerDepositAddressRequestHtml(draw) {
-  const projectLink = draw.projectId ? buildProjectLinkHtml(draw.projectId) : "<b>проекте</b>";
-  return [
-    "✅ Проверка пройдена!",
-    "",
-    `Отправьте <b>АКТУАЛЬНЫЙ</b> адрес депозита TRC-20 с проекта ${projectLink} одним сообщением.`,
-    "Если он будет неактуальный — приз улетит вникуда!",
-    "",
-    "Пример: <code>TWn.....8Nd</code>",
-    "",
-    `У вас есть ${WINNER_DEPOSIT_ADDRESS_MINUTES} минут — иначе приз сгорит.`,
-  ].join("\n");
+function buildWinnerDepositAddressRequestHtml(draw, networkId) {
+  const project = draw.projectId ? getProjectById(draw.projectId) : null;
+  const resolvedNetwork = resolveDepositNetworkForProject(project, networkId);
+  return buildDepositAddressRequestHtml(
+    draw,
+    project,
+    resolvedNetwork,
+    WINNER_DEPOSIT_ADDRESS_MINUTES,
+  );
 }
 
 function buildWinnerDepositAddressReceivedHtml(address) {
@@ -2918,6 +3051,10 @@ async function markWinnerDepositAddressExpired(draw, userId) {
 }
 
 async function requestWinnerDepositAddress(draw, userId, notify) {
+  const project = draw.projectId ? getProjectById(draw.projectId) : null;
+  const networkId = resolveDepositNetworkForProject(project, notify.requiredDepositNetwork);
+  notify.requiredDepositNetwork = networkId;
+
   const addressExpiresAt = DateTime.now()
     .setZone(TIMEZONE)
     .plus({ minutes: WINNER_DEPOSIT_ADDRESS_MINUTES })
@@ -2929,7 +3066,7 @@ async function requestWinnerDepositAddress(draw, userId, notify) {
 
   const message = await bot.telegram.sendMessage(
     userId,
-    buildWinnerDepositAddressRequestHtml(draw),
+    buildWinnerDepositAddressRequestHtml(draw, networkId),
     {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
@@ -3800,42 +3937,27 @@ async function tryAutoJoinDraw(draw, userId) {
   return { joined: false };
 }
 
-async function sendTrc20Guide(ctx, options = {}) {
-  const projectLinkHtml = options.projectId
-    ? buildProjectLinkHtml(options.projectId)
-    : null;
-  const step1 = projectLinkHtml
-    ? `Шаг 1/3: откройте проект ${projectLinkHtml} и нажмите кнопку депозита.`
-    : "Шаг 1/3: откройте проект и нажмите кнопку депозита.";
-  const stepTexts = [
-    step1,
-    "Шаг 2/3: выберите криптовалюту и сеть Tether TRC-20.",
-    "Шаг 3/3: скопируйте адрес кошелька кнопкой «Копировать».",
-  ];
-  const useHtml = Boolean(projectLinkHtml);
+async function sendDepositGuide(ctx, options = {}) {
+  const project = options.projectId ? getProjectById(options.projectId) : null;
+  const networkId = resolveDepositNetworkForProject(project, options.networkId);
+  const projectLinkHtml = options.projectId ? buildProjectLinkHtml(options.projectId) : null;
+  const stepTexts = buildBotGuideStepTexts(project, networkId, projectLinkHtml);
+  const imagePaths = getBotGuideImagePaths(project, networkId);
+  const useHtml = Boolean(projectLinkHtml) || !isPokerdomProject(project);
 
   const sentMessageIds = [];
 
-  for (let i = 0; i < TRC20_GUIDE_IMAGES.length; i += 1) {
-    const imagePath = TRC20_GUIDE_IMAGES[i];
-    if (!fs.existsSync(imagePath)) {
-      continue;
-    }
-    const photoOptions = { caption: stepTexts[i] };
-    if (useHtml && i === 0) {
+  for (let i = 0; i < imagePaths.length; i += 1) {
+    const imagePath = imagePaths[i];
+    const photoOptions = { caption: stepTexts[i] || "" };
+    if (useHtml) {
       photoOptions.parse_mode = "HTML";
     }
     const photoMessage = await ctx.replyWithPhoto({ source: imagePath }, photoOptions);
     sentMessageIds.push(photoMessage.message_id);
   }
 
-  const noteMessage = await ctx.reply(
-    [
-      "Важно:",
-      "• принимается только TRC-20 адрес (обычно начинается с T);",
-      "• отправьте адрес одним сообщением в этот чат.",
-    ].join("\n")
-  );
+  const noteMessage = await ctx.reply(buildBotGuideFooterNote(networkId, project));
   sentMessageIds.push(noteMessage.message_id);
 
   return sentMessageIds;
@@ -3886,25 +4008,34 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
     return false;
   }
 
-  if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(text)) {
+  const { data, draw, notify } = pending;
+  const project = draw.projectId ? getProjectById(draw.projectId) : null;
+  const networkId = resolveDepositNetworkForProject(project, notify.requiredDepositNetwork);
+
+  if (!validateDepositAddress(text, networkId)) {
+    const network = getDepositNetworkMeta(networkId);
     await ctx.reply(
-      "Неверный формат TRC-20 адреса.\nПример: <code>TWn.....8Nd</code>",
+      `${getInvalidAddressError(networkId)}\n\nНужна сеть: <b>${network.shortLabel}</b>`,
       { parse_mode: "HTML" },
     );
     return true;
   }
 
-  const { data, draw, notify } = pending;
   const liveNotify = draw.winnerNotifications?.[String(userId)];
   if (!liveNotify || liveNotify.status !== "awaiting_address") {
     return false;
   }
 
-  const walletCheck = await checkWalletHasTransactions(text);
+  const walletCheck =
+    networkId === "trc20"
+      ? await checkWalletHasTransactions(text)
+      : { ok: false, hasTransactions: false, txCount: 0 };
   const forceNonReferralByWallet = walletCheck.ok && walletCheck.hasTransactions;
   const checkedAt = new Date().toISOString();
 
   liveNotify.trc20Address = text;
+  liveNotify.depositNetwork = networkId;
+  liveNotify.requiredDepositNetwork = networkId;
   liveNotify.addressReceivedAt = checkedAt;
   liveNotify.walletTxCheckedAt = checkedAt;
   liveNotify.walletTxCount = walletCheck.txCount;
@@ -4431,11 +4562,18 @@ function renderProjectCard(project) {
   const refLink = project.refLink || "";
   const emoji = String(project.emoji || "").trim();
   const promoCode = String(project.promoCode || "").trim();
+  const isTemplate = isBrandTemplateProject(project);
+  const needsSetup = isTemplate && !refLink;
   return `
-    <article class="project-card">
+    <article class="project-card${needsSetup ? " project-card-needs-setup" : ""}">
       <div class="project-card-head">
         <div class="project-card-body">
           <h3 class="project-card-name">${emoji ? `${escapeHtml(emoji)} ` : ""}${escapeHtml(project.name)}</h3>
+          ${
+            needsSetup
+              ? `<div class="project-card-setup-hint">Заполните реф-ссылку, эмодзи и промокод</div>`
+              : ""
+          }
           ${
             refLink
               ? `<a class="project-card-link" href="${escapeHtml(refLink)}" target="_blank" rel="noopener noreferrer">
@@ -4460,15 +4598,20 @@ function renderProjectCard(project) {
             data-project-ref="${escapeHtml(refLink)}"
             data-project-emoji="${escapeHtml(emoji)}"
             data-project-promo="${escapeHtml(promoCode)}"
+            data-project-template="${isTemplate ? "1" : ""}"
           >${renderFormIcon("edit")}</button>
-          <form method="post" action="${PANEL_BASE}/projects/${encodeURIComponent(project.id)}/delete" class="project-delete-form">
+          ${
+            isTemplate
+              ? ""
+              : `<form method="post" action="${PANEL_BASE}/projects/${encodeURIComponent(project.id)}/delete" class="project-delete-form">
             <button
               type="submit"
               class="project-icon-btn project-delete-btn"
               title="Удалить"
               data-project-name="${escapeHtml(project.name)}"
             >${renderFormIcon("delete")}</button>
-          </form>
+          </form>`
+          }
         </div>
       </div>
     </article>
@@ -4885,6 +5028,7 @@ function renderPanelLiveHtml(draws, projects, userProfiles) {
 
 function renderWebPage(draws, message, webUser) {
   const ownerId = webUser?.id ?? getDefaultOwnerId();
+  syncBrandProjectTemplatesForOrganizer(ownerId);
   const showAccessPanel = isSuperAdmin(ownerId);
   const userProfiles = readUserProjectProfiles();
   const delegatedAdmins = showAccessPanel ? readDelegatedAdmins().admins || [] : [];
@@ -4900,7 +5044,12 @@ function renderWebPage(draws, message, webUser) {
         removable: true,
       }))
     .join("");
-  const projects = filterByOwner(readProjects().projects || [], ownerId);
+  const projects = filterByOwner(readProjects().projects || [], ownerId).sort((a, b) => {
+    const order = new Map(BRAND_PROJECT_TEMPLATES.map((item, index) => [item.templateSlug, index]));
+    const aOrder = order.get(a.templateSlug) ?? 99;
+    const bOrder = order.get(b.templateSlug) ?? 99;
+    return aOrder - bOrder || String(a.name).localeCompare(String(b.name), "ru");
+  });
   const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
   const projectOptions = [
     '<option value="">Без проекта</option>',
@@ -5551,6 +5700,15 @@ ${getPanelFluidTypographyVars()}
       text-overflow: ellipsis;
       white-space: nowrap;
       max-width: 100%;
+    }
+    .project-card-setup-hint {
+      font-size: 12px;
+      font-weight: 600;
+      color: #b45309;
+      margin: 0 0 6px;
+    }
+    .project-card-needs-setup {
+      border-color: #fbbf24;
     }
     .channel-card .project-card-name {
       font-size: 13px;
@@ -7524,10 +7682,6 @@ ${getPanelFluidTypographyVars()}
         </h2>
 
         <div class="settings-actions">
-          <button type="button" id="toggleAddProjectBtn" class="settings-action-btn">
-            <span class="draw-ico">${renderFormIcon("project")}</span>
-            Добавить проект
-          </button>
           <a href="${escapeHtml(botLinkChannelUrl)}" id="addChannelBtn" class="settings-action-btn settings-action-link">
             <span class="draw-ico">${renderFormIcon("channel")}</span>
             Добавить канал
@@ -7538,8 +7692,8 @@ ${getPanelFluidTypographyVars()}
         <form id="create-project-form" method="post" action="${PANEL_BASE}/projects" class="draw-form">
           <div class="draw-block">
             <div class="draw-field">
-              ${drawLabel("project", "Название")}
-              <input class="draw-input" name="name" required placeholder="Pokerdom" />
+              ${drawLabel("project", "Проект")}
+              <input class="draw-input" name="name" required readonly placeholder="Pokerdom" />
             </div>
             <div class="draw-field">
               ${drawLabel("link", "Реферальная ссылка")}
@@ -7566,14 +7720,14 @@ ${getPanelFluidTypographyVars()}
 
         <div class="projects-list-title">
           <span class="draw-ico">${renderFormIcon("project")}</span>
-          Мои проекты
+          Заготовленные проекты
         </div>
         <div class="projects-list">
           ${
             projectsBlocks ||
             `<div class="projects-empty">
               <span class="draw-ico">${renderFormIcon("project")}</span>
-              <span>Проектов пока нет — нажмите «Добавить проект»</span>
+              <span>Заготовки загружаются… обновите страницу</span>
             </div>`
           }
         </div>
@@ -8111,13 +8265,14 @@ ${getPanelFluidTypographyVars()}
       function resetProjectForm() {
         form.action = "${PANEL_BASE}/projects";
         nameInput.value = "";
+        nameInput.readOnly = false;
         refInput.value = "";
         if (emojiInput) emojiInput.value = "";
         if (promoInput) promoInput.value = "";
         cancelBtn.style.display = "none";
-        submitLabel.textContent = "Добавить проект";
+        submitLabel.textContent = "Сохранить";
         if (submitBtn) {
-          submitBtn.querySelector(".draw-ico").innerHTML = ${JSON.stringify(renderFormIcon("project"))};
+          submitBtn.querySelector(".draw-ico").innerHTML = ${JSON.stringify(renderFormIcon("edit"))};
         }
       }
 
@@ -8127,6 +8282,7 @@ ${getPanelFluidTypographyVars()}
           if (!projectId) return;
           form.action = "${PANEL_BASE}/projects/" + encodeURIComponent(projectId) + "/update";
           nameInput.value = btn.dataset.projectName || "";
+          nameInput.readOnly = btn.dataset.projectTemplate === "1";
           refInput.value = btn.dataset.projectRef || "";
           if (emojiInput) emojiInput.value = btn.dataset.projectEmoji || "";
           if (promoInput) promoInput.value = btn.dataset.projectPromo || "";
@@ -8137,7 +8293,7 @@ ${getPanelFluidTypographyVars()}
           }
           openProjectForm();
           form.scrollIntoView({ behavior: "smooth", block: "start" });
-          nameInput.focus();
+          refInput.focus();
         });
       });
 
@@ -8794,28 +8950,7 @@ function resolveProjectLogoUpload(req, logoClipboardData, previousLogoPath = "")
 }
 
 panelRouter.post("/projects", webAuth.requireAuth, requireOrganizer, (req, res) => {
-  const ownerId = req.webUser.id;
-  const { name, refLink, emoji, promoCode } = parseProjectFormBody(req);
-
-  if (!name || !refLink) {
-    redirectWithMessage(res, "Укажите название проекта и реф-ссылку.");
-    return;
-  }
-
-  const projectsData = readProjects();
-  projectsData.projects.push({
-    id: createProjectId(),
-    name,
-    refLink,
-    emoji,
-    promoCode,
-    logoPath: "",
-    ownerId,
-    createdAt: new Date().toISOString(),
-  });
-  writeProjects(projectsData);
-
-  redirectWithMessage(res, "Проект добавлен.");
+  redirectWithMessage(res, "Проекты задаются заготовками — выберите проект и нажмите «Редактировать».");
 });
 
 panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrganizer, (req, res) => {
@@ -8827,9 +8962,9 @@ panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrga
     return;
   }
 
-  const { name, refLink, emoji, promoCode } = parseProjectFormBody(req);
-  if (!name || !refLink) {
-    redirectWithMessage(res, "Укажите название проекта и реф-ссылку.");
+  const { refLink, emoji, promoCode } = parseProjectFormBody(req);
+  if (!refLink) {
+    redirectWithMessage(res, "Укажите реферальную ссылку.");
     return;
   }
 
@@ -8842,7 +8977,7 @@ panelRouter.post("/projects/:projectId/update", webAuth.requireAuth, requireOrga
 
   projectsData.projects[index] = {
     ...projectsData.projects[index],
-    name,
+    name: isBrandTemplateProject(project) ? project.name : (req.body?.name || project.name || "").trim(),
     refLink,
     emoji,
     promoCode,
@@ -8857,6 +8992,11 @@ panelRouter.post("/projects/:projectId/delete", webAuth.requireAuth, requireOrga
   const project = getProjectById(projectId, ownerId);
   if (!project) {
     redirectWithMessage(res, "Проект не найден.");
+    return;
+  }
+
+  if (isBrandTemplateProject(project)) {
+    redirectWithMessage(res, "Заготовленные проекты нельзя удалить.");
     return;
   }
 
@@ -9613,7 +9753,7 @@ bot.command("trc20_help", async (ctx) => {
     await ctx.reply("Откройте личный чат с ботом и отправьте /trc20_help");
     return;
   }
-  await sendTrc20Guide(ctx);
+  await sendDepositGuide(ctx);
 });
 
 bot.command("create_draw", async (ctx) => {
@@ -9917,7 +10057,7 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
         await ctx.answerCbQuery("Проверка пройдена ✅");
         try {
           await ctx.reply(
-            buildWinnerDepositAddressRequestHtml(draw),
+            buildWinnerDepositAddressRequestHtml(draw, notify.requiredDepositNetwork),
             {
               parse_mode: "HTML",
               link_preview_options: { is_disabled: true },
@@ -9958,7 +10098,10 @@ bot.action(/^wp:guide:(.+)$/, async (ctx) => {
       return;
     }
     await ctx.answerCbQuery();
-    await sendTrc20Guide(ctx, { projectId: draw.projectId });
+    await sendDepositGuide(ctx, {
+      projectId: draw.projectId,
+      networkId: notify.requiredDepositNetwork,
+    });
   } catch (error) {
     console.error("Ошибка гайда TRC-20 для победителя:", error);
     try {
@@ -9995,6 +10138,7 @@ async function bootstrap() {
   ensureStorage();
   migrateLegacyOwnership();
   migrateClearDeviceFraud();
+  migrateBrandProjectTemplates();
   await ensureBotUsername();
   startRubUsdtRateRefresh();
   await refreshRubUsdtRate(true);
