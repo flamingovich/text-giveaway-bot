@@ -8,6 +8,9 @@ APP_USER="giveaway"
 
 cd "${APP_DIR}"
 sudo -u "${APP_USER}" git -C "${APP_DIR}" pull origin main
+if [ "${DEPLOY_REEXEC:-}" != "1" ]; then
+  DEPLOY_REEXEC=1 exec bash "$0" "$@"
+fi
 BUILD_ID="$(date +%s)"
 if grep -q '^JOIN_PAGE_BUILD=' "${APP_DIR}/.env" 2>/dev/null; then
   sudo sed -i "s/^JOIN_PAGE_BUILD=.*/JOIN_PAGE_BUILD=${BUILD_ID}/" "${APP_DIR}/.env"
