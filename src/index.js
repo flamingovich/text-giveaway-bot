@@ -4884,8 +4884,9 @@ function buildPanelHistoryChunk(ownerId, offset, limit) {
   const nextOffset = safeOffset + safeLimit;
   const moreHtml = hasMore
     ? `<div class="history-more-wrap">
+          <div class="history-shown-meta">Показано ${Math.min(safeOffset + visibleDraws.length, historyDraws.length)} из ${historyDraws.length}</div>
           <button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
-            Показать ещё
+            Показать ещё (${Math.min(safeLimit, historyDraws.length - nextOffset)} шт.)
           </button>
         </div>`
     : "";
@@ -5159,17 +5160,25 @@ function renderPanelHistorySection(draws, projects, userProfiles, panelContext =
   const drawBlocks = renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext);
   const hasMore = offset + limit < total;
   const nextOffset = offset + limit;
+  const shownCount = visibleDraws.length;
+  const shownMeta =
+    total > limit || offset > 0
+      ? `<div class="history-shown-meta">Показано ${Math.min(offset + shownCount, total)} из ${total}</div>`
+      : "";
   const showMoreBtn =
     hasMore && options.includeShowMore !== false
       ? `<div class="history-more-wrap">
+          ${shownMeta}
           <button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
-            Показать ещё
+            Показать ещё (${Math.min(limit, total - nextOffset)} шт.)
           </button>
         </div>`
-      : "";
+      : shownMeta
+        ? `<div class="history-more-wrap">${shownMeta}</div>`
+        : "";
 
   return `
-      <section id="panelHistoryRoot">
+      <section id="panelHistoryRoot" class="card history-section">
         ${
           drawBlocks
             ? `<div class="history-list" id="panelHistoryList">${drawBlocks}</div>${showMoreBtn}`
@@ -7591,7 +7600,15 @@ ${getPanelFluidTypographyVars()}
     }
     .history-more-wrap {
       margin-top: 14px;
+      margin-bottom: 8px;
       width: 100%;
+    }
+    .history-shown-meta {
+      margin-bottom: 10px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--sub);
     }
     .history-more-btn[disabled] {
       opacity: 0.65;
