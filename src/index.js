@@ -45,6 +45,7 @@ const {
   BRAND_PROJECT_TEMPLATES,
   resolveDepositNetworkForProject,
   getDepositNetworkMeta,
+  normalizeDepositNetwork,
   getInvalidAddressError,
   validateDepositAddress,
   buildWinnerDepositAddressRequestHtml: buildDepositAddressRequestHtml,
@@ -1516,6 +1517,49 @@ function getWinnerPanelTrcDisplay(draw, notifyInfo, projectData) {
     return { text: fromProfile, copyable: true };
   }
   return { text: "Не указан", copyable: false };
+}
+
+function resolveWinnerDepositNetworkId(draw, notifyInfo, projectData, project) {
+  const explicit =
+    normalizeDepositNetwork(notifyInfo?.depositNetwork) ||
+    normalizeDepositNetwork(notifyInfo?.requiredDepositNetwork) ||
+    normalizeDepositNetwork(projectData?.depositNetwork);
+  if (explicit) {
+    return explicit;
+  }
+
+  const address = String(notifyInfo?.trc20Address || projectData?.trc20Address || "").trim();
+  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) {
+    return "trc20";
+  }
+  if (project && isPokerdomProject(project)) {
+    return "trc20";
+  }
+  return null;
+}
+
+function getWinnerPanelNetworkDisplay(draw, notifyInfo, projectData, project, addressText) {
+  const networkId = resolveWinnerDepositNetworkId(draw, notifyInfo, projectData, project);
+  if (networkId) {
+    const network = getDepositNetworkMeta(networkId);
+    return { label: network.shortLabel, title: network.label };
+  }
+
+  const address = String(addressText || "").trim();
+  if (/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    return { label: "ERC-20 или BEP-20", title: "Tether ERC-20 (Ethereum) или BEP-20 (BSC)" };
+  }
+  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) {
+    return { label: "TRC-20", title: "Tether TRC-20 (Tron)" };
+  }
+
+  if (notifyInfo?.status === "awaiting_address" && project) {
+    const requiredId = resolveDepositNetworkForProject(project, notifyInfo.requiredDepositNetwork);
+    const required = getDepositNetworkMeta(requiredId);
+    return { label: required.shortLabel, title: required.label };
+  }
+
+  return null;
 }
 
 function formatWinnerDeliveryFailureReason(errorMessage) {
@@ -4748,6 +4792,14 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const notifyInfo = winnerNotifications[String(winnerId)];
   const trcDisplay = getWinnerPanelTrcDisplay(draw, notifyInfo, projectData);
   const trcAddress = trcDisplay.text;
+  const project = draw.projectId ? getProjectById(draw.projectId, draw.ownerId) : null;
+  const networkDisplay = getWinnerPanelNetworkDisplay(
+    draw,
+    notifyInfo,
+    projectData,
+    project,
+    trcDisplay.copyable ? trcAddress : "",
+  );
   const isPaid = Boolean(notifyInfo?.paidAt);
   const isVerified = Boolean(notifyInfo?.verifiedAt) || notifyInfo?.status === "confirmed";
   const isAwaitingAddress = notifyInfo?.status === "awaiting_address";
@@ -4839,6 +4891,14 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
         <span class="draw-ico${payoutRow.iconClass}">${renderFormIcon(payoutRow.icon)}</span>
         <span class="winner-card-row-text">${payoutRow.labelHtml}</span>
       </div>
+      ${
+        networkDisplay
+          ? `<div class="winner-card-row winner-card-network-row">
+        <span class="draw-ico">${renderFormIcon("link")}</span>
+        <span class="winner-card-row-text">Сеть: <b>${escapeHtml(networkDisplay.label)}</b></span>
+      </div>`
+          : ""
+      }
       <div class="winner-card-row winner-card-address-row">
         <div class="winner-address-wrap">
           <span class="winner-address-text">${escapeHtml(trcAddress)}</span>
@@ -7480,6 +7540,10 @@ ${getPanelFluidTypographyVars()}
     }
     .winner-card-address-row {
       align-items: center;
+    }
+    .winner-card-network-row .winner-card-row-text b {
+      color: var(--tg-theme-text-color, var(--text));
+      font-weight: 800;
     }
     .winner-card-address-row .winner-address-wrap {
       width: 100%;
