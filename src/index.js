@@ -5173,7 +5173,7 @@ function renderHistoryPaginationControls({
           </button>`
     : "";
 
-  return `<div id="panelHistoryControls" class="history-more-wrap history-more-wrap-top">${shownMeta}${button}</div>`;
+  return `<div id="panelHistoryControls" class="history-more-wrap history-more-wrap-bottom">${shownMeta}${button}</div>`;
 }
 
 function renderPanelHistorySection(draws, projects, userProfiles, panelContext = null, options = {}) {
@@ -5195,7 +5195,7 @@ function renderPanelHistorySection(draws, projects, userProfiles, panelContext =
       <section id="panelHistoryRoot" class="card history-section">
         ${
           drawBlocks
-            ? `${controlsHtml}<div class="history-list" id="panelHistoryList">${drawBlocks}</div>`
+            ? `<div class="history-list" id="panelHistoryList">${drawBlocks}</div>${controlsHtml}`
             : `<div class="access-empty">
               <span class="draw-ico">${renderFormIcon("gift")}</span>
               <span>Розыгрышей пока нет</span>
@@ -7614,12 +7614,15 @@ ${getPanelFluidTypographyVars()}
     }
     .history-more-wrap {
       margin-top: 14px;
-      margin-bottom: 8px;
       width: 100%;
     }
-    .history-more-wrap-top {
-      margin-top: 0;
-      margin-bottom: 14px;
+    .history-more-wrap-bottom {
+      margin-top: 14px;
+      margin-bottom: 12px;
+      scroll-margin-bottom: var(--panel-bottom-bar-space);
+    }
+    #panelHistoryRoot.history-section {
+      margin-bottom: 4px;
     }
     .history-shown-meta {
       margin-bottom: 10px;
