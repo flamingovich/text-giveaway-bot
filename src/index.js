@@ -4880,17 +4880,15 @@ function buildPanelHistoryChunk(ownerId, offset, limit) {
   const safeLimit = Math.max(1, Number(limit) || PANEL_HISTORY_PAGE_SIZE);
   const visibleDraws = historyDraws.slice(safeOffset, safeOffset + safeLimit);
   const html = renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext);
-  const hasMore = safeOffset + safeLimit < historyDraws.length;
-  const nextOffset = safeOffset + safeLimit;
-  const moreHtml = hasMore
-    ? `<div class="history-more-wrap">
-          <div class="history-shown-meta">Показано ${Math.min(safeOffset + visibleDraws.length, historyDraws.length)} из ${historyDraws.length}</div>
-          <button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
-            Показать ещё (${Math.min(safeLimit, historyDraws.length - nextOffset)} шт.)
-          </button>
-        </div>`
-    : "";
-  return { html, moreHtml, hasMore, nextOffset };
+  const shownTotal = Math.min(safeOffset + visibleDraws.length, historyDraws.length);
+  const hasMore = shownTotal < historyDraws.length;
+  const controlsHtml = renderHistoryPaginationControls({
+    total: historyDraws.length,
+    shownTotal,
+    nextOffset: shownTotal,
+    limit: safeLimit,
+  });
+  return { html, controlsHtml, moreHtml: controlsHtml, hasMore, nextOffset: shownTotal };
 }
 
 function getOwnerDraws(ownerId) {
@@ -5152,36 +5150,52 @@ function renderPanelLiveStatsSection(draws, userProfiles, panelContext = null) {
   `;
 }
 
+function renderHistoryPaginationControls({
+  total,
+  shownTotal,
+  nextOffset,
+  limit,
+  includeShowMore = true,
+}) {
+  const safeLimit = Math.max(1, Number(limit) || PANEL_HISTORY_PAGE_SIZE);
+  const hasMore = includeShowMore && Number.isFinite(nextOffset) && nextOffset < total;
+  const showMeta = total > safeLimit || shownTotal < total;
+  if (!showMeta && !hasMore) {
+    return "";
+  }
+
+  const shownMeta = showMeta
+    ? `<div class="history-shown-meta">Показано ${shownTotal} из ${total}</div>`
+    : "";
+  const button = hasMore
+    ? `<button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
+            Показать ещё (${Math.min(safeLimit, total - nextOffset)} шт.)
+          </button>`
+    : "";
+
+  return `<div id="panelHistoryControls" class="history-more-wrap history-more-wrap-top">${shownMeta}${button}</div>`;
+}
+
 function renderPanelHistorySection(draws, projects, userProfiles, panelContext = null, options = {}) {
   const offset = Math.max(0, Number(options.offset) || 0);
   const limit = Math.max(1, Number(options.limit) || PANEL_HISTORY_PAGE_SIZE);
   const total = draws.length;
   const visibleDraws = draws.slice(offset, offset + limit);
   const drawBlocks = renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext);
-  const hasMore = offset + limit < total;
-  const nextOffset = offset + limit;
-  const shownCount = visibleDraws.length;
-  const shownMeta =
-    total > limit || offset > 0
-      ? `<div class="history-shown-meta">Показано ${Math.min(offset + shownCount, total)} из ${total}</div>`
-      : "";
-  const showMoreBtn =
-    hasMore && options.includeShowMore !== false
-      ? `<div class="history-more-wrap">
-          ${shownMeta}
-          <button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
-            Показать ещё (${Math.min(limit, total - nextOffset)} шт.)
-          </button>
-        </div>`
-      : shownMeta
-        ? `<div class="history-more-wrap">${shownMeta}</div>`
-        : "";
+  const shownTotal = Math.min(offset + visibleDraws.length, total);
+  const controlsHtml = renderHistoryPaginationControls({
+    total,
+    shownTotal,
+    nextOffset: shownTotal,
+    limit,
+    includeShowMore: options.includeShowMore !== false,
+  });
 
   return `
       <section id="panelHistoryRoot" class="card history-section">
         ${
           drawBlocks
-            ? `<div class="history-list" id="panelHistoryList">${drawBlocks}</div>${showMoreBtn}`
+            ? `${controlsHtml}<div class="history-list" id="panelHistoryList">${drawBlocks}</div>`
             : `<div class="access-empty">
               <span class="draw-ico">${renderFormIcon("gift")}</span>
               <span>Розыгрышей пока нет</span>
@@ -7603,6 +7617,10 @@ ${getPanelFluidTypographyVars()}
       margin-bottom: 8px;
       width: 100%;
     }
+    .history-more-wrap-top {
+      margin-top: 0;
+      margin-bottom: 14px;
+    }
     .history-shown-meta {
       margin-bottom: 10px;
       text-align: center;
@@ -8605,12 +8623,12 @@ ${getPanelFluidTypographyVars()}
           if (list && data.html) {
             list.insertAdjacentHTML("beforeend", data.html);
           }
-          const wrap = btn.closest(".history-more-wrap");
-          if (wrap) {
-            if (data.moreHtml) {
-              wrap.outerHTML = data.moreHtml;
+          const controls = document.getElementById("panelHistoryControls");
+          if (controls) {
+            if (data.controlsHtml || data.moreHtml) {
+              controls.outerHTML = data.controlsHtml || data.moreHtml;
             } else {
-              wrap.remove();
+              controls.remove();
             }
           }
           setupCopyButtons();
@@ -8944,13 +8962,18 @@ app.get("/", (_req, res) => {
   res.type("html").send(renderLandingPage());
 });
 
+function sendPanelHtml(res, html) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.type("html").send(html);
+}
+
 function renderPanelForUser(res, webUser, message) {
   if (!isOrganizer(webUser.id)) {
-    res.type("html").send(renderOrganizerGatePage(BOT_USERNAME));
+    sendPanelHtml(res, renderOrganizerGatePage(BOT_USERNAME));
     return;
   }
   const draws = getOwnerDraws(webUser.id);
-  res.type("html").send(renderWebPage(draws, message, webUser));
+  sendPanelHtml(res, renderWebPage(draws, message, webUser));
 }
 
 async function renderPanelForUserWithRate(res, webUser, message) {
