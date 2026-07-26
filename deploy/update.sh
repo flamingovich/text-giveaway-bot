@@ -14,6 +14,11 @@ if grep -q '^JOIN_PAGE_BUILD=' "${APP_DIR}/.env" 2>/dev/null; then
 else
   echo "JOIN_PAGE_BUILD=${BUILD_ID}" | sudo tee -a "${APP_DIR}/.env" >/dev/null
 fi
+if grep -q '^PANEL_PAGE_BUILD=' "${APP_DIR}/.env" 2>/dev/null; then
+  sudo sed -i "s/^PANEL_PAGE_BUILD=.*/PANEL_PAGE_BUILD=${BUILD_ID}/" "${APP_DIR}/.env"
+else
+  echo "PANEL_PAGE_BUILD=${BUILD_ID}" | sudo tee -a "${APP_DIR}/.env" >/dev/null
+fi
 sudo -u "${APP_USER}" npm install --omit=dev
 if ! grep -q '^STORAGE_BACKEND=' "${APP_DIR}/.env" 2>/dev/null; then
   echo "STORAGE_BACKEND=sqlite" | sudo tee -a "${APP_DIR}/.env" >/dev/null

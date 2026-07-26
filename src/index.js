@@ -90,6 +90,7 @@ const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
 const COUNTDOWN_MINUTE_THROTTLE_MS = Number(process.env.COUNTDOWN_MINUTE_THROTTLE_MS || 5 * 60_000);
 const PANEL_POLL_MS = Number(process.env.PANEL_POLL_MS || 8_000);
 const PANEL_HISTORY_PAGE_SIZE = 10;
+const PANEL_PAGE_BUILD = process.env.PANEL_PAGE_BUILD || String(Date.now());
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
 const PANEL_BASE = "/panel";
@@ -2406,9 +2407,16 @@ function getWinnersChannelUrl(drawId) {
   return getWinnersDeepLink(drawId);
 }
 
-function getPanelUrl() {
+function getPanelUrl(extraParams = {}) {
   const base = (WEB_PUBLIC_URL || `http://localhost:${WEB_PORT}`).replace(/\/$/, "");
-  return `${base}${PANEL_BASE}`;
+  const params = new URLSearchParams({ v: PANEL_PAGE_BUILD });
+  for (const [key, value] of Object.entries(extraParams)) {
+    if (value != null && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  const qs = params.toString();
+  return `${base}${PANEL_BASE}${qs ? `?${qs}` : ""}`;
 }
 
 function getPanelMenuHint() {
@@ -5190,9 +5198,10 @@ function renderPanelHistorySection(draws, projects, userProfiles, panelContext =
     limit,
     includeShowMore: options.includeShowMore !== false,
   });
+  const hasMore = shownTotal < total;
 
   return `
-      <section id="panelHistoryRoot" class="card history-section">
+      <section id="panelHistoryRoot" class="card history-section" data-history-total="${total}" data-history-has-more="${hasMore ? "1" : "0"}">
         ${
           drawBlocks
             ? `<div class="history-list" id="panelHistoryList">${drawBlocks}</div>${controlsHtml}`
@@ -5281,13 +5290,26 @@ function renderWebPage(draws, message, webUser) {
 
   return `
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-panel-build="${escapeHtml(PANEL_PAGE_BUILD)}">
 <head>
   <meta charset="utf-8" />
   ${getMiniAppViewportMeta()}
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Управление розыгрышами</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>${getMiniAppHeadScript()}</script>
+  <script>
+    (function () {
+      var build = ${JSON.stringify(PANEL_PAGE_BUILD)};
+      if (!/^https:\\/\\//.test(${JSON.stringify(WEB_PUBLIC_URL || "")})) return;
+      var params = new URLSearchParams(location.search);
+      if (params.get("v") === build) return;
+      params.set("v", build);
+      location.replace(location.pathname + "?" + params.toString());
+    })();
+  </script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     :root {
@@ -8966,7 +8988,11 @@ app.get("/", (_req, res) => {
 });
 
 function sendPanelHtml(res, html) {
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
   res.type("html").send(html);
 }
 
@@ -9020,6 +9046,7 @@ panelRouter.get("/", async (req, res) => {
 
   if (req.query.telegramInitData) {
     const params = new URLSearchParams();
+    params.set("v", PANEL_PAGE_BUILD);
     if (req.query.msg) {
       params.set("msg", String(req.query.msg));
     }
@@ -9027,12 +9054,13 @@ panelRouter.get("/", async (req, res) => {
       params.set("openBot", String(req.query.openBot));
     }
     const qs = params.toString();
-    res.redirect(303, `${PANEL_BASE}${qs ? `?${qs}` : ""}`);
+    res.redirect(303, `${PANEL_BASE}?${qs}`);
     return;
   }
 
   req.webUser = user;
   try {
+    console.log(`[panel] GET / owner=${user.id} build=${PANEL_PAGE_BUILD} v=${req.query.v || "-"}`);
     await renderPanelForUserWithRate(res, user, req.query.msg);
   } catch (error) {
     sendPanelServerError(res, error, "GET /");
@@ -10039,7 +10067,10 @@ bot.command("panel", async (ctx) => {
     return;
   }
   await syncOrganizerPanelUi(ctx.from.id);
-  await ctx.reply(`Нажмите ${getPanelMenuHint()} 👈`, getPanelKeyboardForUser(ctx.from.id));
+  await ctx.reply(
+    "Откройте панель управления 👇",
+    Markup.inlineKeyboard([Markup.button.webApp("📱 Панель", getPanelUrl())]),
+  );
 });
 
 bot.command("join", async (ctx) => {
