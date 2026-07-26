@@ -55,12 +55,15 @@ const {
   isBrandTemplateProject,
   isPokerdomProject,
 } = require("./deposit-guide");
+const { archiveStaleDraws } = require("./draw-archive");
 const {
   DATA_DIR,
   UPLOADS_DIR,
   ensureStorage,
   readData,
   writeData,
+  readArchivedDraws,
+  writeArchivedDraws,
   readKnownChannels,
   writeKnownChannels,
   readProjects,
@@ -86,6 +89,7 @@ const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
 const COUNTDOWN_MINUTE_THROTTLE_MS = Number(process.env.COUNTDOWN_MINUTE_THROTTLE_MS || 5 * 60_000);
 const PANEL_POLL_MS = Number(process.env.PANEL_POLL_MS || 8_000);
+const PANEL_HISTORY_PAGE_SIZE = 10;
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
 const PANEL_BASE = "/panel";
@@ -446,12 +450,34 @@ function getProjectById(projectId, ownerId = null) {
   return project;
 }
 
-function findOwnedDrawInData(data, drawId, ownerId) {
-  const draw = data.draws.find((item) => item.id === drawId);
+function findOwnedDrawInData(data, drawId, ownerId, archivedData = null) {
+  let draw = data.draws.find((item) => item.id === drawId);
+  if (!draw && archivedData) {
+    draw = (archivedData.draws || []).find((item) => item.id === drawId);
+  }
   if (!draw || !itemBelongsToOwner(draw, ownerId)) {
     return null;
   }
   return draw;
+}
+
+function loadOwnedDrawForPanel(drawId, ownerId) {
+  const data = readData();
+  const archivedData = readArchivedDraws();
+  const draw = findOwnedDrawInData(data, drawId, ownerId, archivedData);
+  if (!draw) {
+    return null;
+  }
+  const inArchive = !(data.draws || []).some((item) => item.id === drawId);
+  return { data, archivedData, draw, inArchive };
+}
+
+function persistOwnedDrawContext({ data, archivedData, inArchive }) {
+  if (inArchive) {
+    writeArchivedDraws(archivedData);
+    return;
+  }
+  writeData(data);
 }
 
 function normalizeChannelRef(channelId) {
@@ -868,7 +894,7 @@ function getDrawParticipantMeta(draw, userId) {
   return draw.participantMeta[String(userId)] || null;
 }
 
-function collectDrawParticipantSignals(draw, userProfiles) {
+function collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners = null) {
   const byIp = new Map();
   const byWallet = new Map();
 
@@ -894,8 +920,33 @@ function collectDrawParticipantSignals(draw, userProfiles) {
   return {
     byIp,
     byWallet,
-    globalWalletOwners: buildGlobalWalletOwners(userProfiles, normalizeWalletAddress),
+    globalWalletOwners:
+      globalWalletOwners || buildGlobalWalletOwners(userProfiles, normalizeWalletAddress),
   };
+}
+
+function createPanelAntiFraudContext(userProfiles) {
+  const globalWalletOwners = buildGlobalWalletOwners(userProfiles, normalizeWalletAddress);
+  const drawSignalsCache = new Map();
+  return {
+    getDrawSignals(draw) {
+      const key = draw.id;
+      if (!drawSignalsCache.has(key)) {
+        drawSignalsCache.set(
+          key,
+          collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners),
+        );
+      }
+      return drawSignalsCache.get(key);
+    },
+  };
+}
+
+function getPanelAntiFraudSignals(panelContext, draw, userProfiles) {
+  if (panelContext?.getDrawSignals) {
+    return panelContext.getDrawSignals(draw);
+  }
+  return collectDrawParticipantSignals(draw, userProfiles);
 }
 
 function getWinnerEffectiveWallets(projectData, notifyInfo = null) {
@@ -1042,7 +1093,7 @@ function winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals) {
   return true;
 }
 
-function isDrawPayoutComplete(draw, userProfiles) {
+function isDrawPayoutComplete(draw, userProfiles, panelContext = null) {
   if (draw.status !== DRAW_STATUS.FINISHED) {
     return false;
   }
@@ -1050,17 +1101,17 @@ function isDrawPayoutComplete(draw, userProfiles) {
   if (winnerIds.length === 0) {
     return true;
   }
-  const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
+  const antiFraudSignals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
   return !winnerIds.some((winnerId) =>
     winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals),
   );
 }
 
-function getDrawPanelStatusInfo(draw, userProfiles) {
+function getDrawPanelStatusInfo(draw, userProfiles, panelContext = null) {
   if (draw.awaitingChannelPost && !draw.messageId) {
     return { label: "Ждёт пост в канале", cssClass: "scheduled" };
   }
-  if (isDrawPayoutComplete(draw, userProfiles)) {
+  if (isDrawPayoutComplete(draw, userProfiles, panelContext)) {
     return { label: "Выплачен", cssClass: "paid" };
   }
   const labels = {
@@ -1075,7 +1126,7 @@ function getDrawPanelStatusInfo(draw, userProfiles) {
   };
 }
 
-function computeDrawStats(draws, userProfiles) {
+function computeDrawStats(draws, userProfiles, _panelContext = null) {
   const now = DateTime.now().setZone(TIMEZONE);
   const monthName = now.setLocale("ru").toFormat("LLLL");
   const monthLabel = monthName.charAt(0).toUpperCase() + monthName.slice(1);
@@ -2815,6 +2866,7 @@ async function finishDraw(draw, data = null) {
   draw.winnerIds = pickWinners(draw);
   draw.winnerNotifications = {};
   draw.status = DRAW_STATUS.FINISHED;
+  draw.finishedAt = new Date().toISOString();
   await updateDrawPost(draw, true);
   void ensureUserAvatars([...(draw.participantIds || []), ...(draw.winnerIds || [])], { limit: 100 });
   await notifyWinnersOnFinish(draw);
@@ -4160,6 +4212,7 @@ async function startJoinFlow(ctx, drawId) {
 }
 
 async function schedulerTick() {
+  runDrawArchiveMaintenance();
   const data = readData();
   const now = DateTime.now().setZone(TIMEZONE);
   let hasChanges = false;
@@ -4789,11 +4842,93 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   `;
 }
 
+function getOwnerProjects(ownerId) {
+  return filterByOwner(readProjects().projects || [], ownerId).sort((a, b) => {
+    const order = new Map(BRAND_PROJECT_TEMPLATES.map((item, index) => [item.templateSlug, index]));
+    const aOrder = order.get(a.templateSlug) ?? 99;
+    const bOrder = order.get(b.templateSlug) ?? 99;
+    return aOrder - bOrder || String(a.name).localeCompare(String(b.name), "ru");
+  });
+}
+
+function getPanelRenderContext(ownerId) {
+  const userProfiles = readUserProjectProfiles();
+  const panelContext = createPanelAntiFraudContext(userProfiles);
+  const projects = getOwnerProjects(ownerId);
+  return { userProfiles, panelContext, projects };
+}
+
+function buildPanelLiveResponse(ownerId) {
+  const historyDraws = getOwnerDraws(ownerId);
+  const statsDraws = getOwnerDrawsForStats(ownerId);
+  const { userProfiles, panelContext, projects } = getPanelRenderContext(ownerId);
+  const liveDraws = getPanelLiveDraws(historyDraws);
+  return {
+    version: buildPanelLiveFingerprint(liveDraws, userProfiles, panelContext),
+    statsHtml: renderPanelLiveStatsSection(statsDraws, userProfiles, panelContext),
+    liveCards: liveDraws.map((draw) => ({
+      id: draw.id,
+      html: renderDrawHistoryBlocks([draw], projects, userProfiles, panelContext),
+    })),
+  };
+}
+
+function buildPanelHistoryChunk(ownerId, offset, limit) {
+  const historyDraws = getOwnerDraws(ownerId);
+  const { userProfiles, panelContext, projects } = getPanelRenderContext(ownerId);
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const safeLimit = Math.max(1, Number(limit) || PANEL_HISTORY_PAGE_SIZE);
+  const visibleDraws = historyDraws.slice(safeOffset, safeOffset + safeLimit);
+  const html = renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext);
+  const hasMore = safeOffset + safeLimit < historyDraws.length;
+  const nextOffset = safeOffset + safeLimit;
+  const moreHtml = hasMore
+    ? `<div class="history-more-wrap">
+          <button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
+            Показать ещё
+          </button>
+        </div>`
+    : "";
+  return { html, moreHtml, hasMore, nextOffset };
+}
+
 function getOwnerDraws(ownerId) {
   const data = readData();
   return filterByOwner(data.draws, ownerId).sort(
     (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
   );
+}
+
+function getOwnerDrawsForStats(ownerId) {
+  const active = getOwnerDraws(ownerId);
+  const archived = filterByOwner(readArchivedDraws().draws || [], ownerId);
+  return [...active, ...archived];
+}
+
+function getPanelLiveDraws(draws) {
+  return draws.filter(
+    (draw) =>
+      draw.status === DRAW_STATUS.ACTIVE ||
+      draw.status === DRAW_STATUS.SCHEDULED ||
+      (draw.awaitingChannelPost && !draw.messageId),
+  );
+}
+
+function runDrawArchiveMaintenance() {
+  return archiveStaleDraws({
+    readData,
+    writeData,
+    readArchivedDraws,
+    writeArchivedDraws,
+    timezone: TIMEZONE,
+  });
+}
+
+async function processPanelDrawMaintenance(data) {
+  const timeoutChanges = await processWinnerConfirmTimeouts(data);
+  const addressTimeoutChanges = await processWinnerDepositAddressTimeouts(data);
+  const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
+  return timeoutChanges || addressTimeoutChanges || permanentDeliveryChanges;
 }
 
 function summarizeWinnerNotifyForFingerprint(notify) {
@@ -4813,9 +4948,9 @@ function summarizeWinnerNotifyForFingerprint(notify) {
   };
 }
 
-function buildPanelLiveFingerprint(draws, userProfiles) {
+function buildPanelLiveFingerprint(draws, userProfiles, panelContext = null) {
   const payload = draws.map((draw) => {
-    const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
+    const antiFraudSignals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
     const winnerStates = (draw.winnerIds || []).map((winnerId) => {
       const notify = draw.winnerNotifications?.[String(winnerId)] || {};
       const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
@@ -4834,7 +4969,7 @@ function buildPanelLiveFingerprint(draws, userProfiles) {
     return {
       id: draw.id,
       status: draw.status,
-      payoutComplete: isDrawPayoutComplete(draw, userProfiles),
+      payoutComplete: isDrawPayoutComplete(draw, userProfiles, panelContext),
       participantCount: draw.participantIds?.length || 0,
       winnerIds: draw.winnerIds || [],
       winnerStates,
@@ -4846,16 +4981,16 @@ function buildPanelLiveFingerprint(draws, userProfiles) {
   return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
 }
 
-function renderDrawHistoryBlocks(draws, projects, userProfiles) {
+function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = null) {
   return draws
     .map((draw) => {
       const project = projects.find((item) => item.id === draw.projectId);
-      const panelStatus = getDrawPanelStatusInfo(draw, userProfiles);
+      const panelStatus = getDrawPanelStatusInfo(draw, userProfiles, panelContext);
       const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED;
       const canFinishNow = draw.status === DRAW_STATUS.ACTIVE;
       const canRemindNow = canSendDrawReminder(draw);
       const winnerNotifications = draw.winnerNotifications || {};
-      const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
+      const antiFraudSignals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
       const coverPreview = renderHistoryCoverSide(draw.imagePath);
       const winnerRows = (draw.winnerIds || [])
         .map((winnerId) =>
@@ -4975,9 +5110,8 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles) {
     .join("");
 }
 
-function renderPanelLiveHtml(draws, projects, userProfiles) {
-  const drawsStats = computeDrawStats(draws, userProfiles);
-  const drawBlocks = renderDrawHistoryBlocks(draws, projects, userProfiles);
+function renderPanelLiveStatsSection(draws, userProfiles, panelContext = null) {
+  const drawsStats = computeDrawStats(draws, userProfiles, panelContext);
   const activeDigestDraws = listActiveDrawsForDigest(draws);
   const activeDigestCount = activeDigestDraws.length;
   const remindActiveHtml =
@@ -4989,7 +5123,7 @@ function renderPanelLiveHtml(draws, projects, userProfiles) {
         </form>`
       : "";
   return `
-      <section class="card history-section">
+      <section id="panelStatsRoot" class="card history-section">
         <h2 class="create-title draw-history-title">
           <span class="create-title-icon">${renderFormIcon("history")}</span>
           История розыгрышей
@@ -5014,11 +5148,31 @@ function renderPanelLiveHtml(draws, projects, userProfiles) {
         </div>
         ${remindActiveHtml}
       </section>
+  `;
+}
 
-      <section>
+function renderPanelHistorySection(draws, projects, userProfiles, panelContext = null, options = {}) {
+  const offset = Math.max(0, Number(options.offset) || 0);
+  const limit = Math.max(1, Number(options.limit) || PANEL_HISTORY_PAGE_SIZE);
+  const total = draws.length;
+  const visibleDraws = draws.slice(offset, offset + limit);
+  const drawBlocks = renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext);
+  const hasMore = offset + limit < total;
+  const nextOffset = offset + limit;
+  const showMoreBtn =
+    hasMore && options.includeShowMore !== false
+      ? `<div class="history-more-wrap">
+          <button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
+            Показать ещё
+          </button>
+        </div>`
+      : "";
+
+  return `
+      <section id="panelHistoryRoot">
         ${
           drawBlocks
-            ? `<div class="history-list">${drawBlocks}</div>`
+            ? `<div class="history-list" id="panelHistoryList">${drawBlocks}</div>${showMoreBtn}`
             : `<div class="access-empty">
               <span class="draw-ico">${renderFormIcon("gift")}</span>
               <span>Розыгрышей пока нет</span>
@@ -5028,11 +5182,31 @@ function renderPanelLiveHtml(draws, projects, userProfiles) {
   `;
 }
 
+function renderPanelLiveHtml(
+  statsDraws,
+  historyDraws,
+  projects,
+  userProfiles,
+  panelContext = null,
+  historyOptions = {},
+) {
+  return `${renderPanelLiveStatsSection(statsDraws, userProfiles, panelContext)}${renderPanelHistorySection(
+    historyDraws,
+    projects,
+    userProfiles,
+    panelContext,
+    historyOptions,
+  )}`;
+}
+
 function renderWebPage(draws, message, webUser) {
   const ownerId = webUser?.id ?? getDefaultOwnerId();
   syncBrandProjectTemplatesForOrganizer(ownerId);
   const showAccessPanel = isSuperAdmin(ownerId);
   const userProfiles = readUserProjectProfiles();
+  const panelContext = createPanelAntiFraudContext(userProfiles);
+  const historyDraws = draws;
+  const statsDraws = getOwnerDrawsForStats(ownerId);
   const delegatedAdmins = showAccessPanel ? readDelegatedAdmins().admins || [] : [];
   const superAdminLabels = SUPER_ADMIN_IDS.map((id) =>
     renderAccessPersonCard(id, userProfiles, {
@@ -5046,12 +5220,7 @@ function renderWebPage(draws, message, webUser) {
         removable: true,
       }))
     .join("");
-  const projects = filterByOwner(readProjects().projects || [], ownerId).sort((a, b) => {
-    const order = new Map(BRAND_PROJECT_TEMPLATES.map((item, index) => [item.templateSlug, index]));
-    const aOrder = order.get(a.templateSlug) ?? 99;
-    const bOrder = order.get(b.templateSlug) ?? 99;
-    return aOrder - bOrder || String(a.name).localeCompare(String(b.name), "ru");
-  });
+  const projects = getOwnerProjects(ownerId);
   const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
   const projectOptions = [
     '<option value="">Без проекта</option>',
@@ -5066,8 +5235,22 @@ function renderWebPage(draws, message, webUser) {
       return `<option value="${escapeHtml(preferredValue)}">${escapeHtml(title)}</option>`;
     })
     .join("");
-  const panelLiveVersion = buildPanelLiveFingerprint(draws, userProfiles);
-  const panelLiveHtml = renderPanelLiveHtml(draws, projects, userProfiles);
+  const panelLiveVersion = buildPanelLiveFingerprint(
+    getPanelLiveDraws(historyDraws),
+    userProfiles,
+    panelContext,
+  );
+  const panelLiveHtml = renderPanelLiveHtml(
+    statsDraws,
+    historyDraws,
+    projects,
+    userProfiles,
+    panelContext,
+    {
+      offset: 0,
+      limit: PANEL_HISTORY_PAGE_SIZE,
+    },
+  );
 
   const projectsBlocks = projects.map((project) => renderProjectCard(project)).join("");
   const channelBlocks = knownChannels.map((channel) => renderChannelCard(channel)).join("");
@@ -7406,6 +7589,14 @@ ${getPanelFluidTypographyVars()}
       background: #d73a49;
       filter: brightness(1.06);
     }
+    .history-more-wrap {
+      margin-top: 14px;
+      width: 100%;
+    }
+    .history-more-btn[disabled] {
+      opacity: 0.65;
+      cursor: wait;
+    }
     .status-active { background: #eaffef; color: #21754a; border-color: #b7edc9; }
     .status-scheduled { background: #eef3ff; color: #2d56cc; border-color: #d4dfff; }
     .status-finished { background: #f3f4f8; color: #555f76; border-color: #dde1ea; }
@@ -8366,6 +8557,57 @@ ${getPanelFluidTypographyVars()}
       });
     }
 
+    function setupPanelHistoryMore() {
+      const root = document.getElementById("panelHistoryRoot");
+      if (!root) return;
+
+      root.addEventListener("click", async (event) => {
+        const btn = event.target.closest(".history-more-btn");
+        if (!btn) return;
+
+        const offset = btn.dataset.nextOffset;
+        if (!offset) return;
+
+        btn.disabled = true;
+        try {
+          const tg = window.Telegram?.WebApp;
+          const headers = { Accept: "application/json" };
+          if (tg?.initData) {
+            headers["X-Telegram-Init-Data"] = tg.initData;
+          }
+          const response = await fetch(
+            "${PANEL_BASE}/history?offset=" + encodeURIComponent(offset),
+            {
+              credentials: "same-origin",
+              headers,
+            },
+          );
+          if (!response.ok) return;
+          const data = await response.json();
+          const list = document.getElementById("panelHistoryList");
+          if (list && data.html) {
+            list.insertAdjacentHTML("beforeend", data.html);
+          }
+          const wrap = btn.closest(".history-more-wrap");
+          if (wrap) {
+            if (data.moreHtml) {
+              wrap.outerHTML = data.moreHtml;
+            } else {
+              wrap.remove();
+            }
+          }
+          setupCopyButtons();
+          setupProfileLinks();
+        } catch (error) {
+          // ignore transient network errors
+        } finally {
+          if (btn.isConnected) {
+            btn.disabled = false;
+          }
+        }
+      });
+    }
+
     function setupPanelAutoRefresh() {
       const root = document.getElementById("panelLiveRoot");
       if (!root) return;
@@ -8373,16 +8615,16 @@ ${getPanelFluidTypographyVars()}
       const pollMs = ${PANEL_POLL_MS};
       let timerId = null;
 
-      function captureDetailsState() {
-        return Array.from(root.querySelectorAll("details[data-details-key]"))
+      function captureCardDetailsState(card) {
+        return Array.from(card.querySelectorAll("details[data-details-key]"))
           .filter((el) => el.open)
           .map((el) => el.getAttribute("data-details-key"))
           .filter(Boolean);
       }
 
-      function restoreDetailsState(openKeys) {
+      function restoreCardDetailsState(card, openKeys) {
         openKeys.forEach((key) => {
-          const el = root.querySelector('details[data-details-key="' + key + '"]');
+          const el = card.querySelector('details[data-details-key="' + key + '"]');
           if (el) el.open = true;
         });
       }
@@ -8395,6 +8637,8 @@ ${getPanelFluidTypographyVars()}
         }
         const addProjectWrap = document.getElementById("addProjectWrap");
         if (addProjectWrap && !addProjectWrap.classList.contains("panel-hidden")) return true;
+        const historyBtn = document.querySelector(".history-more-btn[disabled]");
+        if (historyBtn) return true;
         return false;
       }
 
@@ -8412,28 +8656,44 @@ ${getPanelFluidTypographyVars()}
           });
           if (!response.ok) return;
           const data = await response.json();
-          if (!data?.html || data.version === root.dataset.version) return;
+          if (!data?.version || data.version === root.dataset.version) return;
 
           const scrollY = window.scrollY;
-          const openDetails = captureDetailsState();
-          const preservedThumbs = new Map();
-          root.querySelectorAll(".history-card[data-draw-id] img.history-thumb").forEach((img) => {
-            const drawId = img.closest(".history-card")?.dataset.drawId;
-            if (drawId && img.complete && img.naturalWidth > 0) {
-              preservedThumbs.set(drawId, img);
+
+          if (data.statsHtml) {
+            const statsRoot = document.getElementById("panelStatsRoot");
+            if (statsRoot) {
+              statsRoot.outerHTML = data.statsHtml;
             }
-          });
-          root.innerHTML = data.html;
-          preservedThumbs.forEach((img, drawId) => {
-            const nextImg = root.querySelector(
-              '.history-card[data-draw-id="' + drawId + '"] img.history-thumb',
-            );
-            if (nextImg && nextImg.src === img.src) {
-              nextImg.replaceWith(img);
-            }
-          });
+          }
+
+          if (Array.isArray(data.liveCards)) {
+            data.liveCards.forEach(({ id, html }) => {
+              if (!id || !html) return;
+              const existing = root.querySelector('.history-card[data-draw-id="' + id + '"]');
+              if (!existing) return;
+              const openDetails = captureCardDetailsState(existing);
+              const preservedThumb = existing.querySelector("img.history-thumb");
+              const keepThumb =
+                preservedThumb &&
+                preservedThumb.complete &&
+                preservedThumb.naturalWidth > 0
+                  ? preservedThumb
+                  : null;
+              existing.outerHTML = html;
+              const nextCard = root.querySelector('.history-card[data-draw-id="' + id + '"]');
+              if (!nextCard) return;
+              restoreCardDetailsState(nextCard, openDetails);
+              if (keepThumb) {
+                const nextThumb = nextCard.querySelector("img.history-thumb");
+                if (nextThumb && nextThumb.src === keepThumb.src) {
+                  nextThumb.replaceWith(keepThumb);
+                }
+              }
+            });
+          }
+
           root.dataset.version = data.version;
-          restoreDetailsState(openDetails);
           window.scrollTo(0, scrollY);
           setupCopyButtons();
           setupProfileLinks();
@@ -8511,6 +8771,7 @@ ${getPanelFluidTypographyVars()}
     setupSettingsPanel();
     setupAdminPanels();
     setupPanelAutoRefresh();
+    setupPanelHistoryMore();
     setupFlashMessages();
     setupOpenBotAfterCreate();
     setupTelegramFormAuth();
@@ -8678,17 +8939,9 @@ function renderPanelForUser(res, webUser, message) {
 async function renderPanelForUserWithRate(res, webUser, message) {
   await refreshRubUsdtRate();
   if (!WEB_ONLY) {
+    runDrawArchiveMaintenance();
     const data = readData();
-    const timeoutChanges = await processWinnerConfirmTimeouts(data);
-    const addressTimeoutChanges = await processWinnerDepositAddressTimeouts(data);
-    const subscriptionChanges = await processWinnerChannelSubscriptions(data);
-    const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
-    if (
-      timeoutChanges ||
-      addressTimeoutChanges ||
-      subscriptionChanges ||
-      permanentDeliveryChanges
-    ) {
+    if (await processPanelDrawMaintenance(data)) {
       writeData(data);
     }
   }
@@ -8765,30 +9018,26 @@ panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res)
     await refreshRubUsdtRate();
     if (!WEB_ONLY) {
       const data = readData();
-      const timeoutChanges = await processWinnerConfirmTimeouts(data);
-      const addressTimeoutChanges = await processWinnerDepositAddressTimeouts(data);
-      const subscriptionChanges = await processWinnerChannelSubscriptions(data);
-      const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
-      if (
-        timeoutChanges ||
-        addressTimeoutChanges ||
-        subscriptionChanges ||
-        permanentDeliveryChanges
-      ) {
+      if (await processPanelDrawMaintenance(data)) {
         writeData(data);
       }
     }
-    const ownerId = req.webUser.id;
-    const draws = getOwnerDraws(ownerId);
-    const userProfiles = readUserProjectProfiles();
-    const projects = filterByOwner(readProjects().projects || [], ownerId);
-    res.json({
-      version: buildPanelLiveFingerprint(draws, userProfiles),
-      html: renderPanelLiveHtml(draws, projects, userProfiles),
-    });
+    res.json(buildPanelLiveResponse(req.webUser.id));
   } catch (error) {
     console.error("[panel] GET /live:", error);
     res.status(500).json({ error: "panel_render_failed" });
+  }
+});
+
+panelRouter.get("/history", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+  try {
+    await refreshRubUsdtRate();
+    const offset = req.query.offset;
+    const limit = req.query.limit;
+    res.json(buildPanelHistoryChunk(req.webUser.id, offset, limit));
+  } catch (error) {
+    console.error("[panel] GET /history:", error);
+    res.status(500).json({ error: "panel_history_failed" });
   }
 });
 
@@ -9237,13 +9486,14 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
 });
 
 panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
-  const data = readData();
-  const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
+  const loaded = loadOwnedDrawForPanel(req.params.id, req.webUser.id);
 
-  if (!draw) {
+  if (!loaded?.draw || loaded.inArchive) {
     redirectWithMessage(res, "Розыгрыш не найден.");
     return;
   }
+
+  const { data, draw } = loaded;
 
   if (draw.status !== DRAW_STATUS.SCHEDULED) {
     redirectWithMessage(res, "Можно публиковать сейчас только запланированные розыгрыши.");
@@ -9296,13 +9546,14 @@ panelRouter.post("/draws/remind-active", webAuth.requireAuth, requireOrganizer, 
 });
 
 panelRouter.post("/draws/:id/remind", webAuth.requireAuth, requireOrganizer, async (req, res) => {
-  const data = readData();
-  const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
+  const loaded = loadOwnedDrawForPanel(req.params.id, req.webUser.id);
 
-  if (!draw) {
+  if (!loaded?.draw || loaded.inArchive) {
     redirectWithMessage(res, "Розыгрыш не найден.");
     return;
   }
+
+  const { data, draw } = loaded;
 
   if (!canSendDrawReminder(draw)) {
     redirectWithMessage(res, "Напоминание доступно только для активного розыгрыша с постом в канале.");
@@ -9320,13 +9571,14 @@ panelRouter.post("/draws/:id/remind", webAuth.requireAuth, requireOrganizer, asy
 });
 
 panelRouter.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer, async (req, res) => {
-  const data = readData();
-  const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
+  const loaded = loadOwnedDrawForPanel(req.params.id, req.webUser.id);
 
-  if (!draw) {
+  if (!loaded?.draw || loaded.inArchive) {
     redirectWithMessage(res, "Розыгрыш не найден.");
     return;
   }
+
+  const { data, draw } = loaded;
 
   if (draw.status !== DRAW_STATUS.ACTIVE) {
     redirectWithMessage(res, "Можно завершать только активные розыгрыши.");
@@ -9344,13 +9596,14 @@ panelRouter.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer,
 });
 
 panelRouter.post("/draws/:id/delete", webAuth.requireAuth, requireOrganizer, async (req, res) => {
-  const data = readData();
-  const draw = findOwnedDrawInData(data, req.params.id, req.webUser.id);
+  const loaded = loadOwnedDrawForPanel(req.params.id, req.webUser.id);
 
-  if (!draw) {
+  if (!loaded?.draw) {
     redirectWithMessage(res, "Розыгрыш не найден.");
     return;
   }
+
+  const { data, archivedData, draw, inArchive } = loaded;
 
   const pendingPostUpdate = drawPostUpdateTimers.get(draw.id);
   if (pendingPostUpdate?.timer) {
@@ -9373,9 +9626,14 @@ panelRouter.post("/draws/:id/delete", webAuth.requireAuth, requireOrganizer, asy
     }
   }
 
-  data.draws = data.draws.filter((item) => item.id !== draw.id);
-  await syncActiveDrawsDigestAfterDrawChange(data, draw);
-  writeData(data);
+  if (inArchive) {
+    archivedData.draws = (archivedData.draws || []).filter((item) => item.id !== draw.id);
+    writeArchivedDraws(archivedData);
+  } else {
+    data.draws = data.draws.filter((item) => item.id !== draw.id);
+    await syncActiveDrawsDigestAfterDrawChange(data, draw);
+    writeData(data);
+  }
   redirectWithMessage(res, "Розыгрыш удалён.");
 });
 
@@ -9389,13 +9647,13 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
     return;
   }
 
-  const data = readData();
-  const draw = findOwnedDrawInData(data, drawId, ownerId);
-  if (!draw) {
+  const loaded = loadOwnedDrawForPanel(drawId, ownerId);
+  if (!loaded?.draw) {
     redirectWithMessage(res, "Розыгрыш не найден.");
     return;
   }
 
+  const { data, archivedData, draw, inArchive } = loaded;
   if (!draw.winnerIds?.includes(userId)) {
     redirectWithMessage(res, "Пользователь не является победителем этого розыгрыша.");
     return;
@@ -9450,7 +9708,7 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
       draw.winnerNotifications = {};
     }
     draw.winnerNotifications[String(userId)] = buildWinnerNotificationFailureRecord(ownerId, error);
-    writeData(data);
+    persistOwnedDrawContext({ data, archivedData, inArchive });
     const failureReason = getWinnerDeliveryFailureReason(
       draw.winnerNotifications[String(userId)],
     );
@@ -9465,7 +9723,7 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
     return;
   }
 
-  writeData(data);
+  persistOwnedDrawContext({ data, archivedData, inArchive });
 
   redirectWithMessage(res, `Уведомление отправлено пользователю ${userId}.`);
 });
@@ -9480,12 +9738,13 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     return;
   }
 
-  const data = readData();
-  const draw = findOwnedDrawInData(data, drawId, ownerId);
-  if (!draw) {
+  const loaded = loadOwnedDrawForPanel(drawId, ownerId);
+  if (!loaded?.draw) {
     redirectWithMessage(res, "Розыгрыш не найден.");
     return;
   }
+
+  const { data, archivedData, draw, inArchive } = loaded;
   if (!draw.winnerIds?.includes(userId)) {
     redirectWithMessage(res, "Пользователь не является победителем этого розыгрыша.");
     return;
@@ -9511,13 +9770,13 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     : (subscriptionCheck.error || "subscription_check_failed");
 
   if (!subscriptionCheck.ok) {
-    writeData(data);
+    persistOwnedDrawContext({ data, archivedData, inArchive });
     redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.");
     return;
   }
 
   if (!subscriptionCheck.subscribed) {
-    writeData(data);
+    persistOwnedDrawContext({ data, archivedData, inArchive });
     redirectWithMessage(res, "Победитель не подписан на канал. Выплата недоступна.");
     return;
   }
@@ -9532,7 +9791,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     draw.winnerNotifications[String(userId)],
   );
   if (antiFraud.hasFraudFlag) {
-    writeData(data);
+    persistOwnedDrawContext({ data, archivedData, inArchive });
     redirectWithMessage(res, "Выплата недоступна — сработала антифрод-проверка.");
     return;
   }
@@ -9549,7 +9808,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
 
   draw.winnerNotifications[String(userId)].paidAt = new Date().toISOString();
   draw.winnerNotifications[String(userId)].paidBy = ownerId;
-  writeData(data);
+  persistOwnedDrawContext({ data, archivedData, inArchive });
 
   redirectWithMessage(res, `Победителю ${userId} отмечена выплата.`);
 });
@@ -10141,6 +10400,12 @@ async function bootstrap() {
   migrateLegacyOwnership();
   migrateClearDeviceFraud();
   migrateBrandProjectTemplates();
+  const archiveResult = runDrawArchiveMaintenance();
+  if (archiveResult.moved > 0) {
+    console.log(
+      `[boot] archived ${archiveResult.moved} finished draws (${archiveResult.activeCount} active, ${archiveResult.archivedCount} in archive)`,
+    );
+  }
   await ensureBotUsername();
   startRubUsdtRateRefresh();
   await refreshRubUsdtRate(true);

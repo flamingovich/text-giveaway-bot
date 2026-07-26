@@ -67,6 +67,14 @@ function writeUserProjectProfiles(data) {
   writeDocument(STORE_KEYS.USER_PROJECT_PROFILES, data);
 }
 
+function readArchivedDraws() {
+  return readDocument(STORE_KEYS.DRAWS_ARCHIVE);
+}
+
+function writeArchivedDraws(data) {
+  writeDocument(STORE_KEYS.DRAWS_ARCHIVE, data);
+}
+
 function readDelegatedAdmins() {
   return readDocument(STORE_KEYS.DELEGATED_ADMINS);
 }
@@ -93,6 +101,8 @@ module.exports = {
   writeDocument,
   readData,
   writeData,
+  readArchivedDraws,
+  writeArchivedDraws,
   readKnownChannels,
   writeKnownChannels,
   readProjects,

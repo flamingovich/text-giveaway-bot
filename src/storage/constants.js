@@ -1,5 +1,6 @@
 const STORE_KEYS = {
   DRAWS: "draws",
+  DRAWS_ARCHIVE: "draws-archive",
   PROJECTS: "projects",
   KNOWN_CHANNELS: "known-channels",
   USER_PROJECT_PROFILES: "user-project-profiles",
@@ -10,6 +11,7 @@ const STORE_KEYS = {
 
 const DOCUMENT_DEFAULTS = {
   [STORE_KEYS.DRAWS]: { draws: [] },
+  [STORE_KEYS.DRAWS_ARCHIVE]: { draws: [] },
   [STORE_KEYS.PROJECTS]: { projects: [] },
   [STORE_KEYS.KNOWN_CHANNELS]: { channels: [] },
   [STORE_KEYS.USER_PROJECT_PROFILES]: { users: {} },
@@ -20,6 +22,7 @@ const DOCUMENT_DEFAULTS = {
 
 const KEY_TO_JSON_FILE = {
   [STORE_KEYS.DRAWS]: "draws.json",
+  [STORE_KEYS.DRAWS_ARCHIVE]: "draws-archive.json",
   [STORE_KEYS.PROJECTS]: "projects.json",
   [STORE_KEYS.KNOWN_CHANNELS]: "known-channels.json",
   [STORE_KEYS.USER_PROJECT_PROFILES]: "user-project-profiles.json",
