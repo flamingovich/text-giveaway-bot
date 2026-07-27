@@ -9591,13 +9591,15 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       publishTarget,
     };
 
-    if (publishMode === "now") {
-      await publishDraw(draw, publishTarget);
-    }
-
     const data = readData();
     data.draws.push(draw);
     writeData(data);
+
+    if (publishMode === "now") {
+      await publishDraw(draw, publishTarget);
+      writeData(data);
+    }
+
     recordDrawCreate(ownerId, createFingerprint);
 
     const createdNowMessages = {
