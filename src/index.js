@@ -8020,7 +8020,6 @@ ${getPanelFluidTypographyVars()}
                 <input class="draw-check" type="checkbox" name="askProjectIdOnJoin" value="1" disabled />
                 <span class="draw-check-text">
                   <span class="draw-check-title">Просить ID с проекта</span>
-                  <span class="draw-check-hint hidden" id="askProjectIdHint">Сначала выберите проект выше</span>
                 </span>
               </label>
             </div>
@@ -8479,14 +8478,12 @@ ${getPanelFluidTypographyVars()}
       const projectSelect = document.querySelector('#create-draw-form select[name="projectId"]');
       const wrap = document.getElementById("askProjectIdWrap");
       const checkbox = document.querySelector('#create-draw-form input[name="askProjectIdOnJoin"]');
-      const hint = document.getElementById("askProjectIdHint");
       if (!projectSelect || !wrap || !checkbox) return;
 
       function syncAskProjectId() {
         const hasProject = Boolean(String(projectSelect.value || "").trim());
         checkbox.disabled = !hasProject;
         wrap.classList.toggle("draw-check-disabled", !hasProject);
-        if (hint) hint.classList.toggle("hidden", hasProject);
         if (!hasProject) {
           checkbox.checked = false;
         }
