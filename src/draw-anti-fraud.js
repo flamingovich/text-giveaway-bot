@@ -39,9 +39,10 @@ function hasNormalParticipantProfile(projectData, draw) {
   const wallet =
     String(projectData?.trc20Address || "").trim() ||
     String(projectData?.antifraudTrc20Address || "").trim();
-  const completedRegistration = Boolean(
-    projectData?.referralVerified || projectData?.selfReportedNonReferral,
-  );
+  const needsProjectId = draw?.askProjectIdOnJoin === true;
+  const completedRegistration = needsProjectId
+    ? Boolean(projectData?.projectAccountId)
+    : Boolean(projectData?.referralVerified || projectData?.selfReportedNonReferral);
   return Boolean(wallet && completedRegistration);
 }
 

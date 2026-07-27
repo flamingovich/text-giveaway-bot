@@ -1,3 +1,5 @@
+const { isProjectRegistrationComplete, drawAsksProjectIdOnJoin } = require("./project-account-id");
+
 function normalizeProjectBrandName(name) {
   return String(name || "")
     .trim()
@@ -122,12 +124,7 @@ function resolveJoinProjectContext(userId, draw, deps) {
   const drawOwnerId = getDrawOwnerId(draw);
 
   if (!projectId || !brandName) {
-    const needsWallet = draw?.askWalletOnJoin !== false;
-    const canSkipRegistration = Boolean(
-      directProfile &&
-        (directProfile.referralVerified || directProfile.selfReportedNonReferral) &&
-        (!needsWallet || directProfile.trc20Address),
-    );
+    const canSkipRegistration = isProjectRegistrationComplete(directProfile, draw);
 
     return {
       directProfile,
@@ -155,12 +152,10 @@ function resolveJoinProjectContext(userId, draw, deps) {
   );
 
   const needsWallet = draw?.askWalletOnJoin !== false;
-  const hasDirectComplete = Boolean(
-    directProfile &&
-      (directProfile.referralVerified || directProfile.selfReportedNonReferral) &&
-      (!needsWallet || directProfile.trc20Address),
-  );
+  const needsProjectId = drawAsksProjectIdOnJoin(draw);
+  const hasDirectComplete = isProjectRegistrationComplete(directProfile, draw);
   const hasSiblingTrc20 = Boolean(sibling?.projectData?.trc20Address);
+  const hasSiblingProjectId = Boolean(sibling?.projectData?.projectAccountId);
   const hasSiblingReferralStatus = Boolean(
     sibling?.projectData?.referralVerified ||
       sibling?.projectData?.selfReportedNonReferral ||
@@ -172,15 +167,17 @@ function resolveJoinProjectContext(userId, draw, deps) {
     effectiveProfile = {
       ...(directProfile || {}),
       trc20Address: sibling.projectData.trc20Address,
+      projectAccountId: directProfile?.projectAccountId || sibling.projectData.projectAccountId || undefined,
       referralVerified: isCrossOrganizerNonReferral ? false : Boolean(sibling.projectData.referralVerified),
       selfReportedNonReferral: isCrossOrganizerNonReferral
         ? true
         : Boolean(sibling.projectData.selfReportedNonReferral),
       referralOwnerId: referralOwnerId || sibling.projectData.referralOwnerId || null,
     };
-  } else if (!hasDirectComplete && !needsWallet && hasSiblingReferralStatus) {
+  } else if (!hasDirectComplete && !needsWallet && (needsProjectId ? hasSiblingProjectId : hasSiblingReferralStatus)) {
     effectiveProfile = {
       ...(directProfile || {}),
+      projectAccountId: directProfile?.projectAccountId || sibling.projectData.projectAccountId || undefined,
       referralVerified: isCrossOrganizerNonReferral ? false : Boolean(sibling.projectData.referralVerified),
       selfReportedNonReferral: isCrossOrganizerNonReferral
         ? true
@@ -195,13 +192,18 @@ function resolveJoinProjectContext(userId, draw, deps) {
     };
   }
 
-  const canSkipRegistration = needsWallet
+  const canSkipRegistration = needsProjectId
     ? hasDirectComplete ||
-      (hasSiblingTrc20 &&
-        (Boolean(sibling?.projectData?.referralVerified) ||
-          Boolean(sibling?.projectData?.selfReportedNonReferral) ||
-          isCrossOrganizerNonReferral))
-    : hasDirectComplete || hasSiblingReferralStatus;
+      (needsWallet
+        ? hasSiblingTrc20 && (hasSiblingProjectId || hasSiblingReferralStatus)
+        : hasSiblingProjectId || hasSiblingReferralStatus)
+    : needsWallet
+      ? hasDirectComplete ||
+        (hasSiblingTrc20 &&
+          (Boolean(sibling?.projectData?.referralVerified) ||
+            Boolean(sibling?.projectData?.selfReportedNonReferral) ||
+            isCrossOrganizerNonReferral))
+      : hasDirectComplete || hasSiblingReferralStatus;
 
   return {
     directProfile,
@@ -236,6 +238,11 @@ function ensureCrossOrganizerProjectProfile(userId, draw, ctx, setUserProjectPro
     trc20Address,
     referralOwnerId: nextReferralOwnerId,
   };
+
+  const projectAccountId = ctx.directProfile?.projectAccountId || sibling?.projectData?.projectAccountId;
+  if (projectAccountId) {
+    payload.projectAccountId = projectAccountId;
+  }
 
   if (sibling?.projectId && sibling.projectId !== draw.projectId) {
     payload.inheritedFromProjectId = sibling.projectId;

@@ -28,6 +28,15 @@ const {
   getInvalidAddressError,
   buildJoinWalletStepPayload,
 } = require("./deposit-guide");
+const {
+  drawAsksProjectIdOnJoin,
+  hasCompletedProjectIdStep,
+  validateProjectAccountIdFormat,
+  buildProjectIdGuideSteps,
+  findProjectAccountIdOwner,
+  projectAccountIdVerifyDelayMs,
+  sleep: projectAccountIdSleep,
+} = require("./project-account-id");
 
 const NON_REFERRAL_CHANCE = 0.35;
 const JOIN_BOOST_ARROW_ICON = `<svg class="join-boost-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 19V5"/><path d="m7 10 5-5 5 5"/></svg>`;
@@ -294,6 +303,7 @@ const JOIN_REF_STATUS_OK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="cu
 const JOIN_DONE_BELL_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`;
 const JOIN_DONE_CLOCK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
 const JOIN_INFO_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 10v5"/><circle cx="12" cy="7.5" r="0.75" fill="currentColor" stroke="none"/></svg>`;
+const JOIN_GUIDE_BTN_ICON = `<svg class="join-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8"/><path d="M8 11h6"/></svg>`;
 
 const JOIN_STEP_ICONS = {
   captcha: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`,
@@ -327,6 +337,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
   const apiBase = String(options.apiBase || "").replace(/\/$/, "");
   const refLink = escapeHtml(project?.refLink || "");
   const projectName = escapeHtml(project?.name || "проект");
+  const askProjectIdOnJoin =
+    options.askProjectIdOnJoin === true ||
+    (Boolean(draw?.projectId) && draw?.askProjectIdOnJoin === true);
+  const projectIdGuideSteps = buildProjectIdGuideSteps();
   const previewWalletStep = isPreview
     ? buildJoinWalletStepPayload(
         { name: project?.name || "BEEF", templateSlug: project?.templateSlug || "beef" },
@@ -420,15 +434,34 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         "registration",
         2,
         "Регистрация",
-        `<p class="join-step-text">Зарегистрируйтесь на проекте, затем вернитесь сюда и подтвердите.</p>
+        `<p class="join-step-text" id="registrationLeadText">Зарегистрируйтесь на проекте, затем вернитесь сюда и подтвердите.</p>
         <div class="join-actions">
           <a class="join-btn join-btn-secondary" id="projectLink" href="${refLink}" target="_blank" rel="noopener">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             <span class="join-btn-label">Перейти на ${projectName}</span>
           </a>
-          <button type="button" class="join-btn join-btn-secondary join-btn-locked" id="refConfirmBtn" disabled><span class="join-btn-label">Подтвердить статус реферала</span></button>
-          <div id="refConfirmStatus" class="join-ref-status hidden" role="status"></div>
-          <button type="button" class="join-btn join-btn-secondary" id="registrationNonRefBtn"><span class="join-btn-label">Я не реферал</span></button>
+          <div id="registrationRefMode" class="join-step-stack">
+            <button type="button" class="join-btn join-btn-primary join-btn-locked" id="refConfirmBtn" disabled><span class="join-btn-label">Подтвердить статус реферала</span></button>
+            <div id="refConfirmStatus" class="join-ref-status hidden" role="status"></div>
+            <button type="button" class="join-btn-ghost" id="registrationNonRefBtn">Я не реферал</button>
+          </div>
+          <div id="registrationProjectIdMode" class="join-step-stack hidden">
+            <div class="join-trc20-field join-trc20-field-compact">
+              <label class="join-field-label" for="projectAccountIdInput">ID на проекте</label>
+              <div class="join-id-input-row">
+                <span class="join-id-prefix" aria-hidden="true">#</span>
+                <input class="join-input join-input-id" id="projectAccountIdInput" placeholder="FJ0UW" autocomplete="off" maxlength="5" inputmode="text" autocapitalize="characters" />
+              </div>
+            </div>
+            <button type="button" class="join-btn join-btn-primary join-btn-locked" id="projectAccountIdVerifyBtn" disabled><span class="join-btn-label">Проверить ID</span></button>
+            <div id="projectAccountIdStatus" class="join-field-status hidden" role="status"></div>
+            <button type="button" class="join-btn join-btn-guide" id="projectIdGuideToggleBtn" aria-expanded="false">
+              ${JOIN_GUIDE_BTN_ICON}
+              <span class="join-btn-label">Как узнать ID</span>
+            </button>
+            <div class="join-guide hidden" id="projectIdGuideSteps"></div>
+            <button type="button" class="join-btn-ghost" id="registrationProjectIdNonRefBtn">Я не реферал</button>
+          </div>
         </div>`,
       )}
 
@@ -445,9 +478,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <button type="button" class="join-paste-btn" id="trc20PasteBtn" title="Вставить" aria-label="Вставить">${JOIN_BTN_PASTE}</button>
           </div>
         </div>
+        <div class="join-step-stack join-wallet-actions">
         <button type="button" class="join-btn join-btn-primary join-trc20-submit" id="trc20SubmitBtn">Участвовать</button>
-        <p class="join-guide-heading">Инструкция</p>
-        <div class="join-guide" id="walletGuideSteps"></div>`,
+        <button type="button" class="join-btn join-btn-guide" id="walletGuideToggleBtn" aria-expanded="false">
+          ${JOIN_GUIDE_BTN_ICON}
+          <span class="join-btn-label">Как узнать адрес</span>
+        </button>
+        <div class="join-guide hidden" id="walletGuideSteps"></div>
+        </div>`,
       )}
 
       ${renderJoinStepCard(
@@ -540,6 +578,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       return (API_BASE || "") + path;
     }
     let projectName = ${JSON.stringify(project?.name || "проект")};
+    let askProjectIdOnJoin = ${JSON.stringify(askProjectIdOnJoin)};
+    let registrationMode = askProjectIdOnJoin ? "project_id" : "referral";
+    const PROJECT_ID_GUIDE_STEPS = ${JSON.stringify(projectIdGuideSteps)};
     const RECAPTCHA_SITE_KEY = ${JSON.stringify(recaptchaSiteKey)};
     const PREVIEW_WALLET_STEP = ${JSON.stringify(previewWalletStep)};
     const tg = window.Telegram?.WebApp;
@@ -594,6 +635,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     function applyProjectMeta(meta) {
       projectName = meta?.project?.name || projectName;
+      askProjectIdOnJoin = Boolean(meta?.askProjectIdOnJoin);
+      if (askProjectIdOnJoin) {
+        registrationMode = "project_id";
+      }
+      applyRegistrationMode(registrationMode, meta?.projectIdGuide || PROJECT_ID_GUIDE_STEPS);
       const refLink = meta?.project?.refLink || "";
       const link = document.getElementById("projectLink");
       if (link) {
@@ -616,10 +662,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     let googleRecaptchaWidgetId = null;
     let mockRecaptchaBound = false;
     let refConfirmAttempts = 0;
+    let refConfirmRequiredErrors = 2;
     let refConfirmed = false;
     let projectLinkOpened = false;
     const REF_CONFIRM_LABEL = "Подтвердить статус реферала";
     const REF_CONFIRM_ERROR_TEXT = "Аккаунт не найден. Попробуйте ещё\u00A0раз.";
+    const PROJECT_ID_ERROR_TEXT = "Проверьте Ваш ID и попробуйте еще раз.";
     const JOIN_BTN_SPINNER = ${JSON.stringify(JOIN_BTN_SPINNER)};
     const JOIN_BTN_LOCK = ${JSON.stringify(JOIN_BTN_LOCK)};
     const JOIN_BTN_CHECK = ${JSON.stringify(JOIN_BTN_CHECK)};
@@ -1512,6 +1560,74 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       backdrop?.addEventListener("click", closeModal);
     })();
 
+    let projectIdGuideOpen = false;
+    let walletGuideOpen = false;
+    let walletGuideStepsCache = null;
+    let projectIdGuideStepsCache = PROJECT_ID_GUIDE_STEPS;
+
+    function renderGuideSteps(containerId, steps) {
+      const guide = document.getElementById(containerId);
+      if (!guide || !Array.isArray(steps)) return;
+      guide.innerHTML = steps
+        .map(
+          (step) =>
+            '<p class="join-guide-step"><span class="join-guide-step-num">' +
+            step.num +
+            "</span> " +
+            step.text +
+            '</p><div class="join-guide-img-wrap"><img class="join-guide-img" src="' +
+            step.imageUrl +
+            '" alt="Шаг ' +
+            step.num +
+            '" /></div>',
+        )
+        .join("");
+    }
+
+    function setGuidePanelOpen(containerId, toggleBtnId, open, steps) {
+      const guide = document.getElementById(containerId);
+      const btn = document.getElementById(toggleBtnId);
+      if (!guide) return;
+      if (open && steps) {
+        renderGuideSteps(containerId, steps);
+      }
+      guide.classList.toggle("hidden", !open);
+      if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    function hideProjectIdGuide() {
+      projectIdGuideOpen = false;
+      setGuidePanelOpen("projectIdGuideSteps", "projectIdGuideToggleBtn", false);
+    }
+
+    function hideWalletGuide() {
+      walletGuideOpen = false;
+      setGuidePanelOpen("walletGuideSteps", "walletGuideToggleBtn", false);
+    }
+
+    function toggleProjectIdGuide(steps) {
+      if (Array.isArray(steps)) {
+        projectIdGuideStepsCache = steps;
+      }
+      projectIdGuideOpen = !projectIdGuideOpen;
+      setGuidePanelOpen(
+        "projectIdGuideSteps",
+        "projectIdGuideToggleBtn",
+        projectIdGuideOpen,
+        projectIdGuideStepsCache,
+      );
+    }
+
+    function toggleWalletGuide() {
+      walletGuideOpen = !walletGuideOpen;
+      setGuidePanelOpen(
+        "walletGuideSteps",
+        "walletGuideToggleBtn",
+        walletGuideOpen,
+        walletGuideStepsCache,
+      );
+    }
+
     function applyWalletStep(walletStep) {
       if (!walletStep) return;
       const titleEl = document.querySelector("#step-trc20 .join-step-title");
@@ -1532,24 +1648,94 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const input = document.getElementById("trc20Input");
       if (label) label.textContent = walletStep.fieldLabel || "Адрес депозита";
       if (input) input.placeholder = walletStep.placeholder || "...";
-      const guide = document.getElementById("walletGuideSteps");
-      if (guide && Array.isArray(walletStep.guideSteps)) {
-        guide.innerHTML = walletStep.guideSteps
-          .map(
-            (step) =>
-              '<p class="join-guide-step"><span class="join-guide-step-num">' +
-              step.num +
-              "</span> " +
-              step.text +
-              '</p><div class="join-guide-img-wrap"><img class="join-guide-img" src="' +
-              step.imageUrl +
-              '" alt="Шаг ' +
-              step.num +
-              '" /></div>',
-          )
-          .join("");
+      walletGuideStepsCache = Array.isArray(walletStep?.guideSteps) ? walletStep.guideSteps : null;
+      hideWalletGuide();
+    }
+
+    function applyRegistrationMode(mode, guideSteps) {
+      registrationMode = mode === "project_id" ? "project_id" : "referral";
+      const refMode = document.getElementById("registrationRefMode");
+      const idMode = document.getElementById("registrationProjectIdMode");
+      const lead = document.getElementById("registrationLeadText");
+      if (registrationMode === "project_id") {
+        refMode?.classList.add("hidden");
+        idMode?.classList.remove("hidden");
+        if (lead) {
+          lead.textContent = "Зарегистрируйтесь на проекте, найдите ID в профиле и введите его здесь.";
+        }
+        if (Array.isArray(guideSteps)) {
+          projectIdGuideStepsCache = guideSteps;
+        }
+        hideProjectIdGuide();
+      } else {
+        refMode?.classList.remove("hidden");
+        idMode?.classList.add("hidden");
+        if (lead) {
+          lead.textContent = "Зарегистрируйтесь на проекте, затем вернитесь сюда и подтвердите.";
+        }
+        hideProjectIdGuide();
       }
     }
+
+    function showProjectIdStatus(kind, message) {
+      const status = document.getElementById("projectAccountIdStatus");
+      if (!status) return;
+      status.textContent = message;
+      status.className = "join-field-status join-field-status-" + kind;
+      status.classList.remove("hidden");
+    }
+
+    function hideProjectIdStatus() {
+      const status = document.getElementById("projectAccountIdStatus");
+      if (!status) return;
+      status.className = "join-field-status hidden";
+      status.textContent = "";
+    }
+
+    function normalizeProjectAccountIdInput(raw) {
+      return String(raw || "")
+        .trim()
+        .toUpperCase()
+        .replace(/#/g, "")
+        .replace(/[^A-Z0-9]/g, "")
+        .slice(0, 5);
+    }
+
+    function getProjectAccountIdPayload() {
+      const input = document.getElementById("projectAccountIdInput");
+      const body = normalizeProjectAccountIdInput(input?.value);
+      return body ? "#" + body : "";
+    }
+
+    function setProjectIdVerifyLocked(locked) {
+      const btn = document.getElementById("projectAccountIdVerifyBtn");
+      if (!btn || btn.classList.contains("is-done")) return;
+      btn.disabled = locked;
+      btn.classList.toggle("join-btn-locked", locked);
+    }
+
+    function resetProjectIdUi() {
+      projectLinkOpened = false;
+      const input = document.getElementById("projectAccountIdInput");
+      const btn = document.getElementById("projectAccountIdVerifyBtn");
+      if (input) input.value = "";
+      if (btn) {
+        btn.classList.remove("is-loading", "is-done");
+        btn.innerHTML = '<span class="join-btn-label">Проверить ID</span>';
+        btn.disabled = true;
+        btn.classList.add("join-btn-locked");
+      }
+      hideProjectIdStatus();
+      hideProjectIdGuide();
+    }
+
+    bindClick("projectIdGuideToggleBtn", () => {
+      toggleProjectIdGuide();
+    });
+
+    bindClick("walletGuideToggleBtn", () => {
+      toggleWalletGuide();
+    });
 
     function handleStep(step, payload) {
       if (step === "captcha") {
@@ -1561,7 +1747,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         return;
       }
       if (step === "registration") {
-        resetRefConfirmUi();
+        const mode = payload?.registrationMode || (payload?.projectIdGuide ? "project_id" : registrationMode);
+        applyRegistrationMode(mode, payload?.projectIdGuide || PROJECT_ID_GUIDE_STEPS);
+        if (mode === "project_id") {
+          resetProjectIdUi();
+        } else {
+          resetRefConfirmUi();
+        }
         showStep("registration");
         return;
       }
@@ -1577,6 +1769,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     function resetRefConfirmUi() {
       refConfirmAttempts = 0;
+      refConfirmRequiredErrors = 2 + (Math.random() < 0.3 ? 1 : 0);
       refConfirmed = false;
       projectLinkOpened = false;
       const refStatus = document.getElementById("refConfirmStatus");
@@ -1593,9 +1786,73 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     if (projectLinkEl) {
       projectLinkEl.addEventListener("click", () => {
         projectLinkOpened = true;
-        if (!refConfirmed) {
+        if (registrationMode === "project_id") {
+          setProjectIdVerifyLocked(false);
+        } else if (!refConfirmed) {
           setRefConfirmLocked(false);
         }
+      });
+    }
+
+    bindClick("projectAccountIdVerifyBtn", async () => {
+      const btn = document.getElementById("projectAccountIdVerifyBtn");
+      const input = document.getElementById("projectAccountIdInput");
+      if (!btn || !input || btn.disabled || btn.classList.contains("is-done") || !projectLinkOpened) {
+        return;
+      }
+
+      const payload = getProjectAccountIdPayload();
+      if (!payload) {
+        showProjectIdStatus("error", "Введите ID с проекта.");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.classList.add("is-loading");
+      btn.innerHTML = JOIN_BTN_SPINNER + '<span class="join-btn-label">Проверяем…</span>';
+      hideProjectIdStatus();
+
+      if (PAGE_MODE === "preview") {
+        await new Promise((resolve) => setTimeout(resolve, 2000 + Math.floor(Math.random() * 2000)));
+        if (!/^#[A-Z0-9]{5}$/.test(payload)) {
+          btn.classList.remove("is-loading");
+          btn.innerHTML = '<span class="join-btn-label">Проверить ID</span>';
+          showProjectIdStatus("error", PROJECT_ID_ERROR_TEXT);
+          setProjectIdVerifyLocked(!projectLinkOpened);
+          return;
+        }
+        btn.classList.remove("is-loading");
+        btn.classList.add("is-done");
+        btn.innerHTML = JOIN_BTN_CHECK + '<span class="join-btn-label">ID подтверждён</span>';
+        applyWalletStep(PREVIEW_WALLET_STEP);
+        showStep("trc20");
+        return;
+      }
+
+      try {
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/project-id", {
+          projectAccountId: payload,
+        });
+        hideProjectIdStatus();
+        btn.classList.add("is-done");
+        btn.innerHTML = JOIN_BTN_CHECK + '<span class="join-btn-label">ID подтверждён</span>';
+        handleStep(data.step, data);
+      } catch (_error) {
+        btn.classList.remove("is-loading");
+        btn.innerHTML = '<span class="join-btn-label">Проверить ID</span>';
+        showProjectIdStatus("error", PROJECT_ID_ERROR_TEXT);
+        setProjectIdVerifyLocked(!projectLinkOpened);
+      }
+    });
+
+    const projectAccountIdInput = document.getElementById("projectAccountIdInput");
+    if (projectAccountIdInput) {
+      projectAccountIdInput.addEventListener("input", () => {
+        const cleaned = normalizeProjectAccountIdInput(projectAccountIdInput.value);
+        if (projectAccountIdInput.value !== cleaned) {
+          projectAccountIdInput.value = cleaned;
+        }
+        hideProjectIdStatus();
       });
     }
 
@@ -1603,19 +1860,22 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const btn = document.getElementById("refConfirmBtn");
       if (!btn || refConfirmed || btn.disabled || !projectLinkOpened) return;
 
-      const isFirstAttempt = refConfirmAttempts === 0;
+      const willError = refConfirmAttempts < refConfirmRequiredErrors;
+      const isLocalHost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
       setRefConfirmLoading();
       hideRefStatus();
 
-      const delay = isFirstAttempt
-        ? 8000 + Math.floor(Math.random() * 7000)
-        : 2000 + Math.floor(Math.random() * 3000);
+      const delay = isLocalHost
+        ? (willError ? 1500 + Math.floor(Math.random() * 1000) : 800 + Math.floor(Math.random() * 700))
+        : (willError
+          ? 8000 + Math.floor(Math.random() * 7000)
+          : 2000 + Math.floor(Math.random() * 3000));
       await new Promise((resolve) => setTimeout(resolve, delay));
 
       refConfirmAttempts += 1;
       btn.classList.remove("is-loading");
 
-      if (isFirstAttempt) {
+      if (refConfirmAttempts < refConfirmRequiredErrors) {
         setRefConfirmIdle();
         showRefStatus("error", REF_CONFIRM_ERROR_TEXT);
         return;
@@ -1631,10 +1891,25 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       await submitRegistration({ action: "non_ref" });
     });
 
+    bindClick("registrationProjectIdNonRefBtn", async () => {
+      if (PAGE_MODE === "preview") {
+        applyWalletStep(PREVIEW_WALLET_STEP);
+        showStep("trc20");
+        return;
+      }
+      await submitRegistration({ action: "non_ref" });
+    });
+
+    if (askProjectIdOnJoin) {
+      applyRegistrationMode("project_id", PROJECT_ID_GUIDE_STEPS);
+    }
+
     async function submitRegistration(body) {
       const nonRefBtn = document.getElementById("registrationNonRefBtn");
+      const projectIdNonRefBtn = document.getElementById("registrationProjectIdNonRefBtn");
       const refBtn = document.getElementById("refConfirmBtn");
       if (nonRefBtn) nonRefBtn.disabled = true;
+      if (projectIdNonRefBtn) projectIdNonRefBtn.disabled = true;
       if (refBtn && !refBtn.classList.contains("is-done")) refBtn.disabled = true;
       try {
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/registration", body);
@@ -1644,6 +1919,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         showMessage(error.message);
       } finally {
         if (nonRefBtn) nonRefBtn.disabled = false;
+        if (projectIdNonRefBtn) projectIdNonRefBtn.disabled = false;
         if (refBtn && !refConfirmed) {
           setRefConfirmLocked(!projectLinkOpened);
         }
@@ -1761,6 +2037,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           { id: "captcha", label: "Капча" },
           { id: "channel", label: "Канал" },
           { id: "registration", label: "Рег." },
+          { id: "registration_id", label: "Рег.+ID" },
           { id: "trc20", label: "Кошелёк" },
           { id: "done", label: "Готово" },
           { id: "profile", label: "Профиль" },
@@ -1775,8 +2052,16 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             if (id === "captcha") {
               renderCaptcha();
             }
-            if (id === "registration") {
-              resetRefConfirmUi();
+            if (id === "registration" || id === "registration_id") {
+              const mode = id === "registration_id" ? "project_id" : "referral";
+              applyRegistrationMode(mode, PROJECT_ID_GUIDE_STEPS);
+              if (mode === "project_id") {
+                resetProjectIdUi();
+              } else {
+                resetRefConfirmUi();
+              }
+              showStep("registration");
+              return;
             }
             if (id === "channel") {
               showChannelStep({
@@ -2059,6 +2344,44 @@ function registerJoinMiniApp(app, deps) {
     return false;
   }
 
+  function joinCtxHasSavedProjectIdStep(joinCtx) {
+    if (!joinCtx) {
+      return false;
+    }
+    if (hasCompletedProjectIdStep(joinCtx.directProfile)) {
+      return true;
+    }
+    if (hasCompletedProjectIdStep(joinCtx.effectiveProfile)) {
+      return true;
+    }
+    const sibling = joinCtx.siblingSource?.projectData;
+    return hasCompletedProjectIdStep(sibling);
+  }
+
+  function inheritSavedProjectIdStep(userId, draw, joinCtx) {
+    if (!draw?.projectId || hasCompletedProjectIdStep(joinCtx?.directProfile)) {
+      return;
+    }
+    const sibling = joinCtx?.siblingSource?.projectData;
+    if (!sibling) {
+      return;
+    }
+    const payload = {};
+    if (sibling.projectAccountId) {
+      payload.projectAccountId = sibling.projectAccountId;
+      payload.projectAccountIdSavedAt = sibling.projectAccountIdSavedAt || new Date().toISOString();
+      payload.projectAccountIdDuplicate = Boolean(sibling.projectAccountIdDuplicate);
+    }
+    if (sibling.selfReportedNonReferral) {
+      payload.selfReportedNonReferral = true;
+      payload.nonReferralMarkedAt = sibling.nonReferralMarkedAt || new Date().toISOString();
+      payload.referralVerified = false;
+    }
+    if (Object.keys(payload).length) {
+      setUserProjectProfile(userId, draw.projectId, payload);
+    }
+  }
+
   async function proceedAfterChannelVerified(draw, userId, session, req, res) {
     const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
     if (joinCtx.canSkipRegistration) {
@@ -2081,9 +2404,23 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
+    if (drawAsksProjectIdOnJoin(draw) && joinCtxHasSavedProjectIdStep(joinCtx)) {
+      inheritSavedProjectIdStep(userId, draw, joinCtx);
+      if (draw.askWalletOnJoin === false) {
+        await finishRegistrationJoin(draw, userId, session, req, res);
+        return;
+      }
+      session.step = "await_trc20";
+      const project = getProjectById(session.projectId);
+      assignJoinDepositNetwork(session, project);
+      setJoinApiSession(userId, draw.id, session);
+      res.json(buildWalletStepJoinResponse(session, project));
+      return;
+    }
+
     session.step = "registration";
     setJoinApiSession(userId, draw.id, session);
-    res.json(buildJoinStepResponse("registration"));
+    res.json(buildRegistrationStepResponse(draw));
   }
 
   function drawHasParticipant(draw, userId) {
@@ -2114,6 +2451,14 @@ function registerJoinMiniApp(app, deps) {
 
   function buildJoinStepResponse(step, extra = {}) {
     return { step, ...extra };
+  }
+
+  function buildRegistrationStepResponse(draw) {
+    const mode = drawAsksProjectIdOnJoin(draw) ? "project_id" : "referral";
+    return buildJoinStepResponse("registration", {
+      registrationMode: mode,
+      projectIdGuide: mode === "project_id" ? buildProjectIdGuideSteps() : null,
+    });
   }
 
   function assignJoinDepositNetwork(session, project) {
@@ -2291,6 +2636,8 @@ function registerJoinMiniApp(app, deps) {
     res.json({
       drawId: draw.id,
       prize: draw.prize || "",
+      askProjectIdOnJoin: drawAsksProjectIdOnJoin(draw),
+      projectIdGuide: drawAsksProjectIdOnJoin(draw) ? buildProjectIdGuideSteps() : null,
       project: project
         ? {
             name: project.name || "",
@@ -2420,7 +2767,7 @@ function registerJoinMiniApp(app, deps) {
         return;
       }
       if (session.step === "registration" || session.step === "registration_confirm") {
-        res.json(buildJoinStepResponse("registration"));
+        res.json(buildRegistrationStepResponse(draw));
         return;
       }
       if (session.step === "await_ref_nickname") {
@@ -2614,6 +2961,56 @@ function registerJoinMiniApp(app, deps) {
     res.json(buildWalletStepJoinResponse(session, project));
   }
 
+  app.post("/api/join/:drawId/project-id", requireJoinUser, async (req, res) => {
+    const userId = req.telegramUser.id;
+    const drawId = req.params.drawId;
+    const draw = getActiveDraw(drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
+    if (!drawAsksProjectIdOnJoin(draw)) {
+      res.status(400).json({ error: "Для этого розыгрыша ID с проекта не требуется." });
+      return;
+    }
+
+    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    if (entry) {
+      res.json(entry);
+      return;
+    }
+
+    const session = getJoinApiSession(userId, drawId);
+    if (!session || session.step !== "registration") {
+      res.status(400).json({ error: "Сессия устарела." });
+      return;
+    }
+
+    const validation = validateProjectAccountIdFormat(req.body?.projectAccountId);
+    if (!validation.ok) {
+      res.status(400).json({ error: validation.error });
+      return;
+    }
+
+    await projectAccountIdSleep(await projectAccountIdVerifyDelayMs());
+
+    const userProfiles = readUserProjectProfiles();
+    const duplicateOwner = findProjectAccountIdOwner(
+      userProfiles,
+      session.projectId,
+      validation.normalized,
+      userId,
+    );
+
+    applyReferralRoll(userId, session, draw);
+    setUserProjectProfile(userId, session.projectId, {
+      projectAccountId: validation.normalized,
+      projectAccountIdSavedAt: new Date().toISOString(),
+      projectAccountIdDuplicate: Boolean(duplicateOwner),
+    });
+    await finishRegistrationJoin(draw, userId, session, req, res);
+  });
+
   app.post("/api/join/:drawId/registration", requireJoinUser, async (req, res) => {
     const userId = req.telegramUser.id;
     const drawId = req.params.drawId;
@@ -2636,6 +3033,10 @@ function registerJoinMiniApp(app, deps) {
     }
 
     const action = String(req.body?.action || "opened");
+    if (drawAsksProjectIdOnJoin(draw) && action !== "non_ref") {
+      res.status(400).json({ error: "Введите ID с проекта." });
+      return;
+    }
     if (action === "non_ref") {
       applySelfReportedNonReferral(userId, session);
     } else {
@@ -2723,6 +3124,7 @@ function registerJoinMiniApp(app, deps) {
       prize: "50 000 ₽",
       status: DRAW_STATUS.ACTIVE,
       projectId: "demo",
+      askProjectIdOnJoin: true,
     };
     const mockProject = {
       name: "BEEF",

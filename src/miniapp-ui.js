@@ -1093,10 +1093,135 @@ function getJoinFlowStyles() {
     body.join-flow .join-actions {
       display: flex;
       flex-direction: column;
+      gap: 12px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+    }
+
+    body.join-flow .join-step-stack {
+      display: flex;
+      flex-direction: column;
       gap: 10px;
       width: 100%;
       max-width: 100%;
       min-width: 0;
+    }
+
+    body.join-flow .join-btn-ghost {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      padding: 8px 12px;
+      border: none;
+      background: none;
+      color: var(--tg-theme-hint-color, #65708a);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border-radius: 10px;
+      transition: color 0.18s ease, background 0.18s ease;
+    }
+
+    body.join-flow .join-btn-ghost:active {
+      transform: scale(0.99);
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 8%, transparent);
+      color: var(--tg-theme-link-color, #325fff);
+    }
+
+    body.join-flow .join-btn-guide {
+      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 10%, var(--tg-theme-secondary-bg-color, #fff));
+      color: var(--tg-theme-link-color, #325fff);
+      border: 1.5px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 34%, transparent);
+      box-shadow: none;
+      font-size: 14px;
+      padding: 12px 14px;
+    }
+
+    body.join-flow .join-btn-guide[aria-expanded="true"] {
+      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 18%, var(--tg-theme-secondary-bg-color, #fff));
+      border-color: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 52%, transparent);
+      color: var(--tg-theme-text-color, #151a2d);
+    }
+
+    body.join-flow .join-trc20-field-compact {
+      margin-bottom: 0;
+    }
+
+    body.join-flow .join-id-input-row {
+      display: flex;
+      align-items: stretch;
+      width: 100%;
+      min-width: 0;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 24%, transparent);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--tg-theme-bg-color, #f5f8ff);
+      transition: border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    body.join-flow .join-id-input-row:focus-within {
+      border-color: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 50%, transparent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 14%, transparent);
+    }
+
+    body.join-flow .join-id-prefix {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 0 0 14px;
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, #151a2d);
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    body.join-flow .join-input.join-input-id {
+      flex: 1 1 auto;
+      min-width: 0;
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      padding-left: 6px;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
+
+    body.join-flow .join-input.join-input-id:focus {
+      box-shadow: none;
+    }
+
+    body.join-flow .join-field-status {
+      margin: 0;
+      padding: 10px 12px;
+      font-size: 13px;
+      line-height: 1.45;
+      text-align: center;
+      border-radius: 10px;
+    }
+
+    body.join-flow .join-field-status-error {
+      color: #ff8a80;
+      background: color-mix(in srgb, #a12626 16%, var(--tg-theme-secondary-bg-color, #232f42));
+      border: 1px solid color-mix(in srgb, #e53935 28%, transparent);
+    }
+
+    body.join-flow .join-field-status-loading {
+      color: var(--tg-theme-hint-color, #65708a);
+      background: transparent;
+      padding: 4px 0;
+    }
+
+    body.join-flow .join-btn-primary.is-done,
+    body.join-flow .join-btn-secondary.is-done {
+      background: color-mix(in srgb, #1f6a3c 16%, var(--tg-theme-secondary-bg-color, #232f42));
+      border-color: color-mix(in srgb, #1f6a3c 45%, transparent);
+      color: #3ecf7a;
+      opacity: 1;
+      cursor: default;
+      box-shadow: none;
     }
 
     body.join-flow .join-btn {
@@ -1152,6 +1277,15 @@ function getJoinFlowStyles() {
       color: var(--tg-theme-text-color, #eef1f7);
       opacity: 1;
       cursor: wait;
+    }
+
+    body.join-flow .join-btn-primary.is-loading {
+      background: linear-gradient(135deg, color-mix(in srgb, var(--tg-theme-button-color, #325fff) 72%, #fff) 0%, var(--tg-theme-button-color, #325fff) 100%);
+      border-color: var(--tg-theme-button-color, #325fff);
+      color: var(--tg-theme-button-text-color, #fff);
+      opacity: 0.92;
+      cursor: wait;
+      box-shadow: none;
     }
 
     body.join-flow .join-btn-secondary.is-done {
@@ -1235,7 +1369,7 @@ function getJoinFlowStyles() {
       line-height: 1.45;
       padding: 14px 16px;
       border-radius: 14px;
-      margin: 0;
+      margin: 2px 0 0;
     }
 
     body.join-flow .join-ref-status-icon {
@@ -1260,8 +1394,8 @@ function getJoinFlowStyles() {
     }
 
     body.join-flow .join-ref-status-error .join-ref-status-text {
-      white-space: nowrap;
-      max-width: none;
+      white-space: normal;
+      max-width: 280px;
     }
 
     body.join-flow .join-btn-secondary.join-btn-locked {
@@ -1317,7 +1451,7 @@ function getJoinFlowStyles() {
 
     body.join-flow .join-trc20-submit {
       width: 100%;
-      margin: 0 0 16px;
+      margin: 0;
     }
 
     body.join-flow .join-field-label {
@@ -2204,6 +2338,29 @@ function getJoinFlowStyles() {
 
     body.join-flow.app-theme-dark .join-ref-status-ok .join-ref-status-icon {
       color: #9dffb8;
+    }
+
+    body.join-flow.app-theme-dark .join-btn-guide {
+      color: #ffffff;
+      background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 18%, var(--tg-theme-secondary-bg-color, #232f42));
+      border-color: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 42%, transparent);
+    }
+
+    body.join-flow.app-theme-dark .join-btn-guide[aria-expanded="true"] {
+      color: #ffffff;
+      background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 28%, var(--tg-theme-secondary-bg-color, #232f42));
+      border-color: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 58%, transparent);
+    }
+
+    body.join-flow.app-theme-dark .join-field-status-error {
+      color: #ff8a80;
+      background: color-mix(in srgb, #a12626 22%, var(--tg-theme-secondary-bg-color, #232f42));
+      border-color: color-mix(in srgb, #e53935 32%, transparent);
+    }
+
+    body.join-flow.app-theme-dark .join-id-input-row {
+      background: var(--tg-theme-bg-color, #141a24);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 30%, transparent);
     }
 
     body.join-flow.app-theme-dark .join-done-icon-ring {

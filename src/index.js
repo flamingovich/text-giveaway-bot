@@ -40,6 +40,13 @@ const {
   formatRefLinkDisplay,
 } = require("./draw-post-emojis");
 const { evaluateIpFraud, listProjectWalletAddresses, buildGlobalWalletOwners } = require("./draw-anti-fraud");
+const {
+  drawAsksProjectIdOnJoin,
+  buildGlobalProjectAccountIdOwners,
+  evaluateProjectAccountIdFraud,
+  evaluateIpManyProjectIdsFraud,
+  normalizeProjectAccountId,
+} = require("./project-account-id");
 const { checkWalletHasTransactions } = require("./tron-wallet-check");
 const {
   BRAND_PROJECT_TEMPLATES,
@@ -899,6 +906,7 @@ function getDrawParticipantMeta(draw, userId) {
 function collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners = null) {
   const byIp = new Map();
   const byWallet = new Map();
+  const byProjectAccountId = new Map();
 
   for (const participantId of draw.participantIds || []) {
     const participantMeta = getDrawParticipantMeta(draw, participantId);
@@ -917,13 +925,21 @@ function collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners = 
     for (const wallet of wallets) {
       byWallet.set(wallet, (byWallet.get(wallet) || 0) + 1);
     }
+
+    const accountId = normalizeProjectAccountId(projectData?.projectAccountId);
+    if (accountId) {
+      byProjectAccountId.set(accountId, (byProjectAccountId.get(accountId) || 0) + 1);
+    }
   }
 
   return {
     byIp,
     byWallet,
+    byProjectAccountId,
     globalWalletOwners:
       globalWalletOwners || buildGlobalWalletOwners(userProfiles, normalizeWalletAddress),
+    globalProjectAccountIdOwners:
+      draw.projectId && buildGlobalProjectAccountIdOwners(userProfiles, draw.projectId),
   };
 }
 
@@ -986,13 +1002,30 @@ function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = n
   if (multiAccount) {
     labels.push("Мультиаккаунт");
   }
+
+  const projectIdFraud = evaluateProjectAccountIdFraud(draw, winnerId, userProfiles, signals, {
+    getUserProfileBundle,
+  });
+  if (projectIdFraud.shouldFlag) {
+    labels.push("Мультиаккаунт");
+  }
+
+  const ipProjectIdsFraud = evaluateIpManyProjectIdsFraud(draw, winnerId, userProfiles, signals, {
+    getDrawParticipantMeta,
+    getUserProfileBundle,
+  });
+  if (ipProjectIdsFraud.shouldFlag) {
+    labels.push("Бот по IP");
+  }
+
   if (notifyInfo?.channelSubscribed === false) {
     labels.push("Не подписан");
   }
 
+  const uniqueLabels = [...new Set(labels)];
   return {
-    labels,
-    hasFraudFlag: labels.length > 0,
+    labels: uniqueLabels,
+    hasFraudFlag: uniqueLabels.length > 0,
   };
 }
 
@@ -7974,6 +8007,14 @@ ${getPanelFluidTypographyVars()}
                 </span>
               </label>
             </div>
+            <div class="draw-field draw-check-field" id="askProjectIdWrap">
+              <label class="draw-check-label">
+                <input class="draw-check" type="checkbox" name="askProjectIdOnJoin" value="1" />
+                <span class="draw-check-text">
+                  <span class="draw-check-title">Просить ID с проекта</span>
+                </span>
+              </label>
+            </div>
             <div class="draw-field draw-check-field">
               <label class="draw-check-label">
                 <input class="draw-check" type="checkbox" name="showProjectInPost" value="1" checked />
@@ -8423,6 +8464,24 @@ ${getPanelFluidTypographyVars()}
       syncPublish();
       syncEnd();
       syncWinnerConfirm();
+    }
+
+    function setupAskProjectIdToggle() {
+      const projectSelect = document.querySelector('#create-draw-form select[name="projectId"]');
+      const wrap = document.getElementById("askProjectIdWrap");
+      const checkbox = document.querySelector('#create-draw-form input[name="askProjectIdOnJoin"]');
+      if (!projectSelect || !wrap || !checkbox) return;
+
+      function syncAskProjectId() {
+        const hasProject = Boolean(String(projectSelect.value || "").trim());
+        wrap.classList.toggle("panel-hidden", !hasProject);
+        if (!hasProject) {
+          checkbox.checked = false;
+        }
+      }
+
+      projectSelect.addEventListener("change", syncAskProjectId);
+      syncAskProjectId();
     }
 
     function setupSettingsPanel() {
@@ -8891,6 +8950,7 @@ ${getPanelFluidTypographyVars()}
     setupCopyButtons();
     setupProfileLinks();
     setupPublishEndToggles();
+    setupAskProjectIdToggle();
     setupCreateDrawSubmitGuard();
     setupSettingsPanel();
     setupAdminPanels();
@@ -9587,6 +9647,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       winnerConfirmValue: normalizedWinnerConfirmValue,
       winnerConfirmUnit: normalizedWinnerConfirmUnit,
       askWalletOnJoin: String(body.askWalletOnJoin || "") === "1",
+      askProjectIdOnJoin: String(body.askProjectIdOnJoin || "") === "1",
       showProjectInPost: String(body.showProjectInPost || "") === "1",
       publishTarget,
     };
