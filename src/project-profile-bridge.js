@@ -1,4 +1,8 @@
-const { isProjectRegistrationComplete, drawAsksProjectIdOnJoin } = require("./project-account-id");
+const {
+  isProjectRegistrationComplete,
+  drawAsksProjectIdOnJoin,
+  hasCompletedProjectIdStep,
+} = require("./project-account-id");
 
 function normalizeProjectBrandName(name) {
   return String(name || "")
@@ -162,6 +166,8 @@ function resolveJoinProjectContext(userId, draw, deps) {
       isCrossOrganizerNonReferral,
   );
 
+  const hasSiblingIdStepDone = hasCompletedProjectIdStep(sibling?.projectData);
+
   let effectiveProfile = directProfile;
   if (!hasDirectComplete && needsWallet && hasSiblingTrc20) {
     effectiveProfile = {
@@ -174,7 +180,7 @@ function resolveJoinProjectContext(userId, draw, deps) {
         : Boolean(sibling.projectData.selfReportedNonReferral),
       referralOwnerId: referralOwnerId || sibling.projectData.referralOwnerId || null,
     };
-  } else if (!hasDirectComplete && !needsWallet && (needsProjectId ? hasSiblingProjectId : hasSiblingReferralStatus)) {
+  } else if (!hasDirectComplete && !needsWallet && (needsProjectId ? hasSiblingIdStepDone : hasSiblingReferralStatus)) {
     effectiveProfile = {
       ...(directProfile || {}),
       projectAccountId: directProfile?.projectAccountId || sibling.projectData.projectAccountId || undefined,
@@ -194,9 +200,7 @@ function resolveJoinProjectContext(userId, draw, deps) {
 
   const canSkipRegistration = needsProjectId
     ? hasDirectComplete ||
-      (needsWallet
-        ? hasSiblingTrc20 && (hasSiblingProjectId || hasSiblingReferralStatus)
-        : hasSiblingProjectId || hasSiblingReferralStatus)
+      (needsWallet ? hasSiblingTrc20 && hasSiblingIdStepDone : hasSiblingIdStepDone)
     : needsWallet
       ? hasDirectComplete ||
         (hasSiblingTrc20 &&
@@ -242,6 +246,11 @@ function ensureCrossOrganizerProjectProfile(userId, draw, ctx, setUserProjectPro
   const projectAccountId = ctx.directProfile?.projectAccountId || sibling?.projectData?.projectAccountId;
   if (projectAccountId) {
     payload.projectAccountId = projectAccountId;
+  }
+  const projectIdStepCompletedAt =
+    ctx.directProfile?.projectIdStepCompletedAt || sibling?.projectData?.projectIdStepCompletedAt;
+  if (projectIdStepCompletedAt) {
+    payload.projectIdStepCompletedAt = projectIdStepCompletedAt;
   }
 
   if (sibling?.projectId && sibling.projectId !== draw.projectId) {

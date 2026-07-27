@@ -118,7 +118,20 @@ function findProjectAccountIdOwner(userProfiles, projectId, accountId, excludeUs
 }
 
 function hasCompletedProjectIdStep(profile) {
-  return Boolean(profile?.projectAccountId) || Boolean(profile?.selfReportedNonReferral);
+  return Boolean(profile?.projectAccountId) || Boolean(profile?.projectIdStepCompletedAt);
+}
+
+function joinCtxHasCompletedProjectIdStep(joinCtx) {
+  if (!joinCtx) {
+    return false;
+  }
+  if (hasCompletedProjectIdStep(joinCtx.directProfile)) {
+    return true;
+  }
+  if (hasCompletedProjectIdStep(joinCtx.effectiveProfile)) {
+    return true;
+  }
+  return hasCompletedProjectIdStep(joinCtx.siblingSource?.projectData);
 }
 
 function isProjectRegistrationComplete(profile, draw) {
@@ -127,10 +140,10 @@ function isProjectRegistrationComplete(profile, draw) {
   }
   const needsWallet = draw?.askWalletOnJoin !== false;
   if (drawAsksProjectIdOnJoin(draw)) {
-    if (profile.selfReportedNonReferral) {
-      return !needsWallet || Boolean(profile.trc20Address);
+    if (!hasCompletedProjectIdStep(profile)) {
+      return false;
     }
-    return Boolean(profile.projectAccountId) && (!needsWallet || profile.trc20Address);
+    return !needsWallet || Boolean(profile.trc20Address);
   }
   const hasRefStatus = Boolean(profile.referralVerified || profile.selfReportedNonReferral);
   return hasRefStatus && (!needsWallet || profile.trc20Address);
@@ -234,6 +247,7 @@ module.exports = {
   buildGlobalProjectAccountIdOwners,
   findProjectAccountIdOwner,
   hasCompletedProjectIdStep,
+  joinCtxHasCompletedProjectIdStep,
   isProjectRegistrationComplete,
   evaluateProjectAccountIdFraud,
   evaluateIpManyProjectIdsFraud,

@@ -2372,7 +2372,10 @@ function registerJoinMiniApp(app, deps) {
       payload.projectAccountIdSavedAt = sibling.projectAccountIdSavedAt || new Date().toISOString();
       payload.projectAccountIdDuplicate = Boolean(sibling.projectAccountIdDuplicate);
     }
-    if (sibling.selfReportedNonReferral) {
+    if (sibling.projectIdStepCompletedAt) {
+      payload.projectIdStepCompletedAt = sibling.projectIdStepCompletedAt;
+    }
+    if (sibling.selfReportedNonReferral && sibling.projectIdStepCompletedAt) {
       payload.selfReportedNonReferral = true;
       payload.nonReferralMarkedAt = sibling.nonReferralMarkedAt || new Date().toISOString();
       payload.referralVerified = false;
@@ -2589,9 +2592,13 @@ function registerJoinMiniApp(app, deps) {
     }
 
     const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
+    const projectIdStepPending =
+      drawAsksProjectIdOnJoin(draw) && !joinCtxHasSavedProjectIdStep(joinCtx);
     const canSkip =
       joinCtx.canSkipRegistration ||
-      (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id));
+      (draw.projectId &&
+        userParticipatedInProject(userId, draw.projectId, draw.id) &&
+        !projectIdStepPending);
     const autoJoin = canSkip;
 
     if (autoJoin) {
@@ -3007,6 +3014,7 @@ function registerJoinMiniApp(app, deps) {
       projectAccountId: validation.normalized,
       projectAccountIdSavedAt: new Date().toISOString(),
       projectAccountIdDuplicate: Boolean(duplicateOwner),
+      projectIdStepCompletedAt: new Date().toISOString(),
     });
     await finishRegistrationJoin(draw, userId, session, req, res);
   });
@@ -3039,6 +3047,11 @@ function registerJoinMiniApp(app, deps) {
     }
     if (action === "non_ref") {
       applySelfReportedNonReferral(userId, session);
+      if (drawAsksProjectIdOnJoin(draw)) {
+        setUserProjectProfile(userId, session.projectId, {
+          projectIdStepCompletedAt: new Date().toISOString(),
+        });
+      }
     } else {
       applyReferralRoll(userId, session, draw);
     }

@@ -45,6 +45,7 @@ const {
   buildGlobalProjectAccountIdOwners,
   evaluateProjectAccountIdFraud,
   evaluateIpManyProjectIdsFraud,
+  joinCtxHasCompletedProjectIdStep,
   normalizeProjectAccountId,
 } = require("./project-account-id");
 const { checkWalletHasTransactions } = require("./tron-wallet-check");
@@ -4044,13 +4045,25 @@ async function tryAutoJoinDraw(draw, userId) {
   }
 
   if (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) {
-    const result = await addUserToDraw(draw.id, userId);
-    return {
-      joined: true,
-      already: Boolean(result.already),
-      message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
-      messageHtml: result.messageHtml,
-    };
+    const joinCtx = resolveJoinProjectContext(userId, draw, {
+      getUserProjectProfile,
+      setUserProjectProfile,
+      readUserProjectProfiles,
+      readProjects,
+      readData,
+      getProjectById,
+    });
+    const projectIdStepPending =
+      drawAsksProjectIdOnJoin(draw) && !joinCtxHasCompletedProjectIdStep(joinCtx);
+    if (!projectIdStepPending) {
+      const result = await addUserToDraw(draw.id, userId);
+      return {
+        joined: true,
+        already: Boolean(result.already),
+        message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+        messageHtml: result.messageHtml,
+      };
+    }
   }
 
   const joinCtx = resolveJoinProjectContext(userId, draw, {
