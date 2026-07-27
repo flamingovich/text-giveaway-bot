@@ -5871,6 +5871,14 @@ ${getPanelFluidTypographyVars()}
       line-height: 1.3;
       color: var(--tg-theme-hint-color, var(--sub));
       opacity: 0.9;
+      margin-top: 2px;
+    }
+    .draw-check-disabled .draw-check-label {
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+    .draw-check-disabled .draw-check-title {
+      color: var(--tg-theme-hint-color, var(--sub));
     }
     .projects-list,
     .channels-list,
@@ -8009,9 +8017,10 @@ ${getPanelFluidTypographyVars()}
             </div>
             <div class="draw-field draw-check-field" id="askProjectIdWrap">
               <label class="draw-check-label">
-                <input class="draw-check" type="checkbox" name="askProjectIdOnJoin" value="1" />
+                <input class="draw-check" type="checkbox" name="askProjectIdOnJoin" value="1" disabled />
                 <span class="draw-check-text">
                   <span class="draw-check-title">Просить ID с проекта</span>
+                  <span class="draw-check-hint hidden" id="askProjectIdHint">Сначала выберите проект выше</span>
                 </span>
               </label>
             </div>
@@ -8470,11 +8479,14 @@ ${getPanelFluidTypographyVars()}
       const projectSelect = document.querySelector('#create-draw-form select[name="projectId"]');
       const wrap = document.getElementById("askProjectIdWrap");
       const checkbox = document.querySelector('#create-draw-form input[name="askProjectIdOnJoin"]');
+      const hint = document.getElementById("askProjectIdHint");
       if (!projectSelect || !wrap || !checkbox) return;
 
       function syncAskProjectId() {
         const hasProject = Boolean(String(projectSelect.value || "").trim());
-        wrap.classList.toggle("panel-hidden", !hasProject);
+        checkbox.disabled = !hasProject;
+        wrap.classList.toggle("draw-check-disabled", !hasProject);
+        if (hint) hint.classList.toggle("hidden", hasProject);
         if (!hasProject) {
           checkbox.checked = false;
         }
