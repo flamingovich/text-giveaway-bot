@@ -5486,11 +5486,14 @@ function renderPanelLiveStatsSection(draws, userProfiles, panelContext = null) {
           `(${activeDigestCount} шт.)`,
         )
       : "";
-  const payoutQueueBtnHtml = renderPanelActionButtonHtml(
-    "togglePayoutQueueBtn",
-    "Очередь выплат",
-    formatPendingPayoutQueueButtonMeta(pendingPayouts),
-  );
+  const payoutQueueBtnHtml =
+    pendingPayouts.count > 0
+      ? renderPanelActionButtonHtml(
+          "togglePayoutQueueBtn",
+          "Очередь выплат",
+          formatPendingPayoutQueueButtonMeta(pendingPayouts),
+        )
+      : "";
   return `
       <section id="panelStatsRoot" class="card history-section">
         <h2 class="create-title draw-history-title">
