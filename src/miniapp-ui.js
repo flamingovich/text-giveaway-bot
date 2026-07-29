@@ -1124,6 +1124,39 @@ function getJoinFlowStyles() {
       transition: color 0.18s ease, background 0.18s ease;
     }
 
+    body.join-flow .join-btn-outline {
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #fff) 88%, var(--tg-theme-hint-color, #65708a));
+      color: var(--tg-theme-text-color, #151a2d);
+      border: 1.5px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 34%, transparent);
+      font-weight: 600;
+    }
+
+    body.join-flow .join-btn-outline:active {
+      transform: scale(0.98);
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 10%, var(--tg-theme-secondary-bg-color, #fff));
+    }
+
+    body.join-flow .join-guide-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      padding: 2px 0 6px;
+      margin: -4px 0 2px;
+      border: none;
+      background: none;
+      color: var(--tg-theme-link-color, #325fff);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    body.join-flow .join-guide-link:active {
+      opacity: 0.82;
+    }
+
     body.join-flow .join-btn-ghost:active {
       transform: scale(0.99);
       background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 8%, transparent);
@@ -2280,6 +2313,86 @@ function getJoinFlowStyles() {
       border-color: color-mix(in srgb, #ffcaca 40%, transparent);
     }
 
+    body.join-flow .join-guide-sheet-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 120;
+      background: rgba(0, 0, 0, 0.45);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+    }
+
+    body.join-flow .join-guide-sheet-backdrop.is-open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    body.join-flow .join-guide-sheet {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 130;
+      max-width: 100%;
+      margin: 0 auto;
+      padding: 0 var(--join-pad-right) max(18px, env(safe-area-inset-bottom, 0px)) var(--join-pad-left);
+      transform: translateY(110%);
+      transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+      pointer-events: none;
+    }
+
+    body.join-flow .join-guide-sheet.is-open {
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    body.join-flow .join-guide-sheet-card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      max-height: min(88vh, 760px);
+      background: var(--tg-theme-secondary-bg-color, var(--tg-theme-bg-color, #fff));
+      border-radius: 16px 16px 0 0;
+      padding: 18px 16px 16px;
+      box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.22);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+      border-bottom: 0;
+    }
+
+    body.join-flow .join-guide-sheet-close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 2;
+      width: 32px;
+      height: 32px;
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 24%, transparent);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 10%, transparent);
+      color: var(--tg-theme-text-color, #151a2d);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    body.join-flow .join-guide-sheet-title {
+      margin: 0 36px 12px 0;
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--tg-theme-text-color, #151a2d);
+    }
+
+    body.join-flow .join-guide-sheet-scroll {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding-right: 2px;
+      margin: 0;
+    }
+
     body.join-flow .msg {
       padding: 11px 13px;
       border-radius: 12px;
@@ -2333,6 +2446,17 @@ function getJoinFlowStyles() {
       color: #ffffff;
       background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 22%, var(--tg-theme-secondary-bg-color, #232f42));
       border-color: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 45%, transparent);
+    }
+
+    body.join-flow.app-theme-dark .join-btn-outline {
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #232f42) 92%, #000);
+      color: var(--tg-theme-text-color, #eef1f7);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 38%, transparent);
+    }
+
+    body.join-flow.app-theme-dark .join-guide-sheet-card {
+      background: var(--tg-theme-secondary-bg-color, #232f42);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 28%, transparent);
     }
 
     body.join-flow.app-theme-dark .join-paste-btn {

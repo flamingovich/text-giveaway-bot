@@ -442,10 +442,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             <span class="join-btn-label">Перейти на ${projectName}</span>
           </a>
+          <button type="button" class="join-guide-link hidden" id="projectIdGuideOpenBtn" aria-expanded="false">Как узнать ID</button>
           <div id="registrationRefMode" class="join-step-stack">
             <button type="button" class="join-btn join-btn-primary join-btn-locked" id="refConfirmBtn" disabled><span class="join-btn-label">Подтвердить статус реферала</span></button>
             <div id="refConfirmStatus" class="join-ref-status hidden" role="status"></div>
-            <button type="button" class="join-btn-ghost" id="registrationNonRefBtn">Я не реферал</button>
+            <button type="button" class="join-btn join-btn-outline" id="registrationNonRefBtn">Я не реферал</button>
           </div>
           <div id="registrationProjectIdMode" class="join-step-stack hidden">
             <div class="join-trc20-field join-trc20-field-compact">
@@ -457,12 +458,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             </div>
             <button type="button" class="join-btn join-btn-primary join-btn-locked" id="projectAccountIdVerifyBtn" disabled><span class="join-btn-label">Проверить ID</span></button>
             <div id="projectAccountIdStatus" class="join-field-status hidden" role="status"></div>
-            <button type="button" class="join-btn join-btn-guide" id="projectIdGuideToggleBtn" aria-expanded="false">
-              ${JOIN_GUIDE_BTN_ICON}
-              <span class="join-btn-label">Как узнать ID</span>
-            </button>
-            <div class="join-guide hidden" id="projectIdGuideSteps"></div>
-            <button type="button" class="join-btn-ghost" id="registrationProjectIdNonRefBtn">Я не реферал</button>
+            <button type="button" class="join-btn join-btn-outline" id="registrationProjectIdNonRefBtn">Я не реферал</button>
           </div>
         </div>`,
       )}
@@ -561,6 +557,15 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         <p class="join-boost-link-notice hidden" id="joinBoostLinkNotice" role="status"></p>
         <button type="button" class="join-btn join-btn-gradient" id="joinBoostGenerateBtn">✨ Сгенерировать ссылку</button>
       </div>
+    </div>
+  </aside>
+
+  <div id="joinGuideBackdrop" class="join-guide-sheet-backdrop hidden" aria-hidden="true"></div>
+  <aside id="joinGuideSheet" class="join-guide-sheet hidden" role="dialog" aria-modal="true" aria-labelledby="joinGuideSheetTitle">
+    <div class="join-guide-sheet-card">
+      <button type="button" class="join-guide-sheet-close" id="joinGuideSheetCloseBtn" aria-label="Закрыть">×</button>
+      <h3 class="join-guide-sheet-title" id="joinGuideSheetTitle">Как узнать ID</h3>
+      <div class="join-guide-sheet-scroll join-guide" id="projectIdGuideSteps"></div>
     </div>
   </aside>
 
@@ -1572,11 +1577,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     let walletGuideStepsCache = null;
     let projectIdGuideStepsCache = PROJECT_ID_GUIDE_STEPS;
     let projectIdInputConfig = PROJECT_ID_INPUT_CONFIG;
+    let projectIdGuideCloseTimer = null;
+    const JOIN_GUIDE_SHEET_ANIM_MS = 340;
 
-    function renderGuideSteps(containerId, steps) {
-      const guide = document.getElementById(containerId);
-      if (!guide || !Array.isArray(steps)) return;
-      guide.innerHTML = steps
+    function renderGuideStepsContent(container, steps) {
+      if (!container || !Array.isArray(steps)) return;
+      container.innerHTML = steps
         .map(
           (step) =>
             '<p class="join-guide-step"><span class="join-guide-step-num">' +
@@ -1592,6 +1598,80 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         .join("");
     }
 
+    function getProjectIdGuideElements() {
+      return {
+        backdrop: document.getElementById("joinGuideBackdrop"),
+        sheet: document.getElementById("joinGuideSheet"),
+        content: document.getElementById("projectIdGuideSteps"),
+        openBtn: document.getElementById("projectIdGuideOpenBtn"),
+      };
+    }
+
+    function hideProjectIdGuideElements() {
+      const { backdrop, sheet } = getProjectIdGuideElements();
+      if (!backdrop || !sheet) return;
+      backdrop.classList.add("hidden");
+      sheet.classList.add("hidden");
+      backdrop.classList.remove("is-open");
+      sheet.classList.remove("is-open");
+      backdrop.setAttribute("aria-hidden", "true");
+    }
+
+    function clearProjectIdGuideCloseTimer() {
+      if (projectIdGuideCloseTimer) {
+        clearTimeout(projectIdGuideCloseTimer);
+        projectIdGuideCloseTimer = null;
+      }
+    }
+
+    function openProjectIdGuideSheet(steps) {
+      if (Array.isArray(steps)) {
+        projectIdGuideStepsCache = steps;
+      }
+      const { backdrop, sheet, content, openBtn } = getProjectIdGuideElements();
+      if (!backdrop || !sheet || !content) return;
+      if (projectIdGuideOpen) return;
+
+      renderGuideStepsContent(content, projectIdGuideStepsCache);
+      projectIdGuideOpen = true;
+      backdrop.classList.remove("hidden");
+      sheet.classList.remove("hidden");
+      backdrop.classList.remove("is-open");
+      sheet.classList.remove("is-open");
+      backdrop.setAttribute("aria-hidden", "false");
+      openBtn?.setAttribute("aria-expanded", "true");
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!projectIdGuideOpen) return;
+          backdrop.classList.add("is-open");
+          sheet.classList.add("is-open");
+        });
+      });
+    }
+
+    function closeProjectIdGuideSheet() {
+      clearProjectIdGuideCloseTimer();
+      const { backdrop, sheet, openBtn } = getProjectIdGuideElements();
+      if (!backdrop || !sheet) return;
+
+      projectIdGuideOpen = false;
+      openBtn?.setAttribute("aria-expanded", "false");
+      backdrop.classList.remove("is-open");
+      sheet.classList.remove("is-open");
+      backdrop.setAttribute("aria-hidden", "true");
+
+      projectIdGuideCloseTimer = setTimeout(() => {
+        projectIdGuideCloseTimer = null;
+        hideProjectIdGuideElements();
+      }, JOIN_GUIDE_SHEET_ANIM_MS);
+    }
+
+    function renderGuideSteps(containerId, steps) {
+      const guide = document.getElementById(containerId);
+      renderGuideStepsContent(guide, steps);
+    }
+
     function setGuidePanelOpen(containerId, toggleBtnId, open, steps) {
       const guide = document.getElementById(containerId);
       const btn = document.getElementById(toggleBtnId);
@@ -1604,8 +1684,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     function hideProjectIdGuide() {
-      projectIdGuideOpen = false;
-      setGuidePanelOpen("projectIdGuideSteps", "projectIdGuideToggleBtn", false);
+      closeProjectIdGuideSheet();
     }
 
     function hideWalletGuide() {
@@ -1613,17 +1692,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       setGuidePanelOpen("walletGuideSteps", "walletGuideToggleBtn", false);
     }
 
-    function toggleProjectIdGuide(steps) {
-      if (Array.isArray(steps)) {
-        projectIdGuideStepsCache = steps;
+    function syncProjectIdGuideLinkVisibility() {
+      const guideLink = document.getElementById("projectIdGuideOpenBtn");
+      if (guideLink) {
+        guideLink.classList.toggle("hidden", registrationMode !== "project_id");
       }
-      projectIdGuideOpen = !projectIdGuideOpen;
-      setGuidePanelOpen(
-        "projectIdGuideSteps",
-        "projectIdGuideToggleBtn",
-        projectIdGuideOpen,
-        projectIdGuideStepsCache,
-      );
     }
 
     function toggleWalletGuide() {
@@ -1704,6 +1777,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
               ? "Зарегистрируйтесь на Pokerdom, найдите ID в личной информации и введите его здесь."
               : "Зарегистрируйтесь на проекте, найдите ID в профиле и введите его здесь.";
         }
+        syncProjectIdGuideLinkVisibility();
         hideProjectIdGuide();
       } else {
         refMode?.classList.remove("hidden");
@@ -1711,6 +1785,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         if (lead) {
           lead.textContent = "Зарегистрируйтесь на проекте, затем вернитесь сюда и подтвердите.";
         }
+        syncProjectIdGuideLinkVisibility();
         hideProjectIdGuide();
       }
     }
@@ -1783,8 +1858,16 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       hideProjectIdGuide();
     }
 
-    bindClick("projectIdGuideToggleBtn", () => {
-      toggleProjectIdGuide();
+    bindClick("projectIdGuideOpenBtn", () => {
+      openProjectIdGuideSheet();
+    });
+
+    bindClick("joinGuideSheetCloseBtn", () => {
+      closeProjectIdGuideSheet();
+    });
+
+    document.getElementById("joinGuideBackdrop")?.addEventListener("click", () => {
+      closeProjectIdGuideSheet();
     });
 
     bindClick("walletGuideToggleBtn", () => {
