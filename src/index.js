@@ -1119,7 +1119,7 @@ function getDrawPrizePoolUsdt(draw) {
 function winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals) {
   const notifyInfo = draw.winnerNotifications?.[String(winnerId)];
   const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
-  if (antiFraud.hasFraudFlag) {
+  if (isWinnerPrizeForfeited(notifyInfo, antiFraud)) {
     return false;
   }
   if (isWinnerNotificationExpired(notifyInfo, draw)) {
@@ -1706,6 +1706,9 @@ function getWinnerDepositAddressKeyboard(draw) {
 function getWinnerPanelTrcDisplay(draw, notifyInfo, projectData) {
   if (drawAsksWinnerDepositAddress(draw)) {
     if (notifyInfo?.status === "awaiting_address") {
+      if (isDepositAddressExpired(notifyInfo)) {
+        return { text: "Не успел отправить адрес", copyable: false };
+      }
       return { text: "Ожидание адреса", copyable: false };
     }
     if (
@@ -1843,16 +1846,36 @@ function getWinnerPermanentDeliveryForfeitMessage(reason) {
   return "Приз аннулирован — уведомление не доставлено.";
 }
 
+function isDepositAddressExpired(notifyInfo) {
+  const expiresAt = notifyInfo?.addressExpiresAt
+    ? DateTime.fromISO(notifyInfo.addressExpiresAt, { zone: TIMEZONE })
+    : null;
+  return Boolean(expiresAt?.isValid && expiresAt <= DateTime.now().setZone(TIMEZONE));
+}
+
 function isWinnerPrizeForfeited(notifyInfo, antiFraud) {
-  return (
+  if (
     notifyInfo?.status === "forfeited" ||
-    Boolean(notifyInfo?.antiFraudFlag) ||
-    Boolean(antiFraud?.hasFraudFlag)
-  );
+    notifyInfo?.forfeitureReason === "address_timeout" ||
+    notifyInfo?.addressExpired ||
+    notifyInfo?.antiFraudFlag
+  ) {
+    return true;
+  }
+  if (notifyInfo?.status === "awaiting_address" && isDepositAddressExpired(notifyInfo)) {
+    return true;
+  }
+  return Boolean(antiFraud?.hasFraudFlag);
 }
 
 function getWinnerForfeitedDeliveryReason(notifyInfo) {
-  if (!notifyInfo || notifyInfo.status !== "forfeited") {
+  if (!notifyInfo) {
+    return "";
+  }
+  if (notifyInfo.forfeitureReason === "address_timeout" || notifyInfo.addressExpired) {
+    return "Нет адреса";
+  }
+  if (notifyInfo.status !== "forfeited") {
     return "";
   }
   const reason = getWinnerDeliveryFailureReason(notifyInfo);
@@ -1861,9 +1884,6 @@ function getWinnerForfeitedDeliveryReason(notifyInfo) {
   }
   if (notifyInfo.forfeitureReason === "unsubscribed") {
     return "Отписка";
-  }
-  if (notifyInfo.forfeitureReason === "address_timeout") {
-    return "Нет адреса";
   }
   return "";
 }
