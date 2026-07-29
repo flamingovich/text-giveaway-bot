@@ -1145,7 +1145,7 @@ function getJoinFlowStyles() {
       margin: -4px 0 2px;
       border: none;
       background: none;
-      color: var(--tg-theme-link-color, #325fff);
+      color: var(--tg-theme-text-color, #fff);
       font-size: 14px;
       font-weight: 600;
       cursor: pointer;

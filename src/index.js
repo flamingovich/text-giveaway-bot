@@ -28,7 +28,9 @@ const {
 const {
   resolveJoinProjectContext,
   ensureCrossOrganizerProjectProfile,
-  getPanelReferralOwnerLabel,
+  listUserBrandProjectEntries,
+  resolveReferralOwnerForBrand,
+  getDrawOwnerId,
 } = require("./project-profile-bridge");
 const {
   tgCustomEmojiHtml,
@@ -1123,10 +1125,169 @@ function winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals) {
   if (isWinnerNotificationExpired(notifyInfo, draw)) {
     return false;
   }
-  if (notifyInfo?.paidAt) {
+  if (notifyInfo?.paidAt || notifyInfo?.paymentDeniedAt) {
     return false;
   }
   return true;
+}
+
+function summarizePendingPayouts(draws, userProfiles, panelContext = null) {
+  let count = 0;
+  let totalUsdt = 0;
+
+  for (const draw of draws) {
+    if (draw.status !== DRAW_STATUS.FINISHED || !isMoneyPrizeType(draw.prizeType)) {
+      continue;
+    }
+    const antiFraudSignals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
+    for (const winnerId of draw.winnerIds || []) {
+      if (!winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals)) {
+        continue;
+      }
+      count += 1;
+      const notifyInfo = draw.winnerNotifications?.[String(winnerId)];
+      const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+      const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
+      const amount = getWinnerPayoutAmount(draw, projectData, { hasFraudFlag: antiFraud.hasFraudFlag });
+      totalUsdt += draw.prizeType === "money_usd" ? amount : convertRubToUsdt(amount);
+    }
+  }
+
+  return { count, totalUsdt };
+}
+
+function formatPendingPayoutQueueButtonMeta({ count, totalUsdt }) {
+  if (count <= 0) {
+    return "";
+  }
+  const amount = Math.floor(Number(totalUsdt) || 0);
+  const formatted = String(amount).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `(${count} шт. / $${formatted})`;
+}
+
+function renderPanelActionButtonHtml(id, label, meta = "") {
+  const metaHtml = meta
+    ? `<span class="history-panel-action-meta">${escapeHtml(meta)}</span>`
+    : "";
+  return `<button type="button" id="${escapeHtml(id)}" class="history-action-btn history-remind-active-btn history-panel-action-btn">
+    <span class="history-panel-action-label">${escapeHtml(label)}</span>${metaHtml}
+  </button>`;
+}
+
+function resolveDigestProjects(projectIds, ownerId) {
+  if (!Array.isArray(projectIds) || projectIds.length === 0) {
+    return [];
+  }
+  const byId = new Map(getOwnerProjects(ownerId).map((project) => [project.id, project]));
+  return projectIds
+    .map((projectId) => byId.get(String(projectId)))
+    .filter((project) => project && String(project.refLink || "").trim());
+}
+
+function renderRemindActivePanelContent(activeDraws, projects) {
+  if (!activeDraws.length) {
+    return `<div class="access-empty">
+      <span class="draw-ico">${renderFormIcon("gift")}</span>
+      <span>Нет активных розыгрышей с постом в канале</span>
+    </div>`;
+  }
+
+  const drawRows = activeDraws
+    .map((draw) => {
+      const project = projects.find((item) => item.id === draw.projectId);
+      const timeLeftLabel = formatTimeUntilDrawEndLabel(draw);
+      const timingLabel =
+        draw.endMode === "manual" || !draw.endAt || !timeLeftLabel
+          ? "итоги по команде создателя"
+          : `итоги через ${timeLeftLabel}`;
+      return `
+        <article class="remind-draw-item">
+          <div class="remind-draw-prize">${escapeHtml(formatDrawPrizePlain(draw))}</div>
+          <div class="remind-draw-meta">${escapeHtml(project?.name || "без проекта")} · ${escapeHtml(timingLabel)}</div>
+        </article>
+      `;
+    })
+    .join("");
+
+  const linkableProjects = projects.filter((project) => String(project.refLink || "").trim());
+  const projectChecks = linkableProjects.length
+    ? linkableProjects
+        .map((project) => {
+          const refDisplay = formatRefLinkDisplay(project.refLink);
+          const projectTitle = `${project.emoji ? `${project.emoji} ` : ""}${project.name}`;
+          return `
+            <label class="draw-check-label remind-project-check">
+              <input class="draw-check" type="checkbox" name="projectIds" value="${escapeHtml(project.id)}" checked />
+              <span class="draw-check-text">
+                <span class="draw-check-title">${escapeHtml(projectTitle)}</span>
+                <span class="draw-check-hint">${escapeHtml(refDisplay)}</span>
+              </span>
+            </label>
+          `;
+        })
+        .join("")
+    : "";
+
+  return `
+    <form method="post" action="${PANEL_BASE}/draws/remind-active" class="draw-form remind-active-form">
+      <div class="remind-draw-list">${drawRows}</div>
+
+      <div class="draw-block remind-project-block">
+        <div class="draw-field draw-check-field">
+          <label class="draw-check-label">
+            <input class="draw-check" type="checkbox" name="includeProjectLinks" value="1" id="remindIncludeProjectLinks" checked />
+            <span class="draw-check-text">
+              <span class="draw-check-title">Указать реф-ссылки в посте</span>
+            </span>
+          </label>
+        </div>
+
+        <div id="remindProjectLinksWrap" class="remind-project-links-wrap">
+          <div class="remind-project-links-title">Проекты в посте</div>
+          <div class="remind-project-checks">${projectChecks}</div>
+        </div>
+      </div>
+
+      <button type="submit" class="draw-submit">
+        <span class="draw-ico">${renderFormIcon("confirm")}</span>
+        Отправить напоминание
+      </button>
+    </form>
+  `;
+}
+
+function renderPayoutQueueContent(draws, userProfiles, panelContext = null) {
+  const entries = [];
+  for (const draw of draws) {
+    if (draw.status !== DRAW_STATUS.FINISHED || !isMoneyPrizeType(draw.prizeType)) {
+      continue;
+    }
+    const antiFraudSignals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
+    for (const winnerId of draw.winnerIds || []) {
+      if (!winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals)) {
+        continue;
+      }
+      entries.push({ draw, winnerId, antiFraudSignals });
+    }
+  }
+
+  if (entries.length === 0) {
+    return `<div class="access-empty">
+      <span class="draw-ico">${renderFormIcon("check")}</span>
+      <span>Очередь выплат пуста</span>
+    </div>`;
+  }
+
+  const winnerRows = entries
+    .map(({ draw, winnerId, antiFraudSignals }) => {
+      const winnerNotifications = draw.winnerNotifications || {};
+      return renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals, {
+        showProject: true,
+      });
+    })
+    .join("");
+
+  return `<div class="winner-details-content payout-queue-list">${winnerRows}</div>`;
 }
 
 function isDrawPayoutComplete(draw, userProfiles, panelContext = null) {
@@ -1255,7 +1416,11 @@ function getWinnerPayoutPanelHtml(draw, projectData, options = {}) {
   return `${escapeHtml(payoutText)} <span class="winner-payout-usdt">(${escapeHtml(usdtText)} USDT)</span>`;
 }
 
-function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired, hasFraudFlag = false }) {
+function getWinnerPayoutRowHtml(
+  draw,
+  projectData,
+  { isPaid, isPaymentDenied, isExpired, hasFraudFlag = false },
+) {
   if (isPaid) {
     const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag });
     return {
@@ -1263,6 +1428,16 @@ function getWinnerPayoutRowHtml(draw, projectData, { isPaid, isExpired, hasFraud
       iconClass: " winner-card-row-icon-paid",
       rowClass: " winner-card-row-paid",
       labelHtml: `<strong class="winner-payout-paid-label">Выплачено:</strong> ${payoutHtml}`,
+    };
+  }
+
+  if (isPaymentDenied) {
+    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag });
+    return {
+      icon: "close",
+      iconClass: " winner-card-row-icon-denied",
+      rowClass: " winner-card-row-denied",
+      labelHtml: `<strong class="winner-payout-denied-label">Отказано в выплате:</strong> ${payoutHtml}`,
     };
   }
 
@@ -1957,7 +2132,7 @@ function getDrawPrizeAmountUsd(draw) {
   return 0;
 }
 
-function buildActiveDrawsDigestTelegramContent(draws) {
+function buildActiveDrawsDigestTelegramContent(draws, options = {}) {
   const items = draws.map((draw) => {
     const timeLeftLabel = formatTimeUntilDrawEndLabel(draw);
     const endManual = draw.endMode === "manual" || !draw.endAt || !timeLeftLabel;
@@ -1974,6 +2149,7 @@ function buildActiveDrawsDigestTelegramContent(draws) {
     headerPrizeLabel: formatUsdPrizeForPost(totalUsd),
     usePremiumEmoji: DRAW_POST_PREMIUM_EMOJI,
     items,
+    projects: options.projects || [],
   });
   return {
     text: payload.caption,
@@ -2000,6 +2176,7 @@ function normalizeActiveDrawsDigestEntry(raw) {
       ownerId: null,
       timeLeftKey: null,
       timeLeftUpdatedAt: null,
+      digestProjectIds: [],
     };
   }
   if (typeof raw !== "object") {
@@ -2011,6 +2188,7 @@ function normalizeActiveDrawsDigestEntry(raw) {
     ownerId: raw.ownerId != null ? Number(raw.ownerId) : null,
     timeLeftKey: raw.timeLeftKey != null ? String(raw.timeLeftKey) : null,
     timeLeftUpdatedAt: raw.timeLeftUpdatedAt || null,
+    digestProjectIds: Array.isArray(raw.digestProjectIds) ? raw.digestProjectIds.map(String) : [],
   };
 }
 
@@ -2032,6 +2210,9 @@ function setActiveDrawsDigestEntry(data, channelId, entry) {
     ownerId: entry.ownerId != null ? Number(entry.ownerId) : null,
     timeLeftKey: entry.timeLeftKey != null ? String(entry.timeLeftKey) : null,
     timeLeftUpdatedAt: entry.timeLeftUpdatedAt || null,
+    digestProjectIds: Array.isArray(entry.digestProjectIds)
+      ? entry.digestProjectIds.map(String)
+      : [],
   };
 }
 
@@ -2072,8 +2253,8 @@ async function deleteActiveDrawsDigestMessages(data, channelId) {
   setActiveDrawsDigestEntry(data, channelId, null);
 }
 
-async function editActiveDrawsDigestMessage(channelId, messageId, draws) {
-  const content = buildActiveDrawsDigestTelegramContent(draws);
+async function editActiveDrawsDigestMessage(channelId, messageId, draws, options = {}) {
+  const content = buildActiveDrawsDigestTelegramContent(draws, options);
   await bot.telegram.editMessageText(channelId, messageId, undefined, content.text, {
     entities: content.entities,
     link_preview_options: content.link_preview_options,
@@ -2109,17 +2290,21 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
   }
 
   const messageId = entry.messageIds[0];
+  const digestOwnerId = entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId;
+  const digestProjects = resolveDigestProjects(entry.digestProjectIds, digestOwnerId);
+  const digestOptions = { projects: digestProjects };
   try {
-    await editActiveDrawsDigestMessage(channelId, messageId, remaining);
+    await editActiveDrawsDigestMessage(channelId, messageId, remaining, digestOptions);
     for (const extraId of entry.messageIds.slice(1)) {
       await safeDeleteMessage(channelId, extraId);
     }
     setActiveDrawsDigestEntry(data, channelId, {
       messageIds: [messageId],
       drawIds: remaining.map((draw) => String(draw.id)),
-      ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+      ownerId: digestOwnerId,
       timeLeftKey: buildDigestTimeLeftKey(remaining),
       timeLeftUpdatedAt: new Date().toISOString(),
+      digestProjectIds: entry.digestProjectIds || [],
     });
   } catch (error) {
     console.error(
@@ -2131,9 +2316,10 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
         setActiveDrawsDigestEntry(data, channelId, {
           messageIds: [messageId],
           drawIds: remaining.map((draw) => String(draw.id)),
-          ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+          ownerId: digestOwnerId,
           timeLeftKey: buildDigestTimeLeftKey(remaining),
           timeLeftUpdatedAt: new Date().toISOString(),
+          digestProjectIds: entry.digestProjectIds || [],
         });
         return;
       }
@@ -2142,9 +2328,9 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
   }
 }
 
-async function sendActiveDrawsDigestForChannel(data, channelId, draws) {
+async function sendActiveDrawsDigestForChannel(data, channelId, draws, options = {}) {
   await deleteActiveDrawsDigestMessages(data, channelId);
-  const content = buildActiveDrawsDigestTelegramContent(draws);
+  const content = buildActiveDrawsDigestTelegramContent(draws, options);
   const message = await bot.telegram.sendMessage(channelId, content.text, {
     entities: content.entities,
     link_preview_options: content.link_preview_options,
@@ -2155,11 +2341,12 @@ async function sendActiveDrawsDigestForChannel(data, channelId, draws) {
     ownerId: draws[0]?.ownerId != null ? Number(draws[0].ownerId) : null,
     timeLeftKey: buildDigestTimeLeftKey(draws),
     timeLeftUpdatedAt: new Date().toISOString(),
+    digestProjectIds: Array.isArray(options.projectIds) ? options.projectIds.map(String) : [],
   });
   return message;
 }
 
-async function sendActiveDrawsDigestReminders(data, draws) {
+async function sendActiveDrawsDigestReminders(data, draws, options = {}) {
   const byChannel = new Map();
   for (const draw of draws) {
     const channelId = String(draw.channelId);
@@ -2170,7 +2357,7 @@ async function sendActiveDrawsDigestReminders(data, draws) {
   }
   let sent = 0;
   for (const [channelId, channelDraws] of byChannel.entries()) {
-    await sendActiveDrawsDigestForChannel(data, channelId, channelDraws);
+    await sendActiveDrawsDigestForChannel(data, channelId, channelDraws, options);
     sent += 1;
   }
   return sent;
@@ -4821,7 +5008,62 @@ function getTelegramUserProfileUrl(userId, username) {
   return `tg://user?id=${userId}`;
 }
 
-function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals) {
+function formatWinnerVictoryDate(draw) {
+  const isoString = draw?.finishedAt || draw?.endAt || "";
+  if (!isoString) {
+    return "не задано";
+  }
+  return formatDateTime(isoString);
+}
+
+function formatOrganizerReferralLabel(ownerId, userProfiles) {
+  const ownerMeta = userProfiles.users?.[String(ownerId)]?.meta;
+  if (!ownerMeta) {
+    return "организатор";
+  }
+  const username = String(ownerMeta.username || "").replace(/^@/, "").trim();
+  if (username) {
+    return `реф @${username}`;
+  }
+  const fullName = [ownerMeta.first_name, ownerMeta.last_name].filter(Boolean).join(" ").trim();
+  if (fullName) {
+    return `реф ${fullName}`;
+  }
+  return "организатор";
+}
+
+function getWinnerReferralBadgeHtml(winnerId, draw, userProfiles) {
+  const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+  const drawOwnerId = getDrawOwnerId(draw);
+  const project = draw.projectId ? getProjectById(draw.projectId, draw.ownerId) : null;
+
+  let referralOwnerId = null;
+  if (project?.name) {
+    const brandEntries = listUserBrandProjectEntries(
+      winnerId,
+      project.name,
+      readUserProjectProfiles,
+      readProjects,
+    );
+    referralOwnerId = resolveReferralOwnerForBrand(winnerId, brandEntries, readData);
+  }
+  if (referralOwnerId == null && projectData.referralOwnerId != null) {
+    referralOwnerId = Number(projectData.referralOwnerId);
+  }
+
+  if (referralOwnerId && drawOwnerId && referralOwnerId !== drawOwnerId) {
+    const label = formatOrganizerReferralLabel(referralOwnerId, userProfiles);
+    return `<span class="winner-badge winner-badge-warn">Не мой реф (${escapeHtml(label)})</span>`;
+  }
+
+  if (projectData.selfReportedNonReferral) {
+    return `<span class="winner-badge winner-badge-warn">Не реф</span>`;
+  }
+
+  return `<span class="winner-badge winner-badge-ok">Реф</span>`;
+}
+
+function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals, options = {}) {
   const { meta, projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
   const fullName = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
   const displayName = fullName || (meta.username ? `@${meta.username}` : `ID ${winnerId}`);
@@ -4847,6 +5089,8 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     trcDisplay.copyable ? trcAddress : "",
   );
   const isPaid = Boolean(notifyInfo?.paidAt);
+  const isPaymentDenied = Boolean(notifyInfo?.paymentDeniedAt);
+  const isPayoutResolved = isPaid || isPaymentDenied;
   const isVerified = Boolean(notifyInfo?.verifiedAt) || notifyInfo?.status === "confirmed";
   const isAwaitingAddress = notifyInfo?.status === "awaiting_address";
   const isDeliveryFailed = notifyInfo?.status === "failed";
@@ -4860,26 +5104,21 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const forfeitedDeliveryReason = getWinnerForfeitedDeliveryReason(notifyInfo);
   const payoutRow = getWinnerPayoutRowHtml(draw, projectData, {
     isPaid,
+    isPaymentDenied,
     isExpired: isExpired || notifyInfo?.forfeitureReason === "address_timeout",
     hasFraudFlag: isPrizeForfeited,
   });
-  const refBadge = projectData.selfReportedNonReferral
-    ? `<span class="winner-badge winner-badge-warn">Не реф</span>`
-    : `<span class="winner-badge winner-badge-ok">Реф</span>`;
-  const referralOwnerLabel = getPanelReferralOwnerLabel(winnerId, draw, {
-    readUserProjectProfiles,
-    readProjects,
-    readData,
-    getWinnerDisplayName,
-    getProjectById,
-  });
-  const referralOwnerHtml = referralOwnerLabel
-    ? `<div class="winner-card-meta winner-card-ref-owner">${escapeHtml(referralOwnerLabel)}</div>`
+  const refBadge = getWinnerReferralBadgeHtml(winnerId, draw, userProfiles);
+  const victoryDateHtml = `<div class="winner-card-meta winner-card-victory-date">Дата победы: ${escapeHtml(formatWinnerVictoryDate(draw))}</div>`;
+  const projectLabelHtml = options.showProject
+    ? `<div class="winner-card-meta winner-card-project">Проект: ${escapeHtml(project?.name || "не указан")}</div>`
     : "";
   const statusBadge = isPrizeForfeited
     ? `<span class="winner-badge winner-badge-danger">Приз сгорел${
         forfeitedDeliveryReason ? ` (${escapeHtml(forfeitedDeliveryReason)})` : ""
       }</span>`
+    : isPaymentDenied
+      ? `<span class="winner-badge winner-badge-danger">Отказано в выплате</span>`
     : isAwaitingAddress
       ? `<span class="winner-badge">Ожидает адрес</span>`
     : isVerified
@@ -4898,7 +5137,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
       ? `<button type="button" class="winner-copy-btn" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
       : "";
   const canMarkPaid =
-    !isPaid &&
+    !isPayoutResolved &&
     !isExpired &&
     !isPrizeForfeited &&
     !isDeliveryFailed &&
@@ -4911,10 +5150,13 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     : canMarkPaid
       ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
           <button type="submit" class="winner-action-btn">Оплатил</button>
+        </form>
+        <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/deny-pay/${encodeURIComponent(String(winnerId))}">
+          <button type="submit" class="winner-action-btn winner-action-secondary">Отказано в выплате</button>
         </form>`
       : "";
   const winnerActionsHtml = winnerActionButtons
-    ? `<div class="winner-card-actions">${winnerActionButtons}</div>`
+    ? `<div class="winner-card-actions${canMarkPaid ? " winner-card-actions-stack" : ""}">${winnerActionButtons}</div>`
     : "";
   const profileUrl = buildParticipantProfileUrl(winnerId, PANEL_BASE);
   const profileBtn = `<a href="${escapeHtml(profileUrl)}" class="winner-profile-btn" title="Профиль участника" aria-label="Профиль участника">${renderFormIcon("user")}</a>`;
@@ -4929,7 +5171,8 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
             ${profileBtn}
           </div>
           ${usernameMetaHtml}
-          ${referralOwnerHtml}
+          ${projectLabelHtml}
+          ${victoryDateHtml}
           <div class="winner-card-badges">${refBadge}${statusBadge}${antiFraudBadges}</div>
         </div>
       </div>
@@ -5051,6 +5294,7 @@ function summarizeWinnerNotifyForFingerprint(notify) {
   return {
     status: notify.status || "",
     paidAt: Boolean(notify.paidAt),
+    paymentDeniedAt: Boolean(notify.paymentDeniedAt),
     verifiedAt: Boolean(notify.verifiedAt),
     antiFraudFlag: Boolean(notify.antiFraudFlag),
     deliveryFailureReason: notify.deliveryFailureReason || "",
@@ -5186,20 +5430,6 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = n
               : ""
           }
 
-          <details class="history-details" data-details-key="meta-${escapeHtml(draw.id)}">
-            <summary>
-              <span class="draw-ico history-details-chevron">${renderFormIcon("chevron")}</span>
-              <span class="draw-ico">${renderFormIcon("channel")}</span>
-              <span>Дополнительно</span>
-            </summary>
-            <div class="history-details-anim">
-              <div class="history-details-content history-meta-lines">
-                <div><strong>Канал:</strong> ${escapeHtml(draw.channelId)}</div>
-                <div><strong>ID:</strong> ${escapeHtml(draw.id)}</div>
-              </div>
-            </div>
-          </details>
-
           <div class="history-actions">
             ${
               canPublishNow
@@ -5227,14 +5457,20 @@ function renderPanelLiveStatsSection(draws, userProfiles, panelContext = null) {
   const drawsStats = computeDrawStats(draws, userProfiles, panelContext);
   const activeDigestDraws = listActiveDrawsForDigest(draws);
   const activeDigestCount = activeDigestDraws.length;
+  const pendingPayouts = summarizePendingPayouts(draws, userProfiles, panelContext);
   const remindActiveHtml =
     activeDigestCount > 0
-      ? `<form method="post" action="${PANEL_BASE}/draws/remind-active" class="history-remind-active-form">
-          <button type="submit" class="history-action-btn history-remind-active-btn">
-            Напомнить про розыгрыши (${activeDigestCount} шт.)
-          </button>
-        </form>`
+      ? renderPanelActionButtonHtml(
+          "toggleRemindActiveBtn",
+          "Напомнить про розыгрыши",
+          `(${activeDigestCount} шт.)`,
+        )
       : "";
+  const payoutQueueBtnHtml = renderPanelActionButtonHtml(
+    "togglePayoutQueueBtn",
+    "Очередь выплат",
+    formatPendingPayoutQueueButtonMeta(pendingPayouts),
+  );
   return `
       <section id="panelStatsRoot" class="card history-section">
         <h2 class="create-title draw-history-title">
@@ -5259,6 +5495,7 @@ function renderPanelLiveStatsSection(draws, userProfiles, panelContext = null) {
             <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidAllTime)}</span>
           </div>
         </div>
+        ${payoutQueueBtnHtml}
         ${remindActiveHtml}
       </section>
   `;
@@ -5389,6 +5626,9 @@ function renderWebPage(draws, message, webUser) {
       limit: PANEL_HISTORY_PAGE_SIZE,
     },
   );
+  const payoutQueueHtml = renderPayoutQueueContent(statsDraws, userProfiles, panelContext);
+  const activeDigestDraws = listActiveDrawsForDigest(historyDraws);
+  const remindActivePanelHtml = renderRemindActivePanelContent(activeDigestDraws, projects);
 
   const projectsBlocks = projects.map((project) => renderProjectCard(project)).join("");
   const channelBlocks = knownChannels.map((channel) => renderChannelCard(channel)).join("");
@@ -7673,6 +7913,9 @@ ${getPanelFluidTypographyVars()}
       gap: 6px;
       margin-top: 4px;
     }
+    .winner-card-actions-stack {
+      flex-direction: column;
+    }
     .winner-card-actions form {
       margin: 0;
       flex: 1;
@@ -7700,6 +7943,15 @@ ${getPanelFluidTypographyVars()}
       color: var(--tg-theme-text-color, var(--text));
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
     }
+    .winner-card-row-denied .winner-payout-denied-label {
+      color: color-mix(in srgb, #e85d5d 88%, var(--tg-theme-text-color, #fff));
+    }
+    .winner-card-row-icon-denied {
+      color: color-mix(in srgb, #e85d5d 88%, var(--tg-theme-text-color, #fff));
+    }
+    .winner-card-project {
+      font-weight: 600;
+    }
     .winner-action-muted {
       opacity: 0.65;
       cursor: default;
@@ -7725,6 +7977,74 @@ ${getPanelFluidTypographyVars()}
     }
     .history-remind-active-btn {
       width: 100%;
+    }
+    .history-panel-action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 0;
+      line-height: 1.25;
+    }
+    .history-panel-action-label {
+      font-weight: 800;
+    }
+    .history-panel-action-meta {
+      font-weight: 500;
+      margin-left: 0.28em;
+    }
+    #togglePayoutQueueBtn {
+      margin-top: 14px;
+      width: 100%;
+    }
+    #toggleRemindActiveBtn {
+      margin-top: 8px;
+      width: 100%;
+    }
+    .remind-draw-list {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .remind-draw-item {
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+    }
+    .remind-draw-prize {
+      font-size: 15px;
+      font-weight: 800;
+      line-height: 1.25;
+    }
+    .remind-draw-meta {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+    .remind-project-block {
+      margin-bottom: 12px;
+    }
+    .remind-project-links-wrap {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 12%, transparent);
+    }
+    .remind-project-links-title {
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--tg-theme-text-color, var(--text));
+    }
+    .remind-project-checks {
+      display: grid;
+      gap: 8px;
+    }
+    .remind-project-check {
+      align-items: flex-start;
+    }
+    .remind-active-form .draw-submit {
+      margin-top: 4px;
     }
     .history-action-btn {
       width: 100%;
@@ -8123,6 +8443,26 @@ ${getPanelFluidTypographyVars()}
               <span>Каналов пока нет — нажмите «Добавить канал»</span>
             </div>`
           }
+        </div>
+      </section>
+
+      <section id="payoutQueuePanel" class="card create-panel panel-hidden">
+        <h2 class="create-title">
+          <span class="create-title-icon">${renderFormIcon("prize")}</span>
+          Очередь выплат
+        </h2>
+        <div id="payoutQueueContent" class="payout-queue-content">
+          ${payoutQueueHtml}
+        </div>
+      </section>
+
+      <section id="remindActivePanel" class="card create-panel panel-hidden">
+        <h2 class="create-title">
+          <span class="create-title-icon">${renderFormIcon("gift")}</span>
+          Напоминание о розыгрышах
+        </h2>
+        <div id="remindActiveContent" class="remind-active-content">
+          ${remindActivePanelHtml}
         </div>
       </section>
 
@@ -8564,6 +8904,8 @@ ${getPanelFluidTypographyVars()}
       const createPanel = document.getElementById("createDrawPanel");
       const settingsPanel = document.getElementById("settingsPanel");
       const accessPanel = document.getElementById("accessPanel");
+      const payoutQueuePanel = document.getElementById("payoutQueuePanel");
+      const remindActivePanel = document.getElementById("remindActivePanel");
       const sheetRoot = document.getElementById("panelSheetRoot");
       const sheetBackdrop = document.getElementById("panelSheetBackdrop");
       const sheetClose = document.getElementById("panelSheetClose");
@@ -8578,6 +8920,12 @@ ${getPanelFluidTypographyVars()}
           { panel: createPanel, btn: createBtn, header: false },
           { panel: settingsPanel, btn: settingsBtn, header: false },
         ];
+        if (payoutQueuePanel) {
+          panels.push({ panel: payoutQueuePanel, btn: null, header: false });
+        }
+        if (remindActivePanel) {
+          panels.push({ panel: remindActivePanel, btn: null, header: false });
+        }
         if (accessPanel && accessBtn) {
           panels.push({ panel: accessPanel, btn: accessBtn, header: true });
         }
@@ -8640,6 +8988,19 @@ ${getPanelFluidTypographyVars()}
       if (accessPanel && accessBtn) {
         accessBtn.addEventListener("click", () => togglePanel(accessPanel, accessBtn, true));
       }
+      document.addEventListener("click", (event) => {
+        const payoutBtn = event.target.closest("#togglePayoutQueueBtn");
+        if (payoutBtn && payoutQueuePanel) {
+          event.preventDefault();
+          togglePanel(payoutQueuePanel, null);
+          return;
+        }
+        const remindBtn = event.target.closest("#toggleRemindActiveBtn");
+        if (remindBtn && remindActivePanel) {
+          event.preventDefault();
+          togglePanel(remindActivePanel, null);
+        }
+      });
       sheetBackdrop?.addEventListener("click", closeSheet);
       sheetClose?.addEventListener("click", closeSheet);
       document.addEventListener("keydown", (event) => {
@@ -8647,6 +9008,74 @@ ${getPanelFluidTypographyVars()}
           closeSheet();
         }
       });
+    }
+
+    function setupRemindActivePanel() {
+      const includeCheckbox = document.getElementById("remindIncludeProjectLinks");
+      const projectsWrap = document.getElementById("remindProjectLinksWrap");
+      const remindForm = document.querySelector(".remind-active-form");
+      if (!includeCheckbox || !projectsWrap) return;
+
+      const remindPrefsStorageKey = "panelRemindActivePrefs";
+
+      function readRemindPrefs() {
+        try {
+          const raw = localStorage.getItem(remindPrefsStorageKey);
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object") return null;
+          return {
+            includeProjectLinks: parsed.includeProjectLinks !== false,
+            projectIds: Array.isArray(parsed.projectIds) ? parsed.projectIds.map(String) : null,
+          };
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      function writeRemindPrefs() {
+        const projectChecks = projectsWrap.querySelectorAll('input[name="projectIds"]');
+        const projectIds = Array.from(projectChecks)
+          .filter((input) => input.checked)
+          .map((input) => String(input.value || ""))
+          .filter(Boolean);
+        localStorage.setItem(
+          remindPrefsStorageKey,
+          JSON.stringify({
+            includeProjectLinks: includeCheckbox.checked,
+            projectIds,
+          }),
+        );
+      }
+
+      function applyRemindPrefs() {
+        const saved = readRemindPrefs();
+        if (saved) {
+          includeCheckbox.checked = saved.includeProjectLinks;
+          if (saved.projectIds) {
+            const selected = new Set(saved.projectIds);
+            projectsWrap.querySelectorAll('input[name="projectIds"]').forEach((input) => {
+              input.checked = selected.has(String(input.value));
+            });
+          }
+        }
+        syncProjectsWrap();
+      }
+
+      function syncProjectsWrap() {
+        projectsWrap.classList.toggle("panel-hidden", !includeCheckbox.checked);
+      }
+
+      includeCheckbox.addEventListener("change", () => {
+        syncProjectsWrap();
+        writeRemindPrefs();
+      });
+      projectsWrap.querySelectorAll('input[name="projectIds"]').forEach((input) => {
+        input.addEventListener("change", writeRemindPrefs);
+      });
+      remindForm?.addEventListener("submit", writeRemindPrefs);
+
+      applyRemindPrefs();
     }
 
     function setupProjectFormEdit() {
@@ -8976,6 +9405,7 @@ ${getPanelFluidTypographyVars()}
     setupCreateDrawSubmitGuard();
     setupSettingsPanel();
     setupAdminPanels();
+    setupRemindActivePanel();
     setupPanelAutoRefresh();
     setupPanelHistoryMore();
     setupFlashMessages();
@@ -9737,7 +10167,8 @@ panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer
 
 panelRouter.post("/draws/remind-active", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const data = readData();
-  const ownedDraws = filterByOwner(data.draws || [], req.webUser.id);
+  const ownerId = req.webUser.id;
+  const ownedDraws = filterByOwner(data.draws || [], ownerId);
   const activeDraws = listActiveDrawsForDigest(ownedDraws);
 
   if (activeDraws.length === 0) {
@@ -9750,14 +10181,29 @@ panelRouter.post("/draws/remind-active", webAuth.requireAuth, requireOrganizer, 
     return;
   }
 
+  const includeProjectLinks = String(req.body?.includeProjectLinks || "") === "1";
+  const selectedProjectIds = Array.isArray(req.body?.projectIds)
+    ? req.body.projectIds.map(String)
+    : req.body?.projectIds
+      ? [String(req.body.projectIds)]
+      : [];
+  const digestProjects = includeProjectLinks
+    ? resolveDigestProjects(selectedProjectIds, ownerId)
+    : [];
+
   try {
-    const channelsSent = await sendActiveDrawsDigestReminders(data, activeDraws);
+    const channelsSent = await sendActiveDrawsDigestReminders(data, activeDraws, {
+      projects: digestProjects,
+      projectIds: digestProjects.map((project) => project.id),
+    });
     writeData(data);
+    const projectsNote =
+      digestProjects.length > 0 ? ` Проектов в посте: ${digestProjects.length}.` : "";
     redirectWithMessage(
       res,
       channelsSent === 1
-        ? `Напоминание о ${activeDraws.length} активных розыгрышах отправлено в канал.`
-        : `Напоминание о ${activeDraws.length} активных розыгрышах отправлено в ${channelsSent} каналов.`,
+        ? `Напоминание о ${activeDraws.length} активных розыгрышах отправлено в канал.${projectsNote}`
+        : `Напоминание о ${activeDraws.length} активных розыгрышах отправлено в ${channelsSent} каналов.${projectsNote}`,
     );
   } catch (error) {
     console.error("Ошибка отправки дайджеста активных розыгрышей:", error);
@@ -10031,6 +10477,80 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
   persistOwnedDrawContext({ data, archivedData, inArchive });
 
   redirectWithMessage(res, `Победителю ${userId} отмечена выплата.`);
+});
+
+panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+  const drawId = req.params.id;
+  const userId = Number(req.params.userId);
+  const ownerId = req.webUser.id;
+
+  if (!Number.isInteger(userId)) {
+    redirectWithMessage(res, "Некорректный userId победителя.");
+    return;
+  }
+
+  const loaded = loadOwnedDrawForPanel(drawId, ownerId);
+  if (!loaded?.draw) {
+    redirectWithMessage(res, "Розыгрыш не найден.");
+    return;
+  }
+
+  const { data, archivedData, draw, inArchive } = loaded;
+  if (!draw.winnerIds?.includes(userId)) {
+    redirectWithMessage(res, "Пользователь не является победителем этого розыгрыша.");
+    return;
+  }
+
+  if (!draw.winnerNotifications) {
+    draw.winnerNotifications = {};
+  }
+  if (!draw.winnerNotifications[String(userId)]) {
+    draw.winnerNotifications[String(userId)] = {};
+  }
+
+  const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
+    maxAttempts: 3,
+  });
+  if (subscriptionCheck.ok) {
+    draw.winnerNotifications[String(userId)].channelSubscribed = Boolean(subscriptionCheck.subscribed);
+  }
+  draw.winnerNotifications[String(userId)].channelStatus = subscriptionCheck.status || null;
+  draw.winnerNotifications[String(userId)].channelCheckedAt = subscriptionCheck.checkedAt || new Date().toISOString();
+  draw.winnerNotifications[String(userId)].channelCheckError = subscriptionCheck.ok
+    ? null
+    : (subscriptionCheck.error || "subscription_check_failed");
+
+  if (!subscriptionCheck.ok) {
+    persistOwnedDrawContext({ data, archivedData, inArchive });
+    redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.");
+    return;
+  }
+
+  if (!subscriptionCheck.subscribed) {
+    persistOwnedDrawContext({ data, archivedData, inArchive });
+    redirectWithMessage(res, "Победитель не подписан на канал. Действие недоступно.");
+    return;
+  }
+
+  const userProfiles = readUserProjectProfiles();
+  const antiFraud = getWinnerAntiFraud(
+    draw,
+    userId,
+    userProfiles,
+    null,
+    draw.winnerNotifications[String(userId)],
+  );
+  if (antiFraud.hasFraudFlag) {
+    persistOwnedDrawContext({ data, archivedData, inArchive });
+    redirectWithMessage(res, "Действие недоступно — сработала антифрод-проверка.");
+    return;
+  }
+
+  draw.winnerNotifications[String(userId)].paymentDeniedAt = new Date().toISOString();
+  draw.winnerNotifications[String(userId)].paymentDeniedBy = ownerId;
+  persistOwnedDrawContext({ data, archivedData, inArchive });
+
+  redirectWithMessage(res, `Победителю ${userId} отмечен отказ в выплате.`);
 });
 
 app.use(PANEL_BASE, panelRouter);

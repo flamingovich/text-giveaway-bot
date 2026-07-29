@@ -312,7 +312,8 @@ function buildDrawPostFinishedPayload(data) {
  *     timeLeftLabel: string,
  *     postUrl: string,
  *     endManual?: boolean,
- *   }>
+ *   }>,
+ *   projects?: Array<{ name: string, refLink: string, emoji?: string }>
  * }} data
  */
 function buildActiveDrawsDigestPayload(data) {
@@ -320,6 +321,7 @@ function buildActiveDrawsDigestPayload(data) {
     headerPrizeLabel = "0$",
     usePremiumEmoji = true,
     items = [],
+    projects = [],
   } = data;
 
   const b = new CaptionBuilder();
@@ -360,6 +362,31 @@ function buildActiveDrawsDigestPayload(data) {
     }
     b.closeBlockquote();
   });
+
+  if (Array.isArray(data.projects) && data.projects.length > 0) {
+    b.append("\n\n");
+    b.addBold("🎰 ТОП ПРОЕКТЫ ");
+    b.addEmoji("down", { custom: useCustom });
+    b.append("\n");
+    b.openBlockquote();
+    data.projects.forEach((project, index) => {
+      if (index > 0) {
+        b.append("\n");
+      }
+      const emoji = String(project.emoji || "•").trim() || "•";
+      const refLink = String(project.refLink || "").trim();
+      b.append(emoji);
+      b.append(" ");
+      if (refLink) {
+        b.addTextLink(String(project.name || "Проект"), refLink, { bold: true });
+        b.append(" » ");
+        b.addTextLink(formatRefLinkDisplay(refLink), refLink, { bold: true });
+      } else {
+        b.addBold(String(project.name || "Проект"));
+      }
+    });
+    b.closeBlockquote();
+  }
 
   return {
     mode: "entities",

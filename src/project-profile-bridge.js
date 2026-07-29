@@ -385,6 +385,7 @@ module.exports = {
   normalizeProjectBrandName,
   getDrawOwnerId,
   listUserBrandProjectEntries,
+  resolveReferralOwnerForBrand,
   resolveJoinProjectContext,
   ensureCrossOrganizerProjectProfile,
   getPanelReferralOwnerLabel,
