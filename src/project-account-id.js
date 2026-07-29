@@ -1,7 +1,8 @@
 const { isPokerdomProject } = require("./deposit-guide");
 
 const ROYAL_PROJECT_ACCOUNT_ID_PATTERN = /^#[A-Z0-9]{5}$/;
-const POKERDOM_PROJECT_ACCOUNT_ID_PATTERN = /^[a-f0-9]{24}$/;
+const POKERDOM_PROJECT_ACCOUNT_ID_MIN_LENGTH = 15;
+const POKERDOM_PROJECT_ACCOUNT_ID_MAX_LENGTH = 64;
 
 const SEQUENCE_ALPHABETS = [
   "0123456789",
@@ -63,10 +64,7 @@ function detectStoredProjectAccountIdKind(value) {
     return "royal";
   }
   const hexBody = raw.replace(/^#/, "").toLowerCase();
-  if (POKERDOM_PROJECT_ACCOUNT_ID_PATTERN.test(hexBody)) {
-    return "pokerdom";
-  }
-  if (/^[a-f0-9]{20,}$/i.test(hexBody)) {
+  if (/^[a-f0-9]+$/.test(hexBody) && hexBody.length >= POKERDOM_PROJECT_ACCOUNT_ID_MIN_LENGTH) {
     return "pokerdom";
   }
   if (raw.startsWith("#")) {
@@ -104,7 +102,7 @@ function normalizePokerdomProjectAccountId(raw) {
     .trim()
     .toLowerCase()
     .replace(/[^a-f0-9]/g, "")
-    .slice(0, 24);
+    .slice(0, POKERDOM_PROJECT_ACCOUNT_ID_MAX_LENGTH);
 }
 
 function normalizeProjectAccountId(raw, kindOrProject = null) {
@@ -160,11 +158,8 @@ function validatePokerdomProjectAccountIdFormat(raw) {
   if (!normalized) {
     return { ok: false, error: "Введите ID пользователя с Pokerdom." };
   }
-  if (!POKERDOM_PROJECT_ACCOUNT_ID_PATTERN.test(normalized)) {
-    return {
-      ok: false,
-      error: "ID должен быть 24 символа (цифры и латинские a–f). Скопируйте из «Личной информации».",
-    };
+  if (normalized.length < POKERDOM_PROJECT_ACCOUNT_ID_MIN_LENGTH) {
+    return { ok: false, error: "Проверьте верность ID и попробуйте ещё раз." };
   }
   return { ok: true, normalized };
 }
@@ -191,7 +186,7 @@ function buildProjectIdInputConfig(project = null) {
       kind: "pokerdom",
       showHashPrefix: false,
       placeholder: "6a1213488e3aee5d27972fc9",
-      maxlength: 24,
+      maxlength: POKERDOM_PROJECT_ACCOUNT_ID_MAX_LENGTH,
       label: "ID пользователя",
     };
   }

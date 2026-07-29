@@ -1732,7 +1732,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     function normalizeProjectAccountIdInput(raw) {
       const value = String(raw || "").trim();
       if (projectIdInputConfig?.kind === "pokerdom") {
-        return value.toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, 24);
+        return value.toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, projectIdInputConfig.maxlength || 64);
       }
       return value
         .toUpperCase()
@@ -1755,7 +1755,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         return false;
       }
       if (projectIdInputConfig?.kind === "pokerdom") {
-        return /^[a-f0-9]{24}$/.test(payload);
+        return payload.length >= 15 && /^[a-f0-9]+$/.test(payload);
       }
       return /^#[A-Z0-9]{5}$/.test(payload);
     }
