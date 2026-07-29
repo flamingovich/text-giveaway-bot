@@ -456,7 +456,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
                 <input class="join-input join-input-id" id="projectAccountIdInput" placeholder="FJ0UW" autocomplete="off" maxlength="5" inputmode="text" autocapitalize="characters" />
               </div>
             </div>
-            <button type="button" class="join-btn join-btn-primary join-btn-locked" id="projectAccountIdVerifyBtn" disabled><span class="join-btn-label">Проверить ID</span></button>
+            <button type="button" class="join-btn join-btn-primary" id="projectAccountIdVerifyBtn"><span class="join-btn-label">Проверить ID</span></button>
             <div id="projectAccountIdStatus" class="join-field-status hidden" role="status"></div>
             <button type="button" class="join-btn join-btn-outline" id="registrationProjectIdNonRefBtn">Я не реферал</button>
           </div>
@@ -1779,6 +1779,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         }
         syncProjectIdGuideLinkVisibility();
         hideProjectIdGuide();
+        setProjectIdVerifyLocked(false);
       } else {
         refMode?.classList.remove("hidden");
         idMode?.classList.add("hidden");
@@ -1851,8 +1852,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (btn) {
         btn.classList.remove("is-loading", "is-done");
         btn.innerHTML = '<span class="join-btn-label">Проверить ID</span>';
-        btn.disabled = true;
-        btn.classList.add("join-btn-locked");
+        btn.disabled = false;
+        btn.classList.remove("join-btn-locked");
       }
       hideProjectIdStatus();
       hideProjectIdGuide();
@@ -1938,7 +1939,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     bindClick("projectAccountIdVerifyBtn", async () => {
       const btn = document.getElementById("projectAccountIdVerifyBtn");
       const input = document.getElementById("projectAccountIdInput");
-      if (!btn || !input || btn.disabled || btn.classList.contains("is-done") || !projectLinkOpened) {
+      if (!btn || !input || btn.disabled || btn.classList.contains("is-done")) {
         return;
       }
 
@@ -1959,7 +1960,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           btn.classList.remove("is-loading");
           btn.innerHTML = '<span class="join-btn-label">Проверить ID</span>';
           showProjectIdStatus("error", PROJECT_ID_ERROR_TEXT);
-          setProjectIdVerifyLocked(!projectLinkOpened);
+          setProjectIdVerifyLocked(false);
           return;
         }
         btn.classList.remove("is-loading");
@@ -1982,7 +1983,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         btn.classList.remove("is-loading");
         btn.innerHTML = '<span class="join-btn-label">Проверить ID</span>';
         showProjectIdStatus("error", PROJECT_ID_ERROR_TEXT);
-        setProjectIdVerifyLocked(!projectLinkOpened);
+        setProjectIdVerifyLocked(false);
       }
     });
 
