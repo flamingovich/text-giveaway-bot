@@ -1220,14 +1220,24 @@ function renderRemindActivePanelContent(activeDraws, projects) {
     .map((draw) => {
       const project = projects.find((item) => item.id === draw.projectId);
       const timeLeftLabel = formatTimeUntilDrawEndLabel(draw);
-      const timingLabel =
+      const timingLine =
         draw.endMode === "manual" || !draw.endAt || !timeLeftLabel
-          ? "итоги по команде создателя"
-          : `итоги через ${timeLeftLabel}`;
+          ? "Итоги по команде создателя"
+          : `Итоги через ${timeLeftLabel}`;
+      const participantCount = (draw.participantIds || []).length;
+      const prizeLabel = formatDrawPrizePlain(draw);
+      const coverHtml = renderHistoryCoverSide(draw.imagePath) ||
+        `<div class="history-cover-side remind-draw-cover-fallback"><span class="history-title-icon">${renderHistoryGiftIcon()}</span></div>`;
+
       return `
         <article class="remind-draw-item">
-          <div class="remind-draw-prize">${escapeHtml(formatDrawPrizePlain(draw))}</div>
-          <div class="remind-draw-meta">${escapeHtml(project?.name || "без проекта")} · ${escapeHtml(timingLabel)}</div>
+          ${coverHtml}
+          <div class="remind-draw-body">
+            <div class="remind-draw-title">Розыгрыш на ${escapeHtml(prizeLabel)}</div>
+            <div class="remind-draw-line">Проект: ${escapeHtml(project?.name || "не указан")}</div>
+            <div class="remind-draw-line">${escapeHtml(timingLine)}</div>
+            <div class="remind-draw-line">Участников: ${participantCount}</div>
+          </div>
         </article>
       `;
     })
@@ -8079,19 +8089,51 @@ ${getPanelFluidTypographyVars()}
       margin-bottom: 14px;
     }
     .remind-draw-item {
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
       border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
       border-radius: 10px;
       padding: 10px 12px;
       background: var(--tg-theme-secondary-bg-color, #fff);
     }
-    .remind-draw-prize {
+    .remind-draw-item .history-cover-side {
+      flex: 0 0 72px;
+      width: 72px;
+      min-height: 72px;
+      align-self: stretch;
+    }
+    .remind-draw-cover-fallback {
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+    .remind-draw-cover-fallback .history-title-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+    }
+    .remind-draw-cover-fallback .history-title-icon svg {
+      width: 28px;
+      height: 28px;
+    }
+    .remind-draw-body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 3px;
+    }
+    .remind-draw-title {
       font-size: 15px;
       font-weight: 800;
       line-height: 1.25;
+      color: var(--tg-theme-text-color, var(--text));
     }
-    .remind-draw-meta {
-      margin-top: 4px;
+    .remind-draw-line {
       font-size: 12px;
+      line-height: 1.35;
       color: var(--tg-theme-hint-color, #65708a);
     }
     .remind-project-block {
@@ -8414,7 +8456,7 @@ ${getPanelFluidTypographyVars()}
             </div>
             <div class="draw-field draw-check-field">
               <label class="draw-check-label">
-                <input class="draw-check" type="checkbox" name="askWalletOnJoin" value="1" checked />
+                <input class="draw-check" type="checkbox" name="askWalletOnJoin" value="1" />
                 <span class="draw-check-text">
                   <span class="draw-check-title">Просить кошелёк при участии</span>
                 </span>
@@ -8422,7 +8464,7 @@ ${getPanelFluidTypographyVars()}
             </div>
             <div class="draw-field draw-check-field" id="askProjectIdWrap">
               <label class="draw-check-label">
-                <input class="draw-check" type="checkbox" name="askProjectIdOnJoin" value="1" disabled />
+                <input class="draw-check" type="checkbox" name="askProjectIdOnJoin" value="1" checked disabled />
                 <span class="draw-check-text">
                   <span class="draw-check-title">Просить ID с проекта</span>
                 </span>
@@ -8905,14 +8947,25 @@ ${getPanelFluidTypographyVars()}
       const checkbox = document.querySelector('#create-draw-form input[name="askProjectIdOnJoin"]');
       if (!projectSelect || !wrap || !checkbox) return;
 
+      let hadProject = Boolean(String(projectSelect.value || "").trim());
+
       function syncAskProjectId() {
         const hasProject = Boolean(String(projectSelect.value || "").trim());
         checkbox.disabled = !hasProject;
         wrap.classList.toggle("draw-check-disabled", !hasProject);
         if (!hasProject) {
           checkbox.checked = false;
+        } else if (!hadProject) {
+          checkbox.checked = true;
         }
+        hadProject = hasProject;
       }
+
+      checkbox.addEventListener("change", () => {
+        if (!checkbox.disabled) {
+          checkbox.dataset.userTouched = "1";
+        }
+      });
 
       projectSelect.addEventListener("change", syncAskProjectId);
       syncAskProjectId();
