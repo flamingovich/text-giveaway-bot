@@ -1307,6 +1307,7 @@ function renderPayoutQueueContent(draws, userProfiles, panelContext = null) {
       const winnerNotifications = draw.winnerNotifications || {};
       return renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals, {
         showProject: true,
+        returnPanel: "payoutQueue",
       });
     })
     .join("");
@@ -4608,10 +4609,30 @@ async function schedulerTick() {
   }
 }
 
+const PANEL_RETURN_TARGETS = new Set(["payoutQueue"]);
+
+function getPanelReturnOptions(req) {
+  const panel = String(req.body?.returnPanel || "").trim();
+  if (PANEL_RETURN_TARGETS.has(panel)) {
+    return { panel };
+  }
+  return {};
+}
+
+function renderReturnPanelField(returnPanel) {
+  if (!returnPanel || !PANEL_RETURN_TARGETS.has(returnPanel)) {
+    return "";
+  }
+  return `<input type="hidden" name="returnPanel" value="${escapeHtml(returnPanel)}" />`;
+}
+
 function redirectWithMessage(res, message, options = {}) {
   const params = new URLSearchParams({ msg: message });
   if (options.openBot) {
     params.set("openBot", "1");
+  }
+  if (options.panel && PANEL_RETURN_TARGETS.has(options.panel)) {
+    params.set("panel", options.panel);
   }
   res.redirect(`${PANEL_BASE}?${params.toString()}`);
 }
@@ -5108,6 +5129,7 @@ function getWinnerReferralBadgeHtml(winnerId, draw, userProfiles) {
 }
 
 function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals, options = {}) {
+  const returnPanelField = renderReturnPanelField(options.returnPanel);
   const { meta, projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
   const fullName = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
   const displayName = fullName || (meta.username ? `@${meta.username}` : `ID ${winnerId}`);
@@ -5189,13 +5211,16 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     (!drawAsksWinnerDepositAddress(draw) || trcDisplay.copyable);
   const winnerActionButtons = canResendNotification
     ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/notify/${encodeURIComponent(String(winnerId))}">
+        ${returnPanelField}
         <button type="submit" class="winner-action-btn">Оповестить заново</button>
       </form>`
     : canMarkPaid
       ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
+          ${returnPanelField}
           <button type="submit" class="winner-action-btn">Оплатил</button>
         </form>
         <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/deny-pay/${encodeURIComponent(String(winnerId))}">
+          ${returnPanelField}
           <button type="submit" class="winner-action-btn winner-action-secondary">Отказано в выплате</button>
         </form>`
       : "";
@@ -9055,6 +9080,21 @@ ${getPanelFluidTypographyVars()}
           closeSheet();
         }
       });
+
+      function setupPanelReturnFromRedirect() {
+        const params = new URLSearchParams(window.location.search);
+        const panelKey = params.get("panel");
+        if (panelKey === "payoutQueue" && payoutQueuePanel) {
+          openSheet(payoutQueuePanel, null);
+        }
+        if (panelKey) {
+          params.delete("panel");
+          const qs = params.toString();
+          window.history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : ""));
+        }
+      }
+
+      setupPanelReturnFromRedirect();
     }
 
     function setupRemindActivePanel() {
@@ -10445,21 +10485,22 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
   const ownerId = req.webUser.id;
+  const panelReturn = getPanelReturnOptions(req);
 
   if (!Number.isInteger(userId)) {
-    redirectWithMessage(res, "Некорректный userId победителя.");
+    redirectWithMessage(res, "Некорректный userId победителя.", panelReturn);
     return;
   }
 
   const loaded = loadOwnedDrawForPanel(drawId, ownerId);
   if (!loaded?.draw) {
-    redirectWithMessage(res, "Розыгрыш не найден.");
+    redirectWithMessage(res, "Розыгрыш не найден.", panelReturn);
     return;
   }
 
   const { data, archivedData, draw, inArchive } = loaded;
   if (!draw.winnerIds?.includes(userId)) {
-    redirectWithMessage(res, "Пользователь не является победителем этого розыгрыша.");
+    redirectWithMessage(res, "Пользователь не является победителем этого розыгрыша.", panelReturn);
     return;
   }
 
@@ -10484,13 +10525,13 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
 
   if (!subscriptionCheck.ok) {
     persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.");
+    redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.", panelReturn);
     return;
   }
 
   if (!subscriptionCheck.subscribed) {
     persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Победитель не подписан на канал. Выплата недоступна.");
+    redirectWithMessage(res, "Победитель не подписан на канал. Выплата недоступна.", panelReturn);
     return;
   }
 
@@ -10505,7 +10546,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
   );
   if (antiFraud.hasFraudFlag) {
     persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Выплата недоступна — сработала антифрод-проверка.");
+    redirectWithMessage(res, "Выплата недоступна — сработала антифрод-проверка.", panelReturn);
     return;
   }
   const payoutText = getWinnerPayoutText(draw, projectData, {
@@ -10515,7 +10556,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
   try {
     await bot.telegram.sendMessage(userId, `✅ Ваш приз ${payoutText} выплачен!`);
   } catch (error) {
-    redirectWithMessage(res, "Не удалось отправить сообщение о выплате победителю.");
+    redirectWithMessage(res, "Не удалось отправить сообщение о выплате победителю.", panelReturn);
     return;
   }
 
@@ -10523,28 +10564,29 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
   draw.winnerNotifications[String(userId)].paidBy = ownerId;
   persistOwnedDrawContext({ data, archivedData, inArchive });
 
-  redirectWithMessage(res, `Победителю ${userId} отмечена выплата.`);
+  redirectWithMessage(res, `Победителю ${userId} отмечена выплата.`, panelReturn);
 });
 
 panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
   const ownerId = req.webUser.id;
+  const panelReturn = getPanelReturnOptions(req);
 
   if (!Number.isInteger(userId)) {
-    redirectWithMessage(res, "Некорректный userId победителя.");
+    redirectWithMessage(res, "Некорректный userId победителя.", panelReturn);
     return;
   }
 
   const loaded = loadOwnedDrawForPanel(drawId, ownerId);
   if (!loaded?.draw) {
-    redirectWithMessage(res, "Розыгрыш не найден.");
+    redirectWithMessage(res, "Розыгрыш не найден.", panelReturn);
     return;
   }
 
   const { data, archivedData, draw, inArchive } = loaded;
   if (!draw.winnerIds?.includes(userId)) {
-    redirectWithMessage(res, "Пользователь не является победителем этого розыгрыша.");
+    redirectWithMessage(res, "Пользователь не является победителем этого розыгрыша.", panelReturn);
     return;
   }
 
@@ -10569,13 +10611,13 @@ panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrga
 
   if (!subscriptionCheck.ok) {
     persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.");
+    redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.", panelReturn);
     return;
   }
 
   if (!subscriptionCheck.subscribed) {
     persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Победитель не подписан на канал. Действие недоступно.");
+    redirectWithMessage(res, "Победитель не подписан на канал. Действие недоступно.", panelReturn);
     return;
   }
 
@@ -10589,7 +10631,7 @@ panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrga
   );
   if (antiFraud.hasFraudFlag) {
     persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Действие недоступно — сработала антифрод-проверка.");
+    redirectWithMessage(res, "Действие недоступно — сработала антифрод-проверка.", panelReturn);
     return;
   }
 
@@ -10597,7 +10639,7 @@ panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrga
   draw.winnerNotifications[String(userId)].paymentDeniedBy = ownerId;
   persistOwnedDrawContext({ data, archivedData, inArchive });
 
-  redirectWithMessage(res, `Победителю ${userId} отмечен отказ в выплате.`);
+  redirectWithMessage(res, `Победителю ${userId} отмечен отказ в выплате.`, panelReturn);
 });
 
 app.use(PANEL_BASE, panelRouter);
