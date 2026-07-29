@@ -1193,6 +1193,14 @@ function getJoinFlowStyles() {
       box-shadow: none;
     }
 
+    body.join-flow .join-id-input-row-no-prefix .join-input.join-input-id {
+      padding-left: 14px;
+      letter-spacing: 0.01em;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
     body.join-flow .join-field-status {
       margin: 0;
       padding: 10px 12px;

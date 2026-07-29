@@ -33,6 +33,7 @@ const {
   hasCompletedProjectIdStep,
   validateProjectAccountIdFormat,
   buildProjectIdGuideSteps,
+  buildProjectIdInputConfig,
   findProjectAccountIdOwner,
   projectAccountIdVerifyDelayMs,
   sleep: projectAccountIdSleep,
@@ -340,10 +341,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
   const askProjectIdOnJoin =
     options.askProjectIdOnJoin === true ||
     (Boolean(draw?.projectId) && draw?.askProjectIdOnJoin === true);
-  const projectIdGuideSteps = buildProjectIdGuideSteps();
+  const projectIdGuideSteps = buildProjectIdGuideSteps(project);
+  const projectIdInputConfig = buildProjectIdInputConfig(project);
   const previewWalletStep = isPreview
     ? buildJoinWalletStepPayload(
-        { name: project?.name || "BEEF", templateSlug: project?.templateSlug || "beef" },
+        project || { name: "BEEF", templateSlug: project?.templateSlug || "beef" },
         "erc20",
       )
     : null;
@@ -581,6 +583,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     let askProjectIdOnJoin = ${JSON.stringify(askProjectIdOnJoin)};
     let registrationMode = askProjectIdOnJoin ? "project_id" : "referral";
     const PROJECT_ID_GUIDE_STEPS = ${JSON.stringify(projectIdGuideSteps)};
+    const PROJECT_ID_INPUT_CONFIG = ${JSON.stringify(projectIdInputConfig)};
     const RECAPTCHA_SITE_KEY = ${JSON.stringify(recaptchaSiteKey)};
     const PREVIEW_WALLET_STEP = ${JSON.stringify(previewWalletStep)};
     const tg = window.Telegram?.WebApp;
@@ -639,7 +642,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (askProjectIdOnJoin) {
         registrationMode = "project_id";
       }
-      applyRegistrationMode(registrationMode, meta?.projectIdGuide || PROJECT_ID_GUIDE_STEPS);
+      applyRegistrationMode(
+        registrationMode,
+        meta?.projectIdGuide || PROJECT_ID_GUIDE_STEPS,
+        meta?.projectIdInput || PROJECT_ID_INPUT_CONFIG,
+      );
       const refLink = meta?.project?.refLink || "";
       const link = document.getElementById("projectLink");
       if (link) {
@@ -1564,6 +1571,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     let walletGuideOpen = false;
     let walletGuideStepsCache = null;
     let projectIdGuideStepsCache = PROJECT_ID_GUIDE_STEPS;
+    let projectIdInputConfig = PROJECT_ID_INPUT_CONFIG;
 
     function renderGuideSteps(containerId, steps) {
       const guide = document.getElementById(containerId);
@@ -1652,7 +1660,32 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       hideWalletGuide();
     }
 
-    function applyRegistrationMode(mode, guideSteps) {
+    function applyProjectIdInputConfig(config) {
+      if (config) {
+        projectIdInputConfig = config;
+      }
+      const prefix = document.querySelector(".join-id-prefix");
+      const input = document.getElementById("projectAccountIdInput");
+      const label = document.querySelector('label[for="projectAccountIdInput"]');
+      const row = document.querySelector(".join-id-input-row");
+      if (prefix) {
+        prefix.classList.toggle("hidden", !projectIdInputConfig.showHashPrefix);
+      }
+      if (row) {
+        row.classList.toggle("join-id-input-row-no-prefix", !projectIdInputConfig.showHashPrefix);
+      }
+      if (input) {
+        input.placeholder = projectIdInputConfig.placeholder || "";
+        input.maxLength = projectIdInputConfig.maxlength || 32;
+        input.inputMode = projectIdInputConfig.kind === "pokerdom" ? "text" : "text";
+        input.autocapitalize = projectIdInputConfig.kind === "pokerdom" ? "none" : "characters";
+      }
+      if (label) {
+        label.textContent = projectIdInputConfig.label || "ID на проекте";
+      }
+    }
+
+    function applyRegistrationMode(mode, guideSteps, inputConfig) {
       registrationMode = mode === "project_id" ? "project_id" : "referral";
       const refMode = document.getElementById("registrationRefMode");
       const idMode = document.getElementById("registrationProjectIdMode");
@@ -1660,11 +1693,15 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (registrationMode === "project_id") {
         refMode?.classList.add("hidden");
         idMode?.classList.remove("hidden");
-        if (lead) {
-          lead.textContent = "Зарегистрируйтесь на проекте, найдите ID в профиле и введите его здесь.";
-        }
         if (Array.isArray(guideSteps)) {
           projectIdGuideStepsCache = guideSteps;
+        }
+        applyProjectIdInputConfig(inputConfig || projectIdInputConfig);
+        if (lead) {
+          lead.textContent =
+            projectIdInputConfig?.kind === "pokerdom"
+              ? "Зарегистрируйтесь на Pokerdom, найдите ID в личной информации и введите его здесь."
+              : "Зарегистрируйтесь на проекте, найдите ID в профиле и введите его здесь.";
         }
         hideProjectIdGuide();
       } else {
@@ -1693,8 +1730,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     function normalizeProjectAccountIdInput(raw) {
-      return String(raw || "")
-        .trim()
+      const value = String(raw || "").trim();
+      if (projectIdInputConfig?.kind === "pokerdom") {
+        return value.toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, 24);
+      }
+      return value
         .toUpperCase()
         .replace(/#/g, "")
         .replace(/[^A-Z0-9]/g, "")
@@ -1704,7 +1744,20 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     function getProjectAccountIdPayload() {
       const input = document.getElementById("projectAccountIdInput");
       const body = normalizeProjectAccountIdInput(input?.value);
-      return body ? "#" + body : "";
+      if (!body) {
+        return "";
+      }
+      return projectIdInputConfig?.kind === "pokerdom" ? body : "#" + body;
+    }
+
+    function isValidProjectAccountIdPayload(payload) {
+      if (!payload) {
+        return false;
+      }
+      if (projectIdInputConfig?.kind === "pokerdom") {
+        return /^[a-f0-9]{24}$/.test(payload);
+      }
+      return /^#[A-Z0-9]{5}$/.test(payload);
     }
 
     function setProjectIdVerifyLocked(locked) {
@@ -1748,7 +1801,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
       if (step === "registration") {
         const mode = payload?.registrationMode || (payload?.projectIdGuide ? "project_id" : registrationMode);
-        applyRegistrationMode(mode, payload?.projectIdGuide || PROJECT_ID_GUIDE_STEPS);
+        applyRegistrationMode(
+          mode,
+          payload?.projectIdGuide || PROJECT_ID_GUIDE_STEPS,
+          payload?.projectIdInput || PROJECT_ID_INPUT_CONFIG,
+        );
         if (mode === "project_id") {
           resetProjectIdUi();
         } else {
@@ -1814,7 +1871,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
       if (PAGE_MODE === "preview") {
         await new Promise((resolve) => setTimeout(resolve, 2000 + Math.floor(Math.random() * 2000)));
-        if (!/^#[A-Z0-9]{5}$/.test(payload)) {
+        if (!isValidProjectAccountIdPayload(payload)) {
           btn.classList.remove("is-loading");
           btn.innerHTML = '<span class="join-btn-label">Проверить ID</span>';
           showProjectIdStatus("error", PROJECT_ID_ERROR_TEXT);
@@ -1901,7 +1958,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     if (askProjectIdOnJoin) {
-      applyRegistrationMode("project_id", PROJECT_ID_GUIDE_STEPS);
+      applyRegistrationMode("project_id", PROJECT_ID_GUIDE_STEPS, PROJECT_ID_INPUT_CONFIG);
     }
 
     async function submitRegistration(body) {
@@ -2038,6 +2095,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           { id: "channel", label: "Канал" },
           { id: "registration", label: "Рег." },
           { id: "registration_id", label: "Рег.+ID" },
+          { id: "registration_id_pd", label: "Рег.+ID PD" },
           { id: "trc20", label: "Кошелёк" },
           { id: "done", label: "Готово" },
           { id: "profile", label: "Профиль" },
@@ -2052,9 +2110,15 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             if (id === "captcha") {
               renderCaptcha();
             }
-            if (id === "registration" || id === "registration_id") {
-              const mode = id === "registration_id" ? "project_id" : "referral";
-              applyRegistrationMode(mode, PROJECT_ID_GUIDE_STEPS);
+            if (id === "registration" || id === "registration_id" || id === "registration_id_pd") {
+              const mode = id === "registration" ? "referral" : "project_id";
+              const pdGuide = ${JSON.stringify(buildProjectIdGuideSteps({ name: "Pokerdom", templateSlug: "pokerdom" }))};
+              const pdInput = ${JSON.stringify(buildProjectIdInputConfig({ name: "Pokerdom", templateSlug: "pokerdom" }))};
+              applyRegistrationMode(
+                mode,
+                id === "registration_id_pd" ? pdGuide : PROJECT_ID_GUIDE_STEPS,
+                id === "registration_id_pd" ? pdInput : PROJECT_ID_INPUT_CONFIG,
+              );
               if (mode === "project_id") {
                 resetProjectIdUi();
               } else {
@@ -2458,9 +2522,11 @@ function registerJoinMiniApp(app, deps) {
 
   function buildRegistrationStepResponse(draw) {
     const mode = drawAsksProjectIdOnJoin(draw) ? "project_id" : "referral";
+    const project = draw.projectId ? getProjectById(draw.projectId) : null;
     return buildJoinStepResponse("registration", {
       registrationMode: mode,
-      projectIdGuide: mode === "project_id" ? buildProjectIdGuideSteps() : null,
+      projectIdGuide: mode === "project_id" ? buildProjectIdGuideSteps(project) : null,
+      projectIdInput: mode === "project_id" ? buildProjectIdInputConfig(project) : null,
     });
   }
 
@@ -2644,7 +2710,8 @@ function registerJoinMiniApp(app, deps) {
       drawId: draw.id,
       prize: draw.prize || "",
       askProjectIdOnJoin: drawAsksProjectIdOnJoin(draw),
-      projectIdGuide: drawAsksProjectIdOnJoin(draw) ? buildProjectIdGuideSteps() : null,
+      projectIdGuide: drawAsksProjectIdOnJoin(draw) ? buildProjectIdGuideSteps(project) : null,
+      projectIdInput: drawAsksProjectIdOnJoin(draw) ? buildProjectIdInputConfig(project) : null,
       project: project
         ? {
             name: project.name || "",
@@ -2993,7 +3060,8 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const validation = validateProjectAccountIdFormat(req.body?.projectAccountId);
+    const project = getProjectById(session.projectId);
+    const validation = validateProjectAccountIdFormat(req.body?.projectAccountId, project);
     if (!validation.ok) {
       res.status(400).json({ error: validation.error });
       return;
@@ -3007,6 +3075,7 @@ function registerJoinMiniApp(app, deps) {
       session.projectId,
       validation.normalized,
       userId,
+      project,
     );
 
     applyReferralRoll(userId, session, draw);
@@ -3147,6 +3216,17 @@ function registerJoinMiniApp(app, deps) {
 
     app.get("/dev/preview/join", (_req, res) => {
       res.type("html").send(renderJoinPage("preview", mockDraw, mockProject, { recaptchaSiteKey: RECAPTCHA_SITE_KEY }));
+    });
+
+    app.get("/dev/preview/join-pd", (_req, res) => {
+      res.type("html").send(
+        renderJoinPage(
+          "preview",
+          mockDraw,
+          { name: "Pokerdom", templateSlug: "pokerdom", refLink: "https://example.com/pd" },
+          { recaptchaSiteKey: RECAPTCHA_SITE_KEY, askProjectIdOnJoin: true },
+        ),
+      );
     });
 
     app.get("/dev/preview/gate", (_req, res) => {

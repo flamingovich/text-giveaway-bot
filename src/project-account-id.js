@@ -1,4 +1,7 @@
-const PROJECT_ACCOUNT_ID_PATTERN = /^#[A-Z0-9]{5}$/;
+const { isPokerdomProject } = require("./deposit-guide");
+
+const ROYAL_PROJECT_ACCOUNT_ID_PATTERN = /^#[A-Z0-9]{5}$/;
+const POKERDOM_PROJECT_ACCOUNT_ID_PATTERN = /^[a-f0-9]{24}$/;
 
 const SEQUENCE_ALPHABETS = [
   "0123456789",
@@ -7,7 +10,7 @@ const SEQUENCE_ALPHABETS = [
   "ZYXWVUTSRQPONMLKJIHGFEDCBA",
 ];
 
-const PROJECT_ID_GUIDE_STEPS = [
+const ROYAL_PROJECT_ID_GUIDE_STEPS = [
   {
     num: 1,
     text: "Откройте профиль на проекте",
@@ -20,11 +23,69 @@ const PROJECT_ID_GUIDE_STEPS = [
   },
 ];
 
+const POKERDOM_PROJECT_ID_GUIDE_STEPS = [
+  {
+    num: 1,
+    text: "Нажмите «Профиль» в нижнем меню",
+    imageUrl: "/assets/pd_id_guide/pd_id_1.png",
+  },
+  {
+    num: 2,
+    text: "Откройте настройки профиля",
+    imageUrl: "/assets/pd_id_guide/pd_id_2.png",
+  },
+  {
+    num: 3,
+    text: "Перейдите в «Личная информация»",
+    imageUrl: "/assets/pd_id_guide/pd_id_3.png",
+  },
+  {
+    num: 4,
+    text: "Скопируйте ID пользователя",
+    imageUrl: "/assets/pd_id_guide/pd_id_4.png",
+  },
+];
+
 function drawAsksProjectIdOnJoin(draw) {
   return Boolean(draw?.projectId) && draw?.askProjectIdOnJoin === true;
 }
 
-function normalizeProjectAccountId(raw) {
+function getProjectAccountIdKind(project) {
+  return isPokerdomProject(project) ? "pokerdom" : "royal";
+}
+
+function detectStoredProjectAccountIdKind(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "royal";
+  }
+  if (ROYAL_PROJECT_ACCOUNT_ID_PATTERN.test(raw.toUpperCase())) {
+    return "royal";
+  }
+  const hexBody = raw.replace(/^#/, "").toLowerCase();
+  if (POKERDOM_PROJECT_ACCOUNT_ID_PATTERN.test(hexBody)) {
+    return "pokerdom";
+  }
+  if (/^[a-f0-9]{20,}$/i.test(hexBody)) {
+    return "pokerdom";
+  }
+  if (raw.startsWith("#")) {
+    return "royal";
+  }
+  return "royal";
+}
+
+function resolveProjectAccountIdKind(kindOrProject, rawValue = "") {
+  if (kindOrProject && typeof kindOrProject === "object") {
+    return getProjectAccountIdKind(kindOrProject);
+  }
+  if (kindOrProject === "pokerdom" || kindOrProject === "royal") {
+    return kindOrProject;
+  }
+  return detectStoredProjectAccountIdKind(rawValue);
+}
+
+function normalizeRoyalProjectAccountId(raw) {
   let value = String(raw || "")
     .trim()
     .toUpperCase()
@@ -36,6 +97,22 @@ function normalizeProjectAccountId(raw) {
     value = `#${value}`;
   }
   return value;
+}
+
+function normalizePokerdomProjectAccountId(raw) {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-f0-9]/g, "")
+    .slice(0, 24);
+}
+
+function normalizeProjectAccountId(raw, kindOrProject = null) {
+  const kind = resolveProjectAccountIdKind(kindOrProject, raw);
+  if (kind === "pokerdom") {
+    return normalizePokerdomProjectAccountId(raw);
+  }
+  return normalizeRoyalProjectAccountId(raw);
 }
 
 function isSequentialBody(body) {
@@ -52,12 +129,12 @@ function isSequentialBody(body) {
   return false;
 }
 
-function validateProjectAccountIdFormat(raw) {
-  const normalized = normalizeProjectAccountId(raw);
+function validateRoyalProjectAccountIdFormat(raw) {
+  const normalized = normalizeRoyalProjectAccountId(raw);
   if (!normalized) {
     return { ok: false, error: "Введите ID с проекта." };
   }
-  if (!PROJECT_ACCOUNT_ID_PATTERN.test(normalized)) {
+  if (!ROYAL_PROJECT_ACCOUNT_ID_PATTERN.test(normalized)) {
     return {
       ok: false,
       error: "ID должен быть в формате # и 5 символов (буквы и цифры). Пример: #FJ0UW",
@@ -78,8 +155,53 @@ function validateProjectAccountIdFormat(raw) {
   return { ok: true, normalized };
 }
 
-function buildProjectIdGuideSteps() {
-  return PROJECT_ID_GUIDE_STEPS.map((step) => ({ ...step }));
+function validatePokerdomProjectAccountIdFormat(raw) {
+  const normalized = normalizePokerdomProjectAccountId(raw);
+  if (!normalized) {
+    return { ok: false, error: "Введите ID пользователя с Pokerdom." };
+  }
+  if (!POKERDOM_PROJECT_ACCOUNT_ID_PATTERN.test(normalized)) {
+    return {
+      ok: false,
+      error: "ID должен быть 24 символа (цифры и латинские a–f). Скопируйте из «Личной информации».",
+    };
+  }
+  return { ok: true, normalized };
+}
+
+function validateProjectAccountIdFormat(raw, kindOrProject = null) {
+  const kind = resolveProjectAccountIdKind(kindOrProject, raw);
+  if (kind === "pokerdom") {
+    return validatePokerdomProjectAccountIdFormat(raw);
+  }
+  return validateRoyalProjectAccountIdFormat(raw);
+}
+
+function buildProjectIdGuideSteps(project = null) {
+  const steps =
+    getProjectAccountIdKind(project) === "pokerdom"
+      ? POKERDOM_PROJECT_ID_GUIDE_STEPS
+      : ROYAL_PROJECT_ID_GUIDE_STEPS;
+  return steps.map((step) => ({ ...step }));
+}
+
+function buildProjectIdInputConfig(project = null) {
+  if (getProjectAccountIdKind(project) === "pokerdom") {
+    return {
+      kind: "pokerdom",
+      showHashPrefix: false,
+      placeholder: "6a1213488e3aee5d27972fc9",
+      maxlength: 24,
+      label: "ID пользователя",
+    };
+  }
+  return {
+    kind: "royal",
+    showHashPrefix: true,
+    placeholder: "FJ0UW",
+    maxlength: 5,
+    label: "ID на проекте",
+  };
 }
 
 function buildGlobalProjectAccountIdOwners(userProfiles, projectId) {
@@ -88,7 +210,8 @@ function buildGlobalProjectAccountIdOwners(userProfiles, projectId) {
     return map;
   }
   for (const [userId, node] of Object.entries(userProfiles?.users || {})) {
-    const accountId = normalizeProjectAccountId(node?.projects?.[projectId]?.projectAccountId);
+    const stored = node?.projects?.[projectId]?.projectAccountId;
+    const accountId = normalizeProjectAccountId(stored, detectStoredProjectAccountIdKind(stored));
     if (!accountId) {
       continue;
     }
@@ -100,8 +223,15 @@ function buildGlobalProjectAccountIdOwners(userProfiles, projectId) {
   return map;
 }
 
-function findProjectAccountIdOwner(userProfiles, projectId, accountId, excludeUserId = null) {
-  const normalized = normalizeProjectAccountId(accountId);
+function findProjectAccountIdOwner(
+  userProfiles,
+  projectId,
+  accountId,
+  excludeUserId = null,
+  kindOrProject = null,
+) {
+  const kind = resolveProjectAccountIdKind(kindOrProject, accountId);
+  const normalized = normalizeProjectAccountId(accountId, kind);
   if (!normalized || !projectId) {
     return null;
   }
@@ -109,7 +239,8 @@ function findProjectAccountIdOwner(userProfiles, projectId, accountId, excludeUs
     if (excludeUserId && String(userId) === String(excludeUserId)) {
       continue;
     }
-    const otherId = normalizeProjectAccountId(node?.projects?.[projectId]?.projectAccountId);
+    const stored = node?.projects?.[projectId]?.projectAccountId;
+    const otherId = normalizeProjectAccountId(stored, kind);
     if (otherId === normalized) {
       return String(userId);
     }
@@ -166,7 +297,8 @@ function evaluateProjectAccountIdFraud(draw, winnerId, userProfiles, signals, de
 
   const { getUserProfileBundle } = deps;
   const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
-  const accountId = normalizeProjectAccountId(projectData?.projectAccountId);
+  const stored = projectData?.projectAccountId;
+  const accountId = normalizeProjectAccountId(stored, detectStoredProjectAccountIdKind(stored));
   if (!accountId) {
     return { shouldFlag: false };
   }
@@ -205,7 +337,8 @@ function evaluateIpManyProjectIdsFraud(draw, winnerId, userProfiles, signals, de
   const accountIds = new Set();
   for (const participantId of [winnerId, ...linkedByIp]) {
     const { projectData } = getUserProfileBundle(userProfiles, participantId, draw.projectId);
-    const accountId = normalizeProjectAccountId(projectData?.projectAccountId);
+    const stored = projectData?.projectAccountId;
+    const accountId = normalizeProjectAccountId(stored, detectStoredProjectAccountIdKind(stored));
     if (accountId) {
       accountIds.add(accountId);
     }
@@ -241,9 +374,11 @@ async function projectAccountIdVerifyDelayMs() {
 
 module.exports = {
   drawAsksProjectIdOnJoin,
+  getProjectAccountIdKind,
   normalizeProjectAccountId,
   validateProjectAccountIdFormat,
   buildProjectIdGuideSteps,
+  buildProjectIdInputConfig,
   buildGlobalProjectAccountIdOwners,
   findProjectAccountIdOwner,
   hasCompletedProjectIdStep,
