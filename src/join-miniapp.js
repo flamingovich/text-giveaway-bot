@@ -1679,6 +1679,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         input.maxLength = projectIdInputConfig.maxlength || 32;
         input.inputMode = projectIdInputConfig.kind === "pokerdom" ? "text" : "text";
         input.autocapitalize = projectIdInputConfig.kind === "pokerdom" ? "none" : "characters";
+        input.classList.toggle("join-input-id-pokerdom", projectIdInputConfig.kind === "pokerdom");
       }
       if (label) {
         label.textContent = projectIdInputConfig.label || "ID на проекте";

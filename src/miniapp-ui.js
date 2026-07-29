@@ -1196,9 +1196,20 @@ function getJoinFlowStyles() {
     body.join-flow .join-id-input-row-no-prefix .join-input.join-input-id {
       padding-left: 14px;
       letter-spacing: 0.01em;
-      font-size: 14px;
-      font-weight: 600;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 15px;
+    }
+
+    body.join-flow .join-input.join-input-id.join-input-id-pokerdom {
+      font-weight: 400;
+      letter-spacing: normal;
+      font-family: inherit;
+      color: var(--tg-theme-text-color, #151a2d);
+    }
+
+    body.join-flow .join-input.join-input-id.join-input-id-pokerdom::placeholder {
+      color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 72%, var(--tg-theme-text-color, #151a2d));
+      font-weight: 400;
+      opacity: 1;
     }
 
     body.join-flow .join-field-status {
@@ -2369,6 +2380,10 @@ function getJoinFlowStyles() {
     body.join-flow.app-theme-dark .join-id-input-row {
       background: var(--tg-theme-bg-color, #141a24);
       border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 30%, transparent);
+    }
+
+    body.join-flow.app-theme-dark .join-input.join-input-id.join-input-id-pokerdom::placeholder {
+      color: color-mix(in srgb, var(--tg-theme-hint-color, #8b95a8) 78%, var(--tg-theme-bg-color, #141a24));
     }
 
     body.join-flow.app-theme-dark .join-done-icon-ring {

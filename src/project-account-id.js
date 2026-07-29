@@ -185,7 +185,7 @@ function buildProjectIdInputConfig(project = null) {
     return {
       kind: "pokerdom",
       showHashPrefix: false,
-      placeholder: "6a1213488e3aee5d27972fc9",
+      placeholder: "Введите ID сюда",
       maxlength: POKERDOM_PROJECT_ACCOUNT_ID_MAX_LENGTH,
       label: "ID пользователя",
     };
