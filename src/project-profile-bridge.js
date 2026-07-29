@@ -3,6 +3,33 @@ const {
   drawAsksProjectIdOnJoin,
   hasCompletedProjectIdStep,
 } = require("./project-account-id");
+const { buildBrandProjectId, isPokerdomProject } = require("./deposit-guide");
+
+/** Старые projectId Pokerdom до brand_* (prod, май–июнь 2026). */
+const LEGACY_POKERDOM_PROJECT_OWNERS = {
+  project_1780118192579_6053: 7946967720,
+  project_1780125871033_6180: 8233307353,
+  project_1780166696557_9812: 8808012300,
+  project_1780238688348_3660: 385791526,
+  project_1780314690278_1544: 1109454069,
+};
+
+const POKERDOM_PROFILE_COPY_FIELDS = [
+  "trc20Address",
+  "depositNetwork",
+  "referralVerified",
+  "selfReportedNonReferral",
+  "referralOwnerId",
+  "projectAccountId",
+  "projectIdStepCompletedAt",
+  "antifraudTrc20Address",
+  "verifiedBy",
+  "walletTxCheckedAt",
+  "walletTxCount",
+  "walletHasTransactions",
+  "nonReferralReason",
+  "crossOrganizerNonReferral",
+];
 
 function normalizeProjectBrandName(name) {
   return String(name || "")
@@ -381,6 +408,202 @@ function resetBrandProjectProfiles(brandName, options = {}) {
   return result;
 }
 
+function isLegacyPokerdomProjectId(projectId) {
+  return Boolean(projectId && LEGACY_POKERDOM_PROJECT_OWNERS[projectId]);
+}
+
+function isPokerdomDrawProjectId(projectId, readProjects) {
+  if (!projectId) {
+    return false;
+  }
+  if (isLegacyPokerdomProjectId(projectId)) {
+    return true;
+  }
+  if (String(projectId).startsWith("brand_pokerdom_")) {
+    return true;
+  }
+  const project = (readProjects().projects || []).find((item) => item.id === projectId);
+  return Boolean(project && isPokerdomProject(project));
+}
+
+function normalizeWallet(value) {
+  return String(value || "").trim();
+}
+
+function pickLegacyPokerdomSourceEntry(userProjects) {
+  const entries = Object.entries(userProjects || {})
+    .filter(([projectId, projectData]) => isLegacyPokerdomProjectId(projectId) && projectData?.trc20Address)
+    .map(([projectId, projectData]) => ({ projectId, projectData }));
+
+  return (
+    entries.find((entry) => entry.projectData?.trc20Address) ||
+    entries.find(
+      (entry) =>
+        entry.projectData?.referralVerified || entry.projectData?.selfReportedNonReferral,
+    ) ||
+    entries[0] ||
+    null
+  );
+}
+
+function buildPokerdomBrandPayload(sourceEntry, ownerId) {
+  const { projectId, projectData } = sourceEntry;
+  const payload = {
+    inheritedFromProjectId: projectId,
+    pokerdomLegacyMigratedAt: new Date().toISOString(),
+  };
+
+  for (const field of POKERDOM_PROFILE_COPY_FIELDS) {
+    if (projectData[field] != null && projectData[field] !== "") {
+      payload[field] = projectData[field];
+    }
+  }
+
+  if (payload.referralOwnerId == null && Number.isFinite(ownerId)) {
+    payload.referralOwnerId = ownerId;
+  }
+
+  return payload;
+}
+
+function collectPokerdomMigrationOwnerIds(userId, userProjects, readData, readArchivedDraws, readProjects) {
+  const ownerIds = new Set();
+
+  for (const [projectId, projectData] of Object.entries(userProjects || {})) {
+    if (!isLegacyPokerdomProjectId(projectId) || !projectData?.trc20Address) {
+      continue;
+    }
+    const legacyOwnerId = LEGACY_POKERDOM_PROJECT_OWNERS[projectId];
+    if (Number.isFinite(legacyOwnerId)) {
+      ownerIds.add(legacyOwnerId);
+    }
+    if (projectData.referralOwnerId != null) {
+      ownerIds.add(Number(projectData.referralOwnerId));
+    }
+  }
+
+  const allDraws = [
+    ...(readData().draws || []),
+    ...(readArchivedDraws().draws || []),
+  ];
+  for (const draw of allDraws) {
+    if (!isPokerdomDrawProjectId(draw.projectId, readProjects)) {
+      continue;
+    }
+    if (!(draw.participantIds || []).some((id) => String(id) === String(userId))) {
+      continue;
+    }
+    const drawOwnerId = getDrawOwnerId(draw);
+    if (drawOwnerId) {
+      ownerIds.add(drawOwnerId);
+    }
+  }
+
+  return [...ownerIds].filter((ownerId) => Number.isFinite(ownerId) && ownerId > 0);
+}
+
+function migratePokerdomLegacyProfiles(options = {}) {
+  const {
+    readUserProjectProfiles,
+    readProjects,
+    readData,
+    readArchivedDraws,
+    writeUserProjectProfiles,
+    dryRun = true,
+  } = options;
+
+  if (!readUserProjectProfiles || !readProjects || !readData || !readArchivedDraws) {
+    throw new Error("migratePokerdomLegacyProfiles requires read helpers");
+  }
+
+  const profiles = readUserProjectProfiles();
+  const result = {
+    usersScanned: 0,
+    usersTouched: 0,
+    brandProfilesCreated: 0,
+    brandProfilesUpdated: 0,
+    skippedExistingWallet: 0,
+    skippedNoSource: 0,
+    dryRun,
+    samples: [],
+  };
+
+  for (const [userKey, userNode] of Object.entries(profiles.users || {})) {
+    result.usersScanned += 1;
+    const userProjects = userNode?.projects || {};
+    const sourceEntry = pickLegacyPokerdomSourceEntry(userProjects);
+    if (!sourceEntry?.projectData?.trc20Address) {
+      result.skippedNoSource += 1;
+      continue;
+    }
+
+    const ownerIds = collectPokerdomMigrationOwnerIds(
+      userKey,
+      userProjects,
+      readData,
+      readArchivedDraws,
+      readProjects,
+    );
+    if (!ownerIds.length) {
+      result.skippedNoSource += 1;
+      continue;
+    }
+
+    let touchedUser = false;
+    for (const ownerId of ownerIds) {
+      const brandProjectId = buildBrandProjectId("pokerdom", ownerId);
+      const current = userProjects[brandProjectId] || {};
+      const sourceWallet = normalizeWallet(sourceEntry.projectData.trc20Address);
+      const currentWallet = normalizeWallet(current.trc20Address);
+
+      if (currentWallet && currentWallet !== sourceWallet) {
+        result.skippedExistingWallet += 1;
+        continue;
+      }
+      if (currentWallet === sourceWallet && current.inheritedFromProjectId) {
+        continue;
+      }
+
+      const payload = buildPokerdomBrandPayload(sourceEntry, ownerId);
+      if (!userNode.projects) {
+        userNode.projects = {};
+      }
+      userNode.projects[brandProjectId] = {
+        ...current,
+        ...payload,
+        updatedAt: new Date().toISOString(),
+      };
+      touchedUser = true;
+
+      if (currentWallet) {
+        result.brandProfilesUpdated += 1;
+      } else {
+        result.brandProfilesCreated += 1;
+      }
+
+      if (result.samples.length < 8) {
+        result.samples.push({
+          userId: userKey,
+          from: sourceEntry.projectId,
+          to: brandProjectId,
+          wallet: sourceWallet.slice(0, 8) + "...",
+        });
+      }
+    }
+
+    if (touchedUser) {
+      result.usersTouched += 1;
+      profiles.users[userKey] = userNode;
+    }
+  }
+
+  if (!dryRun && writeUserProjectProfiles) {
+    writeUserProjectProfiles(profiles);
+  }
+
+  return result;
+}
+
 module.exports = {
   normalizeProjectBrandName,
   getDrawOwnerId,
@@ -392,4 +615,6 @@ module.exports = {
   inferReferralOwnerId,
   findProjectIdsByBrandName,
   resetBrandProjectProfiles,
+  migratePokerdomLegacyProfiles,
+  LEGACY_POKERDOM_PROJECT_OWNERS,
 };

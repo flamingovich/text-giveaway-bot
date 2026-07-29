@@ -31,6 +31,7 @@ const {
   listUserBrandProjectEntries,
   resolveReferralOwnerForBrand,
   getDrawOwnerId,
+  migratePokerdomLegacyProfiles,
 } = require("./project-profile-bridge");
 const {
   tgCustomEmojiHtml,
@@ -428,6 +429,29 @@ function migrateBrandProjectTemplates() {
   writeData(drawsData);
   fs.writeFileSync(markerPath, new Date().toISOString(), "utf8");
   console.log("Миграция заготовленных проектов выполнена: Pokerdom, BEEF, FUGU, IRIS.");
+}
+
+function migratePokerdomLegacyWalletProfiles() {
+  const markerPath = path.join(DATA_DIR, ".pokerdom-legacy-profiles-v1");
+  if (fs.existsSync(markerPath)) {
+    return;
+  }
+
+  const result = migratePokerdomLegacyProfiles({
+    readUserProjectProfiles,
+    readProjects,
+    readData,
+    readArchivedDraws,
+    writeUserProjectProfiles,
+    dryRun: false,
+  });
+
+  fs.writeFileSync(markerPath, new Date().toISOString(), "utf8");
+  console.log(
+    `[boot] Pokerdom legacy wallets: ${result.usersTouched} users, ` +
+      `${result.brandProfilesCreated} created, ${result.brandProfilesUpdated} updated, ` +
+      `${result.skippedExistingWallet} skipped (other wallet already set)`,
+  );
 }
 
 function syncBrandProjectTemplatesForOrganizer(ownerId) {
@@ -11166,6 +11190,7 @@ async function bootstrap() {
   migrateLegacyOwnership();
   migrateClearDeviceFraud();
   migrateBrandProjectTemplates();
+  migratePokerdomLegacyWalletProfiles();
   const archiveResult = runDrawArchiveMaintenance();
   if (archiveResult.moved > 0) {
     console.log(
