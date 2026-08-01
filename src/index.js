@@ -68,6 +68,7 @@ const {
   isPokerdomProject,
 } = require("./deposit-guide");
 const { archiveStaleDraws } = require("./draw-archive");
+const { isMegaDraw, removeMegaSession, registerMegaGiveawayBot } = require("./mega-giveaway");
 const {
   DATA_DIR,
   UPLOADS_DIR,
@@ -2107,6 +2108,9 @@ function markDrawCountdownCache(draw, label = null) {
 }
 
 function shouldUpdateDrawCountdownPost(draw, newLabel) {
+  if (isMegaDraw(draw)) {
+    return false;
+  }
   if (!draw?.messageId || !draw?.channelId || draw.status !== DRAW_STATUS.ACTIVE) {
     return false;
   }
@@ -3095,6 +3099,15 @@ function isIgnorableTelegramEditError(error) {
 }
 
 async function updateDrawPost(draw, includeWinners) {
+  if (isMegaDraw(draw)) {
+    if (includeWinners) {
+      await refreshDrawPostKeyboard(draw);
+      return;
+    }
+    await refreshDrawPostKeyboard(draw);
+    return;
+  }
+
   const keyboard = includeWinners ? getFinishedKeyboard(draw) : getKeyboard(draw.id, (draw.participantIds || []).length);
 
   try {
@@ -3836,6 +3849,10 @@ async function syncStaleActiveDrawPostCounts(data) {
 }
 
 async function forceRefreshDrawPost(draw) {
+  if (isMegaDraw(draw)) {
+    await refreshDrawPostKeyboard(draw);
+    return;
+  }
   await refreshDrawPostKeyboard(draw);
   await updateDrawPost(draw, draw.status === DRAW_STATUS.FINISHED);
 }
@@ -10919,12 +10936,30 @@ bot.command("create_draw", async (ctx) => {
 });
 
 bot.command("cancel_draw", async (ctx) => {
-  if (!isAdmin(ctx)) {
+  if (!isAdmin(ctx) && !isOrganizer(ctx.from?.id)) {
     return;
   }
 
   removeSession(ctx.from.id);
+  removeMegaSession(ctx.from.id);
   await ctx.reply("Создание розыгрыша отменено.");
+});
+
+registerMegaGiveawayBot({
+  bot,
+  isOrganizer,
+  readData,
+  writeData,
+  filterByOwner,
+  readKnownChannels,
+  findOwnedKnownChannel,
+  itemBelongsToOwner,
+  DRAW_STATUS,
+  TIMEZONE,
+  getKeyboardMarkup,
+  markDrawPostParticipantCount,
+  markDrawCountdownCache,
+  scheduleDrawPostUpdate,
 });
 
 bot.command("channels", async (ctx) => {

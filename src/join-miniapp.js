@@ -38,6 +38,7 @@ const {
   projectAccountIdVerifyDelayMs,
   sleep: projectAccountIdSleep,
 } = require("./project-account-id");
+const { isMegaDraw } = require("./mega-giveaway");
 
 const NON_REFERRAL_CHANCE = 0.35;
 const JOIN_BOOST_ARROW_ICON = `<svg class="join-boost-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 19V5"/><path d="m7 10 5-5 5 5"/></svg>`;
@@ -2535,6 +2536,21 @@ function registerJoinMiniApp(app, deps) {
   }
 
   async function proceedAfterChannelVerified(draw, userId, session, req, res) {
+    if (isMegaDraw(draw)) {
+      const participationMeta = buildParticipationMetaForJoin(req, session);
+      const result = await addUserToDraw(draw.id, userId, participationMeta);
+      clearJoinApiSession(userId, draw.id);
+      scheduleParticipantAvatars(draw, userId);
+      const updatedDraw = getActiveDraw(draw.id) || draw;
+      res.json(
+        buildJoinDonePayload(updatedDraw, userId, {
+          message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+          alreadyJoined: Boolean(result.already),
+        }),
+      );
+      return;
+    }
+
     const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
     if (joinCtx.canSkipRegistration) {
       await completeJoinAfterProfileReady(draw, userId, session, req, res);
@@ -2794,7 +2810,8 @@ function registerJoinMiniApp(app, deps) {
     res.json({
       drawId: draw.id,
       prize: draw.prize || "",
-      askProjectIdOnJoin: drawAsksProjectIdOnJoin(draw),
+      isMega: isMegaDraw(draw),
+      askProjectIdOnJoin: isMegaDraw(draw) ? false : drawAsksProjectIdOnJoin(draw),
       projectIdGuide: drawAsksProjectIdOnJoin(draw) ? buildProjectIdGuideSteps(project) : null,
       projectIdInput: drawAsksProjectIdOnJoin(draw) ? buildProjectIdInputConfig(project) : null,
       project: project
