@@ -3768,17 +3768,21 @@ async function syncActiveDrawsDigestCountdowns(data) {
     }
 
     const messageId = entry.messageIds[0];
+    const digestOwnerId = entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId;
+    const digestProjects = resolveDigestProjects(entry.digestProjectIds, digestOwnerId);
+    const digestOptions = { projects: digestProjects };
     try {
-      await editActiveDrawsDigestMessage(channelId, messageId, remaining);
+      await editActiveDrawsDigestMessage(channelId, messageId, remaining, digestOptions);
       for (const extraId of entry.messageIds.slice(1)) {
         await safeDeleteMessage(channelId, extraId);
       }
       setActiveDrawsDigestEntry(data, channelId, {
         messageIds: [messageId],
         drawIds: remaining.map((draw) => String(draw.id)),
-        ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+        ownerId: digestOwnerId,
         timeLeftKey: timeKey,
         timeLeftUpdatedAt: new Date().toISOString(),
+        digestProjectIds: entry.digestProjectIds || [],
       });
       updated += 1;
       await sleep(350);
@@ -3787,9 +3791,10 @@ async function syncActiveDrawsDigestCountdowns(data) {
         setActiveDrawsDigestEntry(data, channelId, {
           messageIds: [messageId],
           drawIds: remaining.map((draw) => String(draw.id)),
-          ownerId: entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId,
+          ownerId: digestOwnerId,
           timeLeftKey: timeKey,
           timeLeftUpdatedAt: new Date().toISOString(),
+          digestProjectIds: entry.digestProjectIds || [],
         });
         continue;
       }
