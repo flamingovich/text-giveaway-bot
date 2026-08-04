@@ -1490,11 +1490,17 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const message = payload.message || "Вы участвуете!";
       if (title) title.textContent = message;
       if (payload.alreadyJoined) {
-        if (badge) badge.textContent = "Уже в розыгрыше";
-        if (sub) sub.textContent = "Вы ранее зарегистрировались — участие сохранено.";
+        if (badge) badge.classList.add("hidden");
+        if (sub) sub.classList.add("hidden");
       } else {
-        if (badge) badge.textContent = "Участие принято";
-        if (sub) sub.textContent = "Ждём результатов розыгрыша.";
+        if (badge) {
+          badge.classList.remove("hidden");
+          badge.textContent = "Участие принято";
+        }
+        if (sub) {
+          sub.classList.remove("hidden");
+          sub.textContent = "Ждём результатов розыгрыша.";
+        }
       }
       renderDoneStats(payload);
       showStep("done");
