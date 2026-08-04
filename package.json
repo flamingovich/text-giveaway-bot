@@ -12,7 +12,8 @@
     "reset-brand-profiles": "node scripts/reset-brand-project-profiles.js",
     "migrate:sqlite": "node scripts/migrate-json-to-sqlite.js --apply",
     "migrate:sqlite:dry": "node scripts/migrate-json-to-sqlite.js",
-    "backup:data": "bash scripts/backup-data.sh"
+    "backup:data": "bash scripts/backup-data.sh",
+    "recheck-payout-subscriptions": "RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK=1 SKIP_TELEGRAM_POLLING=true node src/index.js"
   },
   "keywords": [],
   "author": "",
