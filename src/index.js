@@ -3582,7 +3582,8 @@ async function markWinnerSubscriptionForfeited(draw, userId) {
   return true;
 }
 
-async function processWinnerChannelSubscriptions(data) {
+async function processWinnerChannelSubscriptions(data, options = {}) {
+  const forceRecheck = Boolean(options.force);
   if (WEB_ONLY) {
     return false;
   }
@@ -3622,6 +3623,7 @@ async function processWinnerChannelSubscriptions(data) {
 
       const lastCheckedAt = Date.parse(notify.payoutQueueSubscriptionCheckedAt || "");
       if (
+        !forceRecheck &&
         Number.isFinite(lastCheckedAt) &&
         Date.now() - lastCheckedAt < PAYOUT_QUEUE_SUBSCRIPTION_RECHECK_MS
       ) {
@@ -11422,7 +11424,7 @@ bot.catch((error) => {
   console.error("Ошибка бота:", error);
 });
 
-if (!WEB_ONLY) {
+if (!WEB_ONLY && process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK !== "1") {
   setInterval(async () => {
     await schedulerTick();
   }, CHECK_INTERVAL_MS);
@@ -11513,7 +11515,7 @@ async function bootstrap() {
     if (await processWinnerDepositAddressTimeouts(data)) {
       bootDataChanged = true;
     }
-    if (await processWinnerChannelSubscriptions(data)) {
+    if (await processWinnerChannelSubscriptions(data, { force: true })) {
       bootDataChanged = true;
     }
     if (await processWinnerPermanentDeliveryForfeitures(data)) {
@@ -11529,10 +11531,31 @@ async function bootstrap() {
   console.log(`Бот: @${BOT_USERNAME}${SKIP_TELEGRAM_POLLING ? " (только веб + API)" : ""}`);
 }
 
-bootstrap().catch((error) => {
-  console.error("Ошибка запуска:", error.message);
-  process.exit(1);
-});
+async function runPayoutQueueSubscriptionRecheckCli() {
+  ensureStorage();
+  await ensureBotUsername();
+  const data = readData();
+  console.log("[payout-queue] принудительная проверка подписки…");
+  const changed = await processWinnerChannelSubscriptions(data, { force: true });
+  if (changed) {
+    writeData(data);
+  }
+  console.log(`[payout-queue] готово${changed ? ", данные обновлены" : ""}`);
+}
+
+if (process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
+  runPayoutQueueSubscriptionRecheckCli()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error("[payout-queue] ошибка:", error.message);
+      process.exit(1);
+    });
+} else {
+  bootstrap().catch((error) => {
+    console.error("Ошибка запуска:", error.message);
+    process.exit(1);
+  });
+}
 
 if (!WEB_ONLY && !SKIP_TELEGRAM_POLLING) {
   process.once("SIGINT", () => bot.stop("SIGINT"));
