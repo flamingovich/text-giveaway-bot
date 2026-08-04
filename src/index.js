@@ -101,6 +101,9 @@ const SUPER_ADMIN_IDS = (process.env.SUPER_ADMIN_IDS || process.env.ADMIN_IDS ||
 const TIMEZONE = process.env.TIMEZONE || "Europe/Moscow";
 const CHECK_INTERVAL_MS = Number(process.env.CHECK_INTERVAL_MS || 30_000);
 const COUNTDOWN_MINUTE_THROTTLE_MS = Number(process.env.COUNTDOWN_MINUTE_THROTTLE_MS || 5 * 60_000);
+const PAYOUT_QUEUE_SUBSCRIPTION_RECHECK_MS = Number(
+  process.env.PAYOUT_QUEUE_SUBSCRIPTION_RECHECK_MS || 60 * 60 * 1000,
+);
 const PANEL_POLL_MS = Number(process.env.PANEL_POLL_MS || 8_000);
 const PANEL_HISTORY_PAGE_SIZE = 10;
 const PANEL_PAGE_BUILD = process.env.PANEL_PAGE_BUILD || String(Date.now());
@@ -3584,12 +3587,20 @@ async function processWinnerChannelSubscriptions(data) {
     return false;
   }
 
+  const userProfiles = readUserProjectProfiles();
   let hasChanges = false;
 
   for (const draw of data.draws) {
-    if (draw.status !== DRAW_STATUS.FINISHED || !draw.channelId || !draw.winnerNotifications) {
+    if (
+      draw.status !== DRAW_STATUS.FINISHED ||
+      !draw.channelId ||
+      !isMoneyPrizeType(draw.prizeType) ||
+      !draw.winnerNotifications
+    ) {
       continue;
     }
+
+    const antiFraudSignals = collectDrawParticipantSignals(draw, userProfiles);
 
     for (const winnerId of draw.winnerIds || []) {
       const userId = Number(winnerId);
@@ -3597,25 +3608,36 @@ async function processWinnerChannelSubscriptions(data) {
         continue;
       }
 
-      const notify = draw.winnerNotifications[String(userId)];
-      if (!notify?.sentAt || notify.paidAt) {
+      if (!winnerNeedsPayout(draw, userId, userProfiles, antiFraudSignals)) {
         continue;
       }
-      if (
-        notify.status === "failed" ||
-        notify.status === "forfeited" ||
-        notify.status === "expired"
-      ) {
+
+      const notify = draw.winnerNotifications[String(userId)];
+      if (!notify) {
         continue;
       }
       if (notify.channelSubscribed === false && notify.forfeitureReason === "unsubscribed") {
         continue;
       }
 
+      const lastCheckedAt = Date.parse(notify.payoutQueueSubscriptionCheckedAt || "");
+      if (
+        Number.isFinite(lastCheckedAt) &&
+        Date.now() - lastCheckedAt < PAYOUT_QUEUE_SUBSCRIPTION_RECHECK_MS
+      ) {
+        continue;
+      }
+
       const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
         maxAttempts: 2,
       });
+      const checkedAt = new Date().toISOString();
+      notify.payoutQueueSubscriptionCheckedAt = checkedAt;
+
       if (!subscriptionCheck.ok) {
+        notify.channelCheckError = subscriptionCheck.error || "subscription_check_failed";
+        hasChanges = true;
+        await sleep(150);
         continue;
       }
 
@@ -3623,16 +3645,19 @@ async function processWinnerChannelSubscriptions(data) {
       const nextSubscribed = Boolean(subscriptionCheck.subscribed);
       notify.channelSubscribed = nextSubscribed;
       notify.channelStatus = subscriptionCheck.status || null;
+      notify.channelCheckedAt = subscriptionCheck.checkedAt || checkedAt;
       notify.channelCheckError = null;
-
-      if (wasSubscribed !== nextSubscribed) {
-        notify.channelCheckedAt = subscriptionCheck.checkedAt || new Date().toISOString();
-        hasChanges = true;
-      }
+      hasChanges = true;
 
       if (nextSubscribed) {
         await sleep(150);
         continue;
+      }
+
+      if (wasSubscribed !== false) {
+        console.log(
+          `[payout-queue] отписка от канала: draw=${draw.id} user=${userId} → приз сгорел`,
+        );
       }
 
       const forfeited = await markWinnerSubscriptionForfeited(draw, userId);
