@@ -10799,38 +10799,12 @@ panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrga
   });
   if (subscriptionCheck.ok) {
     draw.winnerNotifications[String(userId)].channelSubscribed = Boolean(subscriptionCheck.subscribed);
+    draw.winnerNotifications[String(userId)].channelCheckError = null;
+  } else if (subscriptionCheck.error) {
+    draw.winnerNotifications[String(userId)].channelCheckError = subscriptionCheck.error;
   }
   draw.winnerNotifications[String(userId)].channelStatus = subscriptionCheck.status || null;
   draw.winnerNotifications[String(userId)].channelCheckedAt = subscriptionCheck.checkedAt || new Date().toISOString();
-  draw.winnerNotifications[String(userId)].channelCheckError = subscriptionCheck.ok
-    ? null
-    : (subscriptionCheck.error || "subscription_check_failed");
-
-  if (!subscriptionCheck.ok) {
-    persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.", panelReturn);
-    return;
-  }
-
-  if (!subscriptionCheck.subscribed) {
-    persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Победитель не подписан на канал. Действие недоступно.", panelReturn);
-    return;
-  }
-
-  const userProfiles = readUserProjectProfiles();
-  const antiFraud = getWinnerAntiFraud(
-    draw,
-    userId,
-    userProfiles,
-    null,
-    draw.winnerNotifications[String(userId)],
-  );
-  if (antiFraud.hasFraudFlag) {
-    persistOwnedDrawContext({ data, archivedData, inArchive });
-    redirectWithMessage(res, "Действие недоступно — сработала антифрод-проверка.", panelReturn);
-    return;
-  }
 
   draw.winnerNotifications[String(userId)].paymentDeniedAt = new Date().toISOString();
   draw.winnerNotifications[String(userId)].paymentDeniedBy = ownerId;
