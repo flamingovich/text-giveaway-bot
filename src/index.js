@@ -1842,6 +1842,29 @@ function formatWinnerDeliveryFailureReason(errorMessage) {
   return "Ошибка";
 }
 
+function isWinnerAccountUnavailableError(errorMessage) {
+  const message = String(errorMessage || "").toLowerCase();
+  if (!message) {
+    return false;
+  }
+  if (message.includes("deactivated") || message.includes("deleted")) {
+    return true;
+  }
+  if (message.includes("user not found")) {
+    return true;
+  }
+  if (message.includes("user_id_invalid")) {
+    return true;
+  }
+  if (message.includes("participant_id_invalid")) {
+    return true;
+  }
+  if (message.includes("peer_id_invalid")) {
+    return true;
+  }
+  return false;
+}
+
 const WINNER_DELIVERY_PERMANENT_FAILURE_REASONS = new Set(["Блок", "Удалён", "Нет чата"]);
 const WINNER_DELIVERY_RETRYABLE_FAILURE_REASONS = new Set(["Лимит", "Сеть", "Ошибка"]);
 
@@ -1924,6 +1947,9 @@ function getWinnerForfeitedDeliveryReason(notifyInfo) {
   if (notifyInfo.forfeitureReason === "unsubscribed") {
     return "Отписка";
   }
+  if (notifyInfo.forfeitureReason === "account_unavailable") {
+    return "Аккаунт недоступен";
+  }
   return "";
 }
 
@@ -1933,11 +1959,27 @@ function buildWinnerSubscriptionForfeitedHtml(draw, payoutPrize) {
     ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
     : "розыгрыше";
   const prizeLabel = resolveWinnerPrizeLabel(draw, payoutPrize);
-  const prizeHtml = `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}`;
+  const prizeHtml = `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, payoutPrize))}`;
   return [
     `<b>😔 Вы выиграли в ${giveawayWord}... Но...</b>`,
     prizeHtml,
     "📢 Приз сгорел — вы отписались от канала розыгрыша.",
+    "",
+    "Если это ошибка, пишите в поддержку — @rollerbot_support_bot",
+  ].join("\n");
+}
+
+function buildWinnerAccountUnavailableForfeitedHtml(draw, payoutPrize) {
+  const postLink = buildDrawPostLink(draw);
+  const giveawayWord = postLink
+    ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
+    : "розыгрыше";
+  const prizeLabel = resolveWinnerPrizeLabel(draw, payoutPrize);
+  const prizeHtml = `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}`;
+  return [
+    `<b>😔 Вы выиграли в ${giveawayWord}... Но...</b>`,
+    prizeHtml,
+    "📢 Приз сгорел — аккаунт недоступен (удалён, заблокирован или недоступен в Telegram).",
     "",
     "Если это ошибка, пишите в поддержку — @rollerbot_support_bot",
   ].join("\n");
@@ -3419,6 +3461,28 @@ async function notifyWinnersOnFinish(draw) {
       const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, winnerId, {
         maxAttempts: 3,
       });
+      if (!subscriptionCheck.ok && isWinnerAccountUnavailableError(subscriptionCheck.error)) {
+        if (!draw.winnerNotifications) {
+          draw.winnerNotifications = {};
+        }
+        draw.winnerNotifications[String(winnerId)] = {
+          sentAt: new Date().toISOString(),
+          sentBy: "auto_finish",
+          verifiedAt: null,
+          status: "forfeited",
+          antiFraudFlag: true,
+          forfeitureReason: "account_unavailable",
+          forfeitedAt: new Date().toISOString(),
+          channelSubscribed: false,
+          channelStatus: subscriptionCheck.status || null,
+          channelCheckedAt: subscriptionCheck.checkedAt || new Date().toISOString(),
+          channelCheckError: subscriptionCheck.error || "subscription_check_failed",
+        };
+        console.log(
+          `[finish] аккаунт недоступен: draw=${draw.id} user=${winnerId} → приз сгорел`,
+        );
+        continue;
+      }
       await sendWinnerVerificationNotificationWithRetry(draw, winnerId, "auto_finish", subscriptionCheck);
     } catch (error) {
       if (!draw.winnerNotifications) {
@@ -3582,6 +3646,51 @@ async function markWinnerSubscriptionForfeited(draw, userId) {
   return true;
 }
 
+async function markWinnerAccountUnavailableForfeited(draw, userId, errorMessage = "") {
+  if (!draw.winnerNotifications) {
+    draw.winnerNotifications = {};
+  }
+  const notify = draw.winnerNotifications[String(userId)];
+  if (!notify || notify.paidAt || notify.status === "forfeited" || notify.status === "expired") {
+    return false;
+  }
+
+  notify.status = "forfeited";
+  notify.antiFraudFlag = true;
+  notify.channelSubscribed = false;
+  notify.forfeitedAt = new Date().toISOString();
+  notify.forfeitureReason = "account_unavailable";
+  notify.channelCheckError = errorMessage || notify.channelCheckError || null;
+  delete notify.verifiedAt;
+  winnerVerificationSessions.delete(winnerVerificationSessionKey(userId, draw.id));
+
+  const payoutPrize =
+    notify.payoutPrize ||
+    getWinnerPayoutText(
+      draw,
+      getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData,
+    );
+
+  if (notify.lastMessageId) {
+    try {
+      await bot.telegram.editMessageText(
+        userId,
+        notify.lastMessageId,
+        undefined,
+        buildWinnerAccountUnavailableForfeitedHtml(draw, payoutPrize),
+        {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: [] },
+        },
+      );
+    } catch (error) {
+      // Не критично, если не получилось отредактировать старое сообщение.
+    }
+  }
+
+  return true;
+}
+
 async function processWinnerChannelSubscriptions(data, options = {}) {
   const forceRecheck = Boolean(options.force);
   if (WEB_ONLY) {
@@ -3617,7 +3726,10 @@ async function processWinnerChannelSubscriptions(data, options = {}) {
       if (!notify) {
         continue;
       }
-      if (notify.channelSubscribed === false && notify.forfeitureReason === "unsubscribed") {
+      if (
+        notify.status === "forfeited" &&
+        (notify.forfeitureReason === "unsubscribed" || notify.forfeitureReason === "account_unavailable")
+      ) {
         continue;
       }
 
@@ -3639,6 +3751,19 @@ async function processWinnerChannelSubscriptions(data, options = {}) {
       if (!subscriptionCheck.ok) {
         notify.channelCheckError = subscriptionCheck.error || "subscription_check_failed";
         hasChanges = true;
+        if (isWinnerAccountUnavailableError(subscriptionCheck.error)) {
+          console.log(
+            `[payout-queue] аккаунт недоступен: draw=${draw.id} user=${userId} → приз сгорел`,
+          );
+          const forfeited = await markWinnerAccountUnavailableForfeited(
+            draw,
+            userId,
+            subscriptionCheck.error,
+          );
+          if (forfeited) {
+            hasChanges = true;
+          }
+        }
         await sleep(150);
         continue;
       }
@@ -10652,6 +10777,21 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
     const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
       maxAttempts: 3,
     });
+    if (!subscriptionCheck.ok && isWinnerAccountUnavailableError(subscriptionCheck.error)) {
+      if (!draw.winnerNotifications) {
+        draw.winnerNotifications = {};
+      }
+      if (!draw.winnerNotifications[String(userId)]) {
+        draw.winnerNotifications[String(userId)] = {};
+      }
+      draw.winnerNotifications[String(userId)].channelCheckError = subscriptionCheck.error;
+      draw.winnerNotifications[String(userId)].channelCheckedAt =
+        subscriptionCheck.checkedAt || new Date().toISOString();
+      await markWinnerAccountUnavailableForfeited(draw, userId, subscriptionCheck.error);
+      persistOwnedDrawContext({ data, archivedData, inArchive });
+      redirectWithMessage(res, "Аккаунт победителя недоступен — приз сгорел.");
+      return;
+    }
     await sendWinnerVerificationNotificationWithRetry(draw, userId, ownerId, subscriptionCheck);
   } catch (error) {
     if (!draw.winnerNotifications) {
@@ -10722,6 +10862,16 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
 
   if (!subscriptionCheck.ok) {
     persistOwnedDrawContext({ data, archivedData, inArchive });
+    if (isWinnerAccountUnavailableError(subscriptionCheck.error)) {
+      await markWinnerAccountUnavailableForfeited(draw, userId, subscriptionCheck.error);
+      persistOwnedDrawContext({ data, archivedData, inArchive });
+      redirectWithMessage(
+        res,
+        "Аккаунт победителя недоступен — приз сгорел.",
+        panelReturn,
+      );
+      return;
+    }
     redirectWithMessage(res, "Не удалось проверить подписку победителя. Попробуйте ещё раз.", panelReturn);
     return;
   }
