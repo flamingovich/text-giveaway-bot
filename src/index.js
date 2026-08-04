@@ -2120,11 +2120,55 @@ function shouldUpdateDrawCountdownPost(draw, newLabel) {
   if (String(draw.postTimeLeftLabel || "") === String(newLabel)) {
     return false;
   }
-  if (isMinuteCountdownLabel(newLabel) && isMinuteCountdownLabel(draw.postTimeLeftLabel)) {
-    const lastAt = Date.parse(draw.postTimeLeftUpdatedAt || "");
-    if (Number.isFinite(lastAt) && Date.now() - lastAt < COUNTDOWN_MINUTE_THROTTLE_MS) {
-      return false;
-    }
+  if (shouldThrottleMinuteCountdownUpdate(draw.postTimeLeftLabel, newLabel, draw.postTimeLeftUpdatedAt)) {
+    return false;
+  }
+  return true;
+}
+
+function shouldThrottleMinuteCountdownUpdate(previousLabel, newLabel, updatedAt) {
+  if (!isMinuteCountdownLabel(newLabel) || !isMinuteCountdownLabel(previousLabel)) {
+    return false;
+  }
+  const lastAt = Date.parse(updatedAt || "");
+  return Number.isFinite(lastAt) && Date.now() - lastAt < COUNTDOWN_MINUTE_THROTTLE_MS;
+}
+
+function markDrawReminderCountdownCache(draw, label = null) {
+  const nextLabel = label != null ? label : formatTimeUntilDrawEndLabel(draw);
+  if (!nextLabel) {
+    return;
+  }
+  draw.reminderTimeLeftLabel = nextLabel;
+  draw.reminderTimeLeftUpdatedAt = new Date().toISOString();
+}
+
+function clearDrawReminderCountdownCache(draw) {
+  draw.reminderTimeLeftLabel = null;
+  draw.reminderTimeLeftUpdatedAt = null;
+}
+
+function shouldUpdateDrawReminderCountdown(draw, newLabel) {
+  if (!draw?.channelId || draw.status !== DRAW_STATUS.ACTIVE) {
+    return false;
+  }
+  if (!Array.isArray(draw.reminderMessageIds) || draw.reminderMessageIds.length === 0) {
+    return false;
+  }
+  if (draw.endMode === "manual" || !draw.endAt || !newLabel) {
+    return false;
+  }
+  if (String(draw.reminderTimeLeftLabel || "") === String(newLabel)) {
+    return false;
+  }
+  if (
+    shouldThrottleMinuteCountdownUpdate(
+      draw.reminderTimeLeftLabel,
+      newLabel,
+      draw.reminderTimeLeftUpdatedAt,
+    )
+  ) {
+    return false;
   }
   return true;
 }
@@ -2199,7 +2243,7 @@ function buildActiveDrawsDigestTelegramContent(draws, options = {}) {
       prizeLabel: formatDrawPrizePlain(draw),
       winnersCount: Math.max(1, Number(draw.winnersCount) || 1),
       timeLeftLabel: timeLeftLabel || "",
-      postUrl: buildDrawPostLink(draw),
+      postUrl: getJoinParticipateTextLinkUrl(draw.id),
       endManual,
     };
   });
@@ -2425,15 +2469,26 @@ async function sendActiveDrawsDigestReminders(data, draws, options = {}) {
 function buildDrawReminderReplyHtml(draw) {
   const prize = formatDrawPrizePlain(draw);
   const timeLeft = formatTimeUntilDrawEnd(draw);
-  const postLink = buildDrawPostLink(draw);
-  const participateHtml = postLink
-    ? `<a href="${escapeHtml(postLink)}">УЧАСТВОВАТЬ</a>`
+  const participateUrl = getJoinParticipateTextLinkUrl(draw.id);
+  const participateHtml = participateUrl
+    ? `<a href="${escapeHtml(participateUrl)}">УЧАСТВОВАТЬ</a>`
     : "УЧАСТВОВАТЬ";
   return [
     `<b>❗️ ИТОГИ НА ${escapeHtml(prize)} ЧЕРЕЗ ${escapeHtml(timeLeft)}</b>`,
     "",
     `<b>👉 ${participateHtml}</b>`,
   ].join("\n");
+}
+
+async function editDrawReminderMessage(draw) {
+  const text = buildDrawReminderReplyHtml(draw);
+  const opts = {
+    parse_mode: "HTML",
+    link_preview_options: { is_disabled: true },
+  };
+  for (const messageId of draw.reminderMessageIds || []) {
+    await bot.telegram.editMessageText(draw.channelId, messageId, undefined, text, opts);
+  }
 }
 
 async function sendDrawReminderReply(draw) {
@@ -2448,6 +2503,7 @@ async function sendDrawReminderReply(draw) {
   }
   if (message?.message_id) {
     draw.reminderMessageIds.push(message.message_id);
+    markDrawReminderCountdownCache(draw);
   }
   return message;
 }
@@ -2460,6 +2516,7 @@ async function deleteDrawReminderMessages(draw) {
     await safeDeleteMessage(draw.channelId, messageId);
   }
   draw.reminderMessageIds = [];
+  clearDrawReminderCountdownCache(draw);
 }
 
 function buildDrawParticipateConditionLine(_draw) {
@@ -2670,6 +2727,12 @@ function getJoinParticipateUrl(drawId) {
     return directLink;
   }
   return getJoinDeepLink(drawId);
+}
+
+/** Direct Link для text_link в канале — только t.me/bot/join?startapp=… */
+function getJoinParticipateTextLinkUrl(drawId) {
+  const url = getJoinDirectLink(drawId);
+  return url.startsWith("https://t.me/") ? url : "";
 }
 
 function getChannelSubscribePayload(draw) {
@@ -3733,6 +3796,33 @@ async function syncActiveDrawCountdownPosts(data) {
   return updated > 0;
 }
 
+async function syncDrawReminderCountdowns(data) {
+  if (WEB_ONLY) {
+    return false;
+  }
+
+  let updated = 0;
+  for (const draw of data.draws || []) {
+    const newLabel = formatTimeUntilDrawEndLabel(draw);
+    if (!shouldUpdateDrawReminderCountdown(draw, newLabel)) {
+      continue;
+    }
+    try {
+      await editDrawReminderMessage(draw);
+      markDrawReminderCountdownCache(draw, newLabel);
+      updated += 1;
+      await sleep(350);
+    } catch (error) {
+      if (isIgnorableTelegramEditError(error)) {
+        markDrawReminderCountdownCache(draw, newLabel);
+        continue;
+      }
+      console.warn(`[countdown] напоминание ${draw.id}: ${error.message}`);
+    }
+  }
+  return updated > 0;
+}
+
 function buildDigestTimeLeftKey(draws) {
   return (draws || [])
     .map((draw) => `${draw.id}:${formatTimeUntilDrawEndLabel(draw) || "manual"}`)
@@ -4628,6 +4718,11 @@ async function schedulerTick() {
 
   const countdownPostChanges = await syncActiveDrawCountdownPosts(data);
   if (countdownPostChanges) {
+    hasChanges = true;
+  }
+
+  const reminderCountdownChanges = await syncDrawReminderCountdowns(data);
+  if (reminderCountdownChanges) {
     hasChanges = true;
   }
 
