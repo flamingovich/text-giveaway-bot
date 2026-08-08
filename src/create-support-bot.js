@@ -626,6 +626,9 @@ function createSupportBot(options) {
   loadChats();
 
   async function boot() {
+    if (process.env.OPENROUTER_PROXY_URL?.trim()) {
+      log("OpenRouter proxy включён");
+    }
     const keyCheck = await ai.verifyOpenRouterKey(openRouterApiKey);
     if (!keyCheck.ok) {
       error("OPENROUTER_API_KEY не работает:", keyCheck.error);

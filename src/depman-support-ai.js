@@ -1,3 +1,4 @@
+const { openRouterFetch, extractOpenRouterError } = require("./openrouter-fetch");
 const { DEPMAN_KNOWLEDGE } = require("./depman-knowledge");
 const {
   SUPPORT_KNOWLEDGE,
@@ -245,7 +246,7 @@ async function callOpenRouter({
     { role: "user", content: userMessage },
   ];
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const response = await openRouterFetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -265,8 +266,7 @@ async function callOpenRouter({
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
-    throw new Error(detail);
+    throw new Error(extractOpenRouterError(data, response));
   }
 
   const text = String(data?.choices?.[0]?.message?.content || "").trim();

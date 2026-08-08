@@ -1,3 +1,5 @@
+const { openRouterFetch, extractOpenRouterError } = require("./openrouter-fetch");
+
 const SUPPORT_KNOWLEDGE = `
 === О СИСТЕМЕ ===
 
@@ -401,7 +403,7 @@ async function callOpenRouter({
     { role: "user", content: userMessage },
   ];
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const response = await openRouterFetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -421,7 +423,7 @@ async function callOpenRouter({
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
+    const detail = extractOpenRouterError(data, response);
     const code = data?.error?.code || response.status;
     if (code === 401 || /user not found/i.test(detail)) {
       throw new Error(
@@ -594,20 +596,19 @@ function humanizeSupportReply(text, agentName = "", options = {}) {
 const DEFAULT_OPENROUTER_MODEL = "google/gemini-2.5-flash";
 
 async function verifyOpenRouterKey(apiKey) {
-  const response = await fetch("https://openrouter.ai/api/v1/auth/key", {
+  const response = await openRouterFetch("https://openrouter.ai/api/v1/auth/key", {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = data?.error?.message || `HTTP ${response.status}`;
-    return { ok: false, error: detail };
+    return { ok: false, error: extractOpenRouterError(data, response) };
   }
   return { ok: true, data: data?.data || data };
 }
 
 async function verifyOpenRouterModel(apiKey, model, referer) {
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const response = await openRouterFetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -625,8 +626,7 @@ async function verifyOpenRouterModel(apiKey, model, referer) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
-      return { ok: false, error: detail };
+      return { ok: false, error: extractOpenRouterError(data, response) };
     }
     if (!String(data?.choices?.[0]?.message?.content || "").trim()) {
       return { ok: false, error: "Пустой ответ модели" };
