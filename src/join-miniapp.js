@@ -2286,8 +2286,44 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         }
       }
 
+      const JOIN_BOOT_SESSION_TIMEOUT_MS = 28000;
+      const JOIN_BOOT_RETRY_TEXT =
+        "Долго нет ответа от сервера. Нажмите «Повторить» или закройте и откройте участие снова.";
+
+      function showBootFailure(error) {
+        console.error("[join-client] boot failed:", error?.message || error);
+        hideLoading();
+        const message = String(error?.message || error || "Ошибка загрузки");
+        const isTimeout =
+          error?.name === "AbortError" || /не ответил вовремя/i.test(message);
+        if (isTimeout) {
+          const retry = document.getElementById("loadingRetry");
+          const retryText = document.getElementById("loadingRetryText");
+          if (retry) retry.classList.remove("hidden");
+          if (retryText) retryText.textContent = JOIN_BOOT_RETRY_TEXT;
+          hideMessage();
+          return;
+        }
+        document.getElementById("loadingRetry")?.classList.add("hidden");
+        showMessage(message);
+      }
+
+      function showBootLoading() {
+        document.getElementById("loadingRetry")?.classList.add("hidden");
+        hideMessage();
+        const loading = document.getElementById("loading");
+        if (loading) {
+          loading.classList.remove("hidden");
+          loading.style.display = "block";
+        }
+      }
+
       async function bootJoin() {
-        const sessionPromise = api("/api/join/" + encodeURIComponent(drawId) + "/session", {}, { timeoutMs: 12000 });
+        const sessionPromise = api(
+          "/api/join/" + encodeURIComponent(drawId) + "/session",
+          {},
+          { timeoutMs: JOIN_BOOT_SESSION_TIMEOUT_MS },
+        );
         let data;
         if (PAGE_MODE === "app") {
           const results = await Promise.all([loadDrawMeta().catch(() => {}), sessionPromise]);
@@ -2296,8 +2332,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           data = await sessionPromise;
         }
         hideLoading();
-        const retry = document.getElementById("loadingRetry");
-        if (retry) retry.classList.add("hidden");
+        document.getElementById("loadingRetry")?.classList.add("hidden");
         hideMessage();
         if (!data?.step) {
           throw new Error("Пустой ответ сервера. Попробуйте ещё раз.");
@@ -2313,38 +2348,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const retryBtn = document.getElementById("loadingRetryBtn");
       if (retryBtn) {
         retryBtn.addEventListener("click", () => {
-          document.getElementById("loadingRetry")?.classList.add("hidden");
-          const loading = document.getElementById("loading");
-          if (loading) {
-            loading.classList.remove("hidden");
-            loading.style.display = "block";
-          }
-          bootJoin().catch((error) => {
-            hideLoading();
-            showMessage(error.message);
-          });
+          showBootLoading();
+          bootJoin().catch(showBootFailure);
         });
       }
 
-      const bootTimer = setTimeout(() => {
-        hideLoading();
-        const retry = document.getElementById("loadingRetry");
-        const retryText = document.getElementById("loadingRetryText");
-        if (retry) retry.classList.remove("hidden");
-        if (retryText) {
-          retryText.textContent = "Долго нет ответа от сервера. Нажмите «Повторить» или закройте и откройте участие снова.";
-        }
-      }, 13000);
-
       console.log("[join-client] boot drawId=" + drawId + " build=" + PAGE_BUILD);
 
-      bootJoin()
-        .catch((error) => {
-          console.error("[join-client] boot failed:", error.message);
-          hideLoading();
-          showMessage(error.message);
-        })
-        .finally(() => clearTimeout(bootTimer));
+      bootJoin().catch(showBootFailure);
     })();
   </script>
 </body>
