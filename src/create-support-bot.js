@@ -35,6 +35,7 @@ function createSupportBot(options) {
     buildMediaDeclineReply = () => "Медиа не принимаем — напиши текстом что на экране и на каком шаге",
     evaluateUserMessage = () => ({ action: "continue" }),
     resolveExtraSystemContext = () => "",
+    resolveOperatorSearchDelayMs = null,
     bootLogLine = () => "",
   } = options;
 
@@ -169,6 +170,13 @@ function createSupportBot(options) {
 
   function randomBetween(min, max) {
     return min + Math.floor(Math.random() * (max - min + 1));
+  }
+
+  function getOperatorSearchDelayMs() {
+    if (typeof resolveOperatorSearchDelayMs === "function") {
+      return resolveOperatorSearchDelayMs();
+    }
+    return randomBetween(operatorSearchMinMs, operatorSearchMaxMs);
   }
 
   function sleep(ms) {
@@ -485,7 +493,7 @@ function createSupportBot(options) {
       searchMessage.message_id,
       (frame) => buildSearchingText(frame),
     );
-    await sleep(randomBetween(operatorSearchMinMs, operatorSearchMaxMs));
+    await sleep(getOperatorSearchDelayMs());
     stopStatusAnimation(`${chatKey}:search`);
     await deleteMessageSafe(bot, ctx.chat.id, searchMessage.message_id);
 

@@ -1,10 +1,12 @@
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
+const { DateTime } = require("luxon");
 const { createSupportBot } = require("./create-support-bot");
 const { createSupportChatsStore } = require("./create-support-chats-store");
 const { STORE_KEYS } = require("./storage");
 const rollerAi = require("./support-ai");
+const { buildSupportWinnerContext } = require("./support-winner-lookup");
 
 const SUPPORT_BOT_TOKEN = process.env.SUPPORT_BOT_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -65,6 +67,28 @@ const { bot, boot, stop } = createSupportBot({
   },
   buildMediaDeclineReply: () =>
     "Фото и файлы пока не берём — напиши текстом, на каком шаге проблема и что на экране.",
+  resolveExtraSystemContext: (from) => {
+    if (!from?.id) {
+      return "";
+    }
+    try {
+      return buildSupportWinnerContext(from.id, { timezone: TIMEZONE });
+    } catch (error) {
+      console.warn("[support-bot] не удалось прочитать базу победителей:", error.message);
+      return "";
+    }
+  },
+  resolveOperatorSearchDelayMs: () => {
+    const hour = DateTime.now().setZone(TIMEZONE).hour;
+    if (hour >= 0 && hour < 8) {
+      const minMs = Number(process.env.SUPPORT_NIGHT_OPERATOR_SEARCH_MIN_MS || 3 * 60 * 1000);
+      const maxMs = Number(process.env.SUPPORT_NIGHT_OPERATOR_SEARCH_MAX_MS || 7 * 60 * 1000);
+      return minMs + Math.floor(Math.random() * (Math.max(maxMs - minMs, 0) + 1));
+    }
+    const minMs = Number(process.env.SUPPORT_OPERATOR_SEARCH_MIN_MS || 5_000);
+    const maxMs = Number(process.env.SUPPORT_OPERATOR_SEARCH_MAX_MS || 20_000);
+    return minMs + Math.floor(Math.random() * (Math.max(maxMs - minMs, 0) + 1));
+  },
 });
 
 boot().catch((error) => {
