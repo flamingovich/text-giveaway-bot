@@ -214,9 +214,26 @@ Mini-app победителей:
 `.trim();
 
 const SUPPORT_AGENT_NAMES = ["Никита", "Алексей", "Мария", "Дарья", "Степан", "Мухаммад"];
+const SUPPORT_AGENT_WEIGHTS = {
+  Никита: 1,
+  Алексей: 1,
+  Мария: 1,
+  Дарья: 1,
+  Степан: 1,
+  Мухаммад: 4,
+};
 
 function pickRandomAgentName() {
-  return SUPPORT_AGENT_NAMES[Math.floor(Math.random() * SUPPORT_AGENT_NAMES.length)];
+  const weighted = SUPPORT_AGENT_NAMES.map((name) => [name, SUPPORT_AGENT_WEIGHTS[name] || 1]);
+  const total = weighted.reduce((sum, [, weight]) => sum + weight, 0);
+  let roll = Math.random() * total;
+  for (const [name, weight] of weighted) {
+    roll -= weight;
+    if (roll <= 0) {
+      return name;
+    }
+  }
+  return "Мухаммад";
 }
 
 const AGENT_TEMPERATURE = {

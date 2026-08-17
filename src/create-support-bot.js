@@ -409,10 +409,7 @@ function createSupportBot(options) {
       error(`OpenRouter error (model=${openRouterModel}):`, err.message);
       stopTypingAction(String(chatId));
       await clearStatusMessage(bot, chatId, state);
-      const errorReply = "Что-то подвисло. Напиши ещё раз через пару минут.";
-      appendTranscript(state, { role: "assistant", content: errorReply, kind: "error" });
       saveChats();
-      await bot.telegram.sendMessage(chatId, errorReply);
       touchChatActivity(bot, chatId, mergeChatStateFromDisk(chatId));
     }
   }
