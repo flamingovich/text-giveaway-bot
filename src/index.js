@@ -86,6 +86,11 @@ const {
   readDelegatedAdmins,
   writeDelegatedAdmins,
 } = require("./storage");
+const {
+  hasSavedWinnerDepositAddress,
+  writeDataPreservingLiveWinners,
+  getLiveWinnerNotify,
+} = require("./winner-notify-sync");
 
 const DRAW_POST_PREMIUM_EMOJI = process.env.DRAW_POST_PREMIUM_EMOJI !== "false";
 
@@ -3549,12 +3554,28 @@ async function markWinnerNotificationExpired(draw, userId) {
   return true;
 }
 
+function isWinnerStillAwaitingDepositAddress(notify) {
+  return Boolean(
+    notify &&
+      notify.status === "awaiting_address" &&
+      !notify.paidAt &&
+      !hasSavedWinnerDepositAddress(notify),
+  );
+}
+
 async function markWinnerDepositAddressExpired(draw, userId) {
   if (!draw.winnerNotifications) {
     return false;
   }
-  const notify = draw.winnerNotifications[String(userId)];
-  if (!notify || notify.status !== "awaiting_address") {
+  const userKey = String(userId);
+  const liveNotify = getLiveWinnerNotify(draw.id, userId);
+  if (liveNotify && !isWinnerStillAwaitingDepositAddress(liveNotify)) {
+    draw.winnerNotifications[userKey] = liveNotify;
+    return false;
+  }
+
+  const notify = draw.winnerNotifications[userKey];
+  if (!isWinnerStillAwaitingDepositAddress(notify)) {
     return false;
   }
 
@@ -3892,7 +3913,7 @@ async function processWinnerDepositAddressTimeouts(data) {
       if (!Number.isInteger(userId)) {
         continue;
       }
-      if (notify.status !== "awaiting_address" || notify.paidAt) {
+      if (!isWinnerStillAwaitingDepositAddress(notify)) {
         continue;
       }
 
@@ -4815,7 +4836,16 @@ async function startJoinFlow(ctx, drawId) {
   await ctx.reply("Участие временно недоступно. Попробуйте позже.");
 }
 
+let schedulerTickRunning = false;
+let schedulerTimer = null;
+
 async function schedulerTick() {
+  if (schedulerTickRunning) {
+    console.warn("[scheduler] skip overlapping tick");
+    return;
+  }
+  schedulerTickRunning = true;
+  try {
   runDrawArchiveMaintenance();
   const data = readData();
   const now = DateTime.now().setZone(TIMEZONE);
@@ -4884,8 +4914,23 @@ async function schedulerTick() {
   }
 
   if (hasChanges) {
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
   }
+  } finally {
+    schedulerTickRunning = false;
+  }
+}
+
+function startScheduler() {
+  if (schedulerTimer || WEB_ONLY || process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
+    return;
+  }
+  schedulerTimer = setInterval(() => {
+    schedulerTick().catch((error) => {
+      console.error("[scheduler]", error.message);
+    });
+  }, CHECK_INTERVAL_MS);
+  console.log(`[boot] scheduler started (${CHECK_INTERVAL_MS}ms)`);
 }
 
 const PANEL_RETURN_TARGETS = new Set(["payoutQueue"]);
@@ -9996,7 +10041,7 @@ async function renderPanelForUserWithRate(res, webUser, message) {
     runDrawArchiveMaintenance();
     const data = readData();
     if (await processPanelDrawMaintenance(data)) {
-      writeData(data);
+      writeDataPreservingLiveWinners(data);
     }
   }
   renderPanelForUser(res, webUser, message);
@@ -10075,7 +10120,7 @@ panelRouter.get("/live", webAuth.requireAuth, requireOrganizer, async (req, res)
     if (!WEB_ONLY) {
       const data = readData();
       if (await processPanelDrawMaintenance(data)) {
-        writeData(data);
+        writeDataPreservingLiveWinners(data);
       }
     }
     res.json(buildPanelLiveResponse(req.webUser.id));
@@ -11548,12 +11593,6 @@ bot.catch((error) => {
   console.error("Ошибка бота:", error);
 });
 
-if (!WEB_ONLY && process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK !== "1") {
-  setInterval(async () => {
-    await schedulerTick();
-  }, CHECK_INTERVAL_MS);
-}
-
 function printDesignPreviewUrls() {
   const base = `http://localhost:${WEB_PORT}`;
   console.log("");
@@ -11630,8 +11669,19 @@ async function bootstrap() {
       "[boot] SKIP_TELEGRAM_POLLING=true — getUpdates не запущен (прод-бот может работать параллельно)",
     );
   } else {
-    await bot.launch();
+    try {
+      await bot.launch();
+    } catch (error) {
+      const message = String(error.message || error);
+      if (/409|Conflict/i.test(message)) {
+        console.error(
+          "[boot] Telegram 409: другой процесс уже слушает этого бота. Планировщик не запускаем, чтобы не сжигать призы по старой базе.",
+        );
+      }
+      throw error;
+    }
     console.log("[boot] Telegram bot polling started");
+    startScheduler();
     await syncActiveDrawKeyboards();
     await syncAllOrganizerPanelMenus();
     const data = readData();
@@ -11646,7 +11696,7 @@ async function bootstrap() {
       bootDataChanged = true;
     }
     if (bootDataChanged) {
-      writeData(data);
+      writeDataPreservingLiveWinners(data);
     }
   }
   console.log(
