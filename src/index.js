@@ -5006,18 +5006,6 @@ async function runSchedulerBackgroundJobs() {
   const data = readData();
   let hasChanges = false;
 
-  if (await processWinnerConfirmTimeouts(data)) {
-    hasChanges = true;
-  }
-  if (await processWinnerDepositAddressTimeouts(data)) {
-    hasChanges = true;
-  }
-  if (await processWinnerChannelSubscriptions(data)) {
-    hasChanges = true;
-  }
-  if (await processWinnerPermanentDeliveryForfeitures(data)) {
-    hasChanges = true;
-  }
   if (await syncStaleActiveDrawPostCounts(data)) {
     hasChanges = true;
   }
@@ -5028,6 +5016,18 @@ async function runSchedulerBackgroundJobs() {
     hasChanges = true;
   }
   if (await syncActiveDrawsDigestCountdowns(data)) {
+    hasChanges = true;
+  }
+  if (await processWinnerConfirmTimeouts(data)) {
+    hasChanges = true;
+  }
+  if (await processWinnerDepositAddressTimeouts(data)) {
+    hasChanges = true;
+  }
+  if (await processWinnerChannelSubscriptions(data)) {
+    hasChanges = true;
+  }
+  if (await processWinnerPermanentDeliveryForfeitures(data)) {
     hasChanges = true;
   }
 
