@@ -3351,13 +3351,18 @@ async function updateDrawPost(draw, includeWinners) {
       return;
     } catch (error) {
       lastError = error;
-      if (isIgnorableTelegramEditError(error)) {
+      if (String(error?.message || "").includes("message is not modified")) {
+        markDrawPostAfterSuccessfulEdit(draw, includeWinners);
         return;
       }
       if (isMissingTelegramMessageError(error)) {
         throw error;
       }
-      if (!isWrongTelegramMessageKindError(error) || index === attempts.length - 1) {
+      const tryOtherKind =
+        isWrongTelegramMessageKindError(error) ||
+        String(error?.message || "").includes("Too Many Requests") ||
+        String(error?.message || "").includes("telegram_edit_timeout");
+      if (!tryOtherKind || index === attempts.length - 1) {
         throw error;
       }
     }
