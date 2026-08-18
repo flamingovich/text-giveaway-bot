@@ -2157,6 +2157,13 @@ function markDrawCountdownCache(draw, label = null) {
   draw.postTimeLeftUpdatedAt = new Date().toISOString();
 }
 
+function getDrawCountdownDisplayLabel(draw, newLabel = formatTimeUntilDrawEndLabel(draw)) {
+  if (draw?.endMode === "manual" || !draw?.endAt) {
+    return null;
+  }
+  return newLabel || "меньше минуты";
+}
+
 function shouldUpdateDrawCountdownPost(draw, newLabel) {
   if (isMegaDraw(draw)) {
     return false;
@@ -2164,13 +2171,20 @@ function shouldUpdateDrawCountdownPost(draw, newLabel) {
   if (!draw?.messageId || !draw?.channelId || draw.status !== DRAW_STATUS.ACTIVE) {
     return false;
   }
-  if (draw.endMode === "manual" || !draw.endAt || !newLabel) {
+  if (draw.endMode === "manual" || !draw.endAt) {
     return false;
   }
-  if (String(draw.postTimeLeftLabel || "") === String(newLabel)) {
+  const displayLabel = getDrawCountdownDisplayLabel(draw, newLabel);
+  if (!displayLabel) {
     return false;
   }
-  if (shouldThrottleMinuteCountdownUpdate(draw.postTimeLeftLabel, newLabel, draw.postTimeLeftUpdatedAt)) {
+  if (String(draw.postTimeLeftLabel || "") === String(displayLabel)) {
+    return false;
+  }
+  if (
+    newLabel &&
+    shouldThrottleMinuteCountdownUpdate(draw.postTimeLeftLabel, newLabel, draw.postTimeLeftUpdatedAt)
+  ) {
     return false;
   }
   return true;
@@ -2253,7 +2267,7 @@ function getActivePostDurationParts(draw) {
   const timeLeft = formatTimeUntilDrawEndLabel(draw);
   return {
     endManual: false,
-    durationLabel: timeLeft || draw.postTimeLeftLabel || "меньше минуты",
+    durationLabel: timeLeft || "меньше минуты",
   };
 }
 
@@ -3211,56 +3225,116 @@ function isIgnorableTelegramEditError(error) {
   return message.includes("message is not modified") || message.includes("Too Many Requests");
 }
 
-async function updateDrawPost(draw, includeWinners) {
-  if (isMegaDraw(draw)) {
-    if (includeWinners) {
-      await refreshDrawPostKeyboard(draw);
-      return;
+function isMissingTelegramMessageError(error) {
+  const message = String(error?.message || error || "");
+  return message.includes("message to edit not found") || message.includes("message identifier is not specified");
+}
+
+function isWrongTelegramMessageKindError(error) {
+  const message = String(error?.message || error || "");
+  return (
+    message.includes("there is no caption") ||
+    message.includes("there is no text in the message") ||
+    message.includes("message can't be edited")
+  );
+}
+
+function overlayLiveDrawProgress(draw) {
+  if (!draw?.id) {
+    return draw;
+  }
+  const live = (readData().draws || []).find((item) => String(item.id) === String(draw.id));
+  if (!live) {
+    return draw;
+  }
+  if (!draw.messageId && live.messageId) {
+    draw.messageId = live.messageId;
+    draw.messageType = live.messageType || draw.messageType;
+    draw.awaitingChannelPost = false;
+  }
+  if ((live.participantIds || []).length > (draw.participantIds || []).length) {
+    draw.participantIds = live.participantIds;
+    if (live.participantMeta) {
+      draw.participantMeta = { ...(draw.participantMeta || {}), ...live.participantMeta };
     }
+  }
+  return draw;
+}
+
+async function editDrawPostAsCaption(draw, includeWinners, keyboard) {
+  const captionOpts = applyDrawPostContentToTelegramOpts(
+    draw,
+    { includeWinners, forCaption: true },
+    { ...keyboard },
+  );
+  await bot.telegram.editMessageCaption(
+    draw.channelId,
+    draw.messageId,
+    undefined,
+    captionOpts.caption,
+    captionOpts,
+  );
+  draw.messageType = "photo";
+}
+
+async function editDrawPostAsText(draw, includeWinners, keyboard) {
+  const textOpts = applyDrawPostContentToTelegramOpts(draw, { includeWinners }, { ...keyboard });
+  await bot.telegram.editMessageText(
+    draw.channelId,
+    draw.messageId,
+    undefined,
+    buildDrawMessage(draw, { includeWinners }),
+    textOpts,
+  );
+  draw.messageType = "text";
+}
+
+function markDrawPostAfterSuccessfulEdit(draw, includeWinners) {
+  markDrawPostParticipantCount(draw);
+  if (!includeWinners && draw.status === DRAW_STATUS.ACTIVE) {
+    markDrawCountdownCache(draw, getDrawCountdownDisplayLabel(draw));
+  }
+}
+
+async function updateDrawPost(draw, includeWinners) {
+  overlayLiveDrawProgress(draw);
+  if (!draw?.messageId || !draw?.channelId) {
+    return;
+  }
+
+  if (isMegaDraw(draw)) {
     await refreshDrawPostKeyboard(draw);
     return;
   }
 
   const keyboard = includeWinners ? getFinishedKeyboard(draw) : getKeyboard(draw.id, (draw.participantIds || []).length);
+  const photoFirst = draw.messageType === "photo";
+  const attempts = photoFirst
+    ? [editDrawPostAsCaption, editDrawPostAsText]
+    : [editDrawPostAsText, editDrawPostAsCaption];
 
-  try {
-    if (draw.messageType === "photo") {
-      const captionOpts = applyDrawPostContentToTelegramOpts(
-        draw,
-        { includeWinners, forCaption: true },
-        { ...keyboard },
-      );
-      await bot.telegram.editMessageCaption(
-        draw.channelId,
-        draw.messageId,
-        undefined,
-        captionOpts.caption,
-        captionOpts,
-      );
-      markDrawPostParticipantCount(draw);
-      if (!includeWinners && draw.status === DRAW_STATUS.ACTIVE) {
-        markDrawCountdownCache(draw);
+  let lastError = null;
+  for (let index = 0; index < attempts.length; index += 1) {
+    try {
+      await attempts[index](draw, includeWinners, keyboard);
+      markDrawPostAfterSuccessfulEdit(draw, includeWinners);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (isIgnorableTelegramEditError(error)) {
+        return;
       }
-      return;
+      if (isMissingTelegramMessageError(error)) {
+        throw error;
+      }
+      if (!isWrongTelegramMessageKindError(error) || index === attempts.length - 1) {
+        throw error;
+      }
     }
+  }
 
-    const textOpts = applyDrawPostContentToTelegramOpts(draw, { includeWinners }, { ...keyboard });
-    await bot.telegram.editMessageText(
-      draw.channelId,
-      draw.messageId,
-      undefined,
-      buildDrawMessage(draw, { includeWinners }),
-      textOpts,
-    );
-    markDrawPostParticipantCount(draw);
-    if (!includeWinners && draw.status === DRAW_STATUS.ACTIVE) {
-      markDrawCountdownCache(draw);
-    }
-  } catch (error) {
-    if (isIgnorableTelegramEditError(error)) {
-      return;
-    }
-    throw error;
+  if (lastError) {
+    throw lastError;
   }
 }
 
@@ -3287,7 +3361,7 @@ function scheduleDrawPostUpdate(drawId, includeWinners = false) {
     try {
       await updateDrawPost(draw, winners);
       markDrawPostParticipantCount(draw);
-      writeData(data);
+      writeDataPreservingLiveWinners(data);
     } catch (error) {
       if (!isIgnorableTelegramEditError(error)) {
         console.error(`Не удалось обновить пост ${drawId}:`, error.message);
@@ -3316,16 +3390,45 @@ function pickWinners(draw) {
 }
 
 async function finishDraw(draw, data = null) {
-  await deleteDrawReminderMessages(draw);
-  draw.winnerIds = pickWinners(draw);
-  draw.winnerNotifications = {};
-  draw.status = DRAW_STATUS.FINISHED;
-  draw.finishedAt = new Date().toISOString();
-  await updateDrawPost(draw, true);
+  const alreadyFinished = draw.status === DRAW_STATUS.FINISHED && Array.isArray(draw.winnerIds);
+  if (!alreadyFinished) {
+    draw.winnerIds = pickWinners(draw);
+    draw.winnerNotifications = {};
+    draw.status = DRAW_STATUS.FINISHED;
+    draw.finishedAt = new Date().toISOString();
+  }
+  if (data) {
+    writeDataPreservingLiveWinners(data);
+  }
+
+  try {
+    await deleteDrawReminderMessages(draw);
+  } catch (error) {
+    console.warn(`[finish] напоминания ${draw.id}: ${error.message}`);
+  }
+
+  try {
+    await updateDrawPost(draw, true);
+    draw.finishPostError = null;
+    draw.finishPostUpdatedAt = new Date().toISOString();
+  } catch (error) {
+    draw.finishPostError = error.message || String(error);
+    console.error(`[finish] пост ${draw.id}: ${draw.finishPostError}`);
+  }
+  if (data) {
+    writeDataPreservingLiveWinners(data);
+  }
+
   void ensureUserAvatars([...(draw.participantIds || []), ...(draw.winnerIds || [])], { limit: 100 });
-  await notifyWinnersOnFinish(draw);
+  if (!alreadyFinished || Object.keys(draw.winnerNotifications || {}).length === 0) {
+    await notifyWinnersOnFinish(draw);
+    if (data) {
+      writeDataPreservingLiveWinners(data);
+    }
+  }
   if (data) {
     await syncActiveDrawsDigestAfterDrawChange(data, draw);
+    writeDataPreservingLiveWinners(data);
   }
 }
 
@@ -3935,6 +4038,10 @@ async function processWinnerDepositAddressTimeouts(data) {
 }
 
 async function refreshDrawPostKeyboard(draw) {
+  overlayLiveDrawProgress(draw);
+  if (!draw?.messageId || !draw?.channelId) {
+    return;
+  }
   const count = getDrawParticipantCount(draw);
   const markup =
     draw.status === DRAW_STATUS.FINISHED
@@ -3952,6 +4059,7 @@ async function syncActiveDrawCountdownPosts(data) {
 
   let updated = 0;
   for (const draw of data.draws || []) {
+    overlayLiveDrawProgress(draw);
     const newLabel = formatTimeUntilDrawEndLabel(draw);
     if (!shouldUpdateDrawCountdownPost(draw, newLabel)) {
       continue;
@@ -4074,6 +4182,11 @@ async function syncActiveDrawsDigestCountdowns(data) {
         });
         continue;
       }
+      if (/message to edit not found|message can't be edited/i.test(error.message || "")) {
+        await deleteActiveDrawsDigestMessages(data, channelId);
+        updated += 1;
+        continue;
+      }
       if (!isIgnorableTelegramEditError(error)) {
         console.warn(`[countdown] дайджест ${channelId}: ${error.message}`);
       }
@@ -4090,6 +4203,7 @@ async function syncStaleActiveDrawPostCounts(data) {
 
   let updated = 0;
   for (const draw of data.draws) {
+    overlayLiveDrawProgress(draw);
     if (!isActiveDrawPostCountStale(draw)) {
       continue;
     }
@@ -4865,6 +4979,18 @@ async function runDueDrawLifecycle() {
           if (endAt.isValid && endAt <= now) {
             await finishDraw(draw, data);
             writeDataPreservingLiveWinners(data);
+          }
+        }
+
+        if (draw.status === DRAW_STATUS.FINISHED && draw.finishPostError && draw.messageId) {
+          try {
+            await updateDrawPost(draw, true);
+            draw.finishPostError = null;
+            draw.finishPostUpdatedAt = new Date().toISOString();
+            writeDataPreservingLiveWinners(data);
+          } catch (error) {
+            draw.finishPostError = error.message || String(error);
+            console.warn(`[finish] повтор поста ${draw.id}: ${draw.finishPostError}`);
           }
         }
       } catch (error) {

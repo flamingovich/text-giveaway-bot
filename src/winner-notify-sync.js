@@ -77,6 +77,77 @@ function isFinishedDraw(draw) {
   return String(draw?.status || "") === "finished";
 }
 
+function firstMessageId(...draws) {
+  for (const draw of draws) {
+    if (draw?.messageId) {
+      return draw.messageId;
+    }
+  }
+  return null;
+}
+
+function pickParticipantIds(staleIds = [], liveIds = []) {
+  const seen = new Set();
+  const out = [];
+  const primary = (liveIds || []).length > (staleIds || []).length ? liveIds : staleIds;
+  const secondary = primary === staleIds ? liveIds : staleIds;
+  for (const id of [...(primary || []), ...(secondary || [])]) {
+    const key = String(id);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(id);
+  }
+  return out;
+}
+
+function newerTimestamp(left, right) {
+  const leftAt = Date.parse(left || "");
+  const rightAt = Date.parse(right || "");
+  if (!Number.isFinite(rightAt)) {
+    return false;
+  }
+  if (!Number.isFinite(leftAt)) {
+    return true;
+  }
+  return rightAt > leftAt;
+}
+
+function mergeDrawProgress(primary, secondary) {
+  const merged = { ...primary };
+  merged.winnerNotifications = mergeWinnerNotificationMaps(
+    primary.winnerNotifications,
+    secondary.winnerNotifications,
+  );
+  merged.participantIds = pickParticipantIds(primary.participantIds, secondary.participantIds);
+  merged.participantMeta = {
+    ...(secondary.participantMeta || {}),
+    ...(primary.participantMeta || {}),
+  };
+  merged.messageId = firstMessageId(primary, secondary);
+  if (!primary.messageId && secondary.messageId) {
+    merged.messageType = secondary.messageType || merged.messageType;
+    merged.awaitingChannelPost = false;
+  }
+
+  if (newerTimestamp(primary.postTimeLeftUpdatedAt, secondary.postTimeLeftUpdatedAt)) {
+    merged.postTimeLeftLabel = secondary.postTimeLeftLabel;
+    merged.postTimeLeftUpdatedAt = secondary.postTimeLeftUpdatedAt;
+  }
+
+  const actual = (merged.participantIds || []).length;
+  const posted = [primary.postParticipantCount, secondary.postParticipantCount]
+    .map(Number)
+    .filter(Number.isFinite);
+  if (posted.length > 0) {
+    const minPosted = Math.min(...posted);
+    merged.postParticipantCount = minPosted < actual ? minPosted : actual;
+  }
+
+  return merged;
+}
+
 function pickDrawForWrite(stale, live) {
   if (!live) {
     return stale;
@@ -86,22 +157,13 @@ function pickDrawForWrite(stale, live) {
   }
   const staleFinished = isFinishedDraw(stale);
   const liveFinished = isFinishedDraw(live);
-  if (staleFinished && !liveFinished) {
-    return stale;
-  }
   if (liveFinished && !staleFinished) {
-    return live;
+    return mergeDrawProgress(live, stale);
   }
-
-  const merged = { ...stale };
-  merged.winnerNotifications = mergeWinnerNotificationMaps(
-    stale.winnerNotifications,
-    live.winnerNotifications,
-  );
-  if (!staleFinished && (live.participantIds || []).length > (stale.participantIds || []).length) {
-    merged.participantIds = live.participantIds;
+  if (staleFinished && !liveFinished) {
+    return mergeDrawProgress(stale, live);
   }
-  return merged;
+  return mergeDrawProgress(stale, live);
 }
 
 function mergeLiveWinnerNotifications(staleData, liveData = readData()) {
@@ -144,6 +206,7 @@ module.exports = {
   winnerNotifyRank,
   pickWinnerNotify,
   pickDrawForWrite,
+  pickParticipantIds,
   mergeLiveWinnerNotifications,
   writeDataPreservingLiveWinners,
   getLiveWinnerNotify,
