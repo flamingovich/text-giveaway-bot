@@ -3222,7 +3222,11 @@ function recordDrawCreate(userId, fingerprint) {
 
 function isIgnorableTelegramEditError(error) {
   const message = String(error?.message || error || "");
-  return message.includes("message is not modified") || message.includes("Too Many Requests");
+  return (
+    message.includes("message is not modified") ||
+    message.includes("Too Many Requests") ||
+    message.includes("telegram_edit_timeout")
+  );
 }
 
 function isMissingTelegramMessageError(error) {
@@ -3237,6 +3241,28 @@ function isWrongTelegramMessageKindError(error) {
     message.includes("there is no text in the message") ||
     message.includes("message can't be edited")
   );
+}
+
+const TELEGRAM_EDIT_TIMEOUT_MS = Number(process.env.TELEGRAM_EDIT_TIMEOUT_MS || 8000);
+
+async function withTelegramEditTimeout(task, ms = TELEGRAM_EDIT_TIMEOUT_MS) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error("telegram_edit_timeout");
+          error.code = "telegram_edit_timeout";
+          reject(error);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 function overlayLiveDrawProgress(draw) {
@@ -3267,24 +3293,28 @@ async function editDrawPostAsCaption(draw, includeWinners, keyboard) {
     { includeWinners, forCaption: true },
     { ...keyboard },
   );
-  await bot.telegram.editMessageCaption(
-    draw.channelId,
-    draw.messageId,
-    undefined,
-    captionOpts.caption,
-    captionOpts,
+  await withTelegramEditTimeout(() =>
+    bot.telegram.editMessageCaption(
+      draw.channelId,
+      draw.messageId,
+      undefined,
+      captionOpts.caption,
+      captionOpts,
+    ),
   );
   draw.messageType = "photo";
 }
 
 async function editDrawPostAsText(draw, includeWinners, keyboard) {
   const textOpts = applyDrawPostContentToTelegramOpts(draw, { includeWinners }, { ...keyboard });
-  await bot.telegram.editMessageText(
-    draw.channelId,
-    draw.messageId,
-    undefined,
-    buildDrawMessage(draw, { includeWinners }),
-    textOpts,
+  await withTelegramEditTimeout(() =>
+    bot.telegram.editMessageText(
+      draw.channelId,
+      draw.messageId,
+      undefined,
+      buildDrawMessage(draw, { includeWinners }),
+      textOpts,
+    ),
   );
   draw.messageType = "text";
 }
@@ -4048,7 +4078,9 @@ async function refreshDrawPostKeyboard(draw) {
       ? getFinishedKeyboard(draw).reply_markup
       : getKeyboardMarkup(draw.id, count);
 
-  await bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup);
+  await withTelegramEditTimeout(() =>
+    bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup),
+  );
   markDrawPostParticipantCount(draw, count);
 }
 
@@ -4202,7 +4234,10 @@ async function syncStaleActiveDrawPostCounts(data) {
   }
 
   let updated = 0;
-  for (const draw of data.draws) {
+  const draws = [...(data.draws || [])].sort(
+    (left, right) => Number(isMegaDraw(left)) - Number(isMegaDraw(right)),
+  );
+  for (const draw of draws) {
     overlayLiveDrawProgress(draw);
     if (!isActiveDrawPostCountStale(draw)) {
       continue;
@@ -4238,8 +4273,11 @@ async function syncActiveDrawKeyboards() {
   const data = readData();
   let updated = 0;
   let failed = 0;
+  const draws = [...(data.draws || [])].sort(
+    (left, right) => Number(isMegaDraw(left)) - Number(isMegaDraw(right)),
+  );
 
-  for (const draw of data.draws) {
+  for (const draw of draws) {
     if (draw.status !== DRAW_STATUS.ACTIVE || !draw.messageId) {
       continue;
     }
@@ -4260,6 +4298,10 @@ async function syncActiveDrawKeyboards() {
         updated += 1;
         ok = true;
       } catch (error) {
+        if (isIgnorableTelegramEditError(error)) {
+          console.warn(`[sync] пропуск ${draw.id}: ${error.message}`);
+          break;
+        }
         if (attempt === 3) {
           failed += 1;
           console.error(`[sync] не удалось обновить ${draw.id} (канал ${draw.channelId}): ${error.message}`);
@@ -11816,22 +11858,12 @@ async function bootstrap() {
     }
     console.log("[boot] Telegram bot polling started");
     startScheduler();
-    await syncActiveDrawKeyboards();
-    await syncAllOrganizerPanelMenus();
-    const data = readData();
-    let bootDataChanged = await processWinnerConfirmTimeouts(data);
-    if (await processWinnerDepositAddressTimeouts(data)) {
-      bootDataChanged = true;
-    }
-    if (await processWinnerChannelSubscriptions(data, { force: true })) {
-      bootDataChanged = true;
-    }
-    if (await processWinnerPermanentDeliveryForfeitures(data)) {
-      bootDataChanged = true;
-    }
-    if (bootDataChanged) {
-      writeDataPreservingLiveWinners(data);
-    }
+    void syncActiveDrawKeyboards().catch((error) => {
+      console.warn("[boot] sync keyboards:", error.message);
+    });
+    void syncAllOrganizerPanelMenus().catch((error) => {
+      console.warn("[boot] sync menus:", error.message);
+    });
   }
   console.log(
     `[boot] participate example: ${getJoinParticipateUrl("draw_example") || "(нет URL — проверьте BOT_USERNAME и JOIN_MINI_APP_SHORT_NAME)"}`,
