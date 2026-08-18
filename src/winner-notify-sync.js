@@ -64,24 +64,67 @@ function pickWinnerNotify(stale, live) {
   return notifyTimestamp(live) >= notifyTimestamp(stale) ? live : stale;
 }
 
-function mergeLiveWinnerNotifications(staleData, liveData = readData()) {
-  const liveById = new Map((liveData.draws || []).map((draw) => [String(draw.id), draw]));
-  for (const draw of staleData.draws || []) {
-    const liveDraw = liveById.get(String(draw.id));
-    if (!liveDraw) {
-      continue;
-    }
-    const liveNotifies = liveDraw.winnerNotifications || {};
-    const staleNotifies = draw.winnerNotifications || {};
-    const userIds = new Set([...Object.keys(liveNotifies), ...Object.keys(staleNotifies)]);
-    if (!userIds.size) {
-      continue;
-    }
-    draw.winnerNotifications = { ...staleNotifies };
-    for (const userId of userIds) {
-      draw.winnerNotifications[userId] = pickWinnerNotify(staleNotifies[userId], liveNotifies[userId]);
-    }
+function mergeWinnerNotificationMaps(staleNotifies = {}, liveNotifies = {}) {
+  const userIds = new Set([...Object.keys(staleNotifies), ...Object.keys(liveNotifies)]);
+  const merged = {};
+  for (const userId of userIds) {
+    merged[userId] = pickWinnerNotify(staleNotifies[userId], liveNotifies[userId]);
   }
+  return merged;
+}
+
+function isFinishedDraw(draw) {
+  return String(draw?.status || "") === "finished";
+}
+
+function pickDrawForWrite(stale, live) {
+  if (!live) {
+    return stale;
+  }
+  if (!stale) {
+    return live;
+  }
+  const staleFinished = isFinishedDraw(stale);
+  const liveFinished = isFinishedDraw(live);
+  if (staleFinished && !liveFinished) {
+    return stale;
+  }
+  if (liveFinished && !staleFinished) {
+    return live;
+  }
+
+  const merged = { ...stale };
+  merged.winnerNotifications = mergeWinnerNotificationMaps(
+    stale.winnerNotifications,
+    live.winnerNotifications,
+  );
+  if (!staleFinished && (live.participantIds || []).length > (stale.participantIds || []).length) {
+    merged.participantIds = live.participantIds;
+  }
+  return merged;
+}
+
+function mergeLiveWinnerNotifications(staleData, liveData = readData()) {
+  const staleDraws = staleData.draws || [];
+  const liveDraws = liveData.draws || [];
+  const liveById = new Map(liveDraws.map((draw) => [String(draw.id), draw]));
+  const seen = new Set();
+  const mergedDraws = [];
+
+  for (const stale of staleDraws) {
+    const id = String(stale.id);
+    seen.add(id);
+    mergedDraws.push(pickDrawForWrite(stale, liveById.get(id)));
+  }
+  for (const live of liveDraws) {
+    const id = String(live.id);
+    if (seen.has(id)) {
+      continue;
+    }
+    mergedDraws.push(live);
+  }
+
+  staleData.draws = mergedDraws;
   return staleData;
 }
 
@@ -100,6 +143,7 @@ module.exports = {
   hasSavedWinnerDepositAddress,
   winnerNotifyRank,
   pickWinnerNotify,
+  pickDrawForWrite,
   mergeLiveWinnerNotifications,
   writeDataPreservingLiveWinners,
   getLiveWinnerNotify,

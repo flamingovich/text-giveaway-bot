@@ -2253,7 +2253,7 @@ function getActivePostDurationParts(draw) {
   const timeLeft = formatTimeUntilDrawEndLabel(draw);
   return {
     endManual: false,
-    durationLabel: timeLeft || "1 минуту",
+    durationLabel: timeLeft || draw.postTimeLeftLabel || "меньше минуты",
   };
 }
 
@@ -4836,88 +4836,93 @@ async function startJoinFlow(ctx, drawId) {
   await ctx.reply("Участие временно недоступно. Попробуйте позже.");
 }
 
-let schedulerTickRunning = false;
+let lifecycleJobRunning = false;
+let backgroundJobRunning = false;
 let schedulerTimer = null;
 
-async function schedulerTick() {
-  if (schedulerTickRunning) {
-    console.warn("[scheduler] skip overlapping tick");
+async function runDueDrawLifecycle() {
+  if (lifecycleJobRunning) {
     return;
   }
-  schedulerTickRunning = true;
+  lifecycleJobRunning = true;
   try {
-  runDrawArchiveMaintenance();
+    runDrawArchiveMaintenance();
+    const data = readData();
+    const now = DateTime.now().setZone(TIMEZONE);
+
+    for (const draw of data.draws) {
+      try {
+        if (draw.status === DRAW_STATUS.SCHEDULED) {
+          const publishAt = DateTime.fromISO(draw.publishAt, { zone: TIMEZONE });
+          if (publishAt.isValid && publishAt <= now) {
+            await publishDraw(draw);
+            writeDataPreservingLiveWinners(data);
+          }
+        }
+
+        if (draw.status === DRAW_STATUS.ACTIVE && draw.endAt) {
+          const endAt = DateTime.fromISO(draw.endAt, { zone: TIMEZONE });
+          if (endAt.isValid && endAt <= now) {
+            await finishDraw(draw, data);
+            writeDataPreservingLiveWinners(data);
+          }
+        }
+      } catch (error) {
+        console.error(`Ошибка обработки розыгрыша ${draw.id}:`, error.message);
+      }
+    }
+  } finally {
+    lifecycleJobRunning = false;
+  }
+}
+
+async function runSchedulerBackgroundJobs() {
   const data = readData();
-  const now = DateTime.now().setZone(TIMEZONE);
   let hasChanges = false;
 
-  for (const draw of data.draws) {
-    try {
-      if (draw.status === DRAW_STATUS.SCHEDULED) {
-        const publishAt = DateTime.fromISO(draw.publishAt, { zone: TIMEZONE });
-        if (publishAt.isValid && publishAt <= now) {
-          await publishDraw(draw);
-          hasChanges = true;
-        }
-      }
-
-      if (draw.status === DRAW_STATUS.ACTIVE && draw.endAt) {
-        const endAt = DateTime.fromISO(draw.endAt, { zone: TIMEZONE });
-        if (endAt.isValid && endAt <= now) {
-          await finishDraw(draw, data);
-          hasChanges = true;
-        }
-      }
-    } catch (error) {
-      console.error(`Ошибка обработки розыгрыша ${draw.id}:`, error.message);
-    }
-  }
-
-  const timeoutChanges = await processWinnerConfirmTimeouts(data);
-  if (timeoutChanges) {
+  if (await processWinnerConfirmTimeouts(data)) {
     hasChanges = true;
   }
-
-  const addressTimeoutChanges = await processWinnerDepositAddressTimeouts(data);
-  if (addressTimeoutChanges) {
+  if (await processWinnerDepositAddressTimeouts(data)) {
     hasChanges = true;
   }
-
-  const subscriptionChanges = await processWinnerChannelSubscriptions(data);
-  if (subscriptionChanges) {
+  if (await processWinnerChannelSubscriptions(data)) {
     hasChanges = true;
   }
-
-  const permanentDeliveryChanges = await processWinnerPermanentDeliveryForfeitures(data);
-  if (permanentDeliveryChanges) {
+  if (await processWinnerPermanentDeliveryForfeitures(data)) {
     hasChanges = true;
   }
-
-  const postCountChanges = await syncStaleActiveDrawPostCounts(data);
-  if (postCountChanges) {
+  if (await syncStaleActiveDrawPostCounts(data)) {
     hasChanges = true;
   }
-
-  const countdownPostChanges = await syncActiveDrawCountdownPosts(data);
-  if (countdownPostChanges) {
+  if (await syncActiveDrawCountdownPosts(data)) {
     hasChanges = true;
   }
-
-  const reminderCountdownChanges = await syncDrawReminderCountdowns(data);
-  if (reminderCountdownChanges) {
+  if (await syncDrawReminderCountdowns(data)) {
     hasChanges = true;
   }
-
-  const digestCountdownChanges = await syncActiveDrawsDigestCountdowns(data);
-  if (digestCountdownChanges) {
+  if (await syncActiveDrawsDigestCountdowns(data)) {
     hasChanges = true;
   }
 
   if (hasChanges) {
     writeDataPreservingLiveWinners(data);
   }
+}
+
+async function schedulerTick() {
+  await runDueDrawLifecycle();
+
+  if (backgroundJobRunning) {
+    return;
+  }
+  backgroundJobRunning = true;
+  try {
+    await runSchedulerBackgroundJobs();
+  } catch (error) {
+    console.error("[scheduler] background:", error.message);
   } finally {
-    schedulerTickRunning = false;
+    backgroundJobRunning = false;
   }
 }
 
@@ -4930,6 +4935,9 @@ function startScheduler() {
       console.error("[scheduler]", error.message);
     });
   }, CHECK_INTERVAL_MS);
+  schedulerTick().catch((error) => {
+    console.error("[scheduler]", error.message);
+  });
   console.log(`[boot] scheduler started (${CHECK_INTERVAL_MS}ms)`);
 }
 
