@@ -311,6 +311,7 @@ const JOIN_STEP_ICONS = {
   captcha: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`,
   registration: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>`,
   trc20: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>`,
+  notify: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`,
   done: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>`,
 };
 
@@ -333,10 +334,17 @@ function renderJoinChannelStepCard(bodyHtml) {
   </div>`;
 }
 
+function renderJoinNotifyStepCard(bodyHtml) {
+  return `<div id="step-notify" class="card join-step-card join-step join-channel-card hidden" data-step="notify">
+    <div class="join-step-body">${bodyHtml}</div>
+  </div>`;
+}
+
 function renderJoinPage(drawId, draw, project, options = {}) {
   const isPreview = drawId === "preview";
   const recaptchaSiteKey = options.recaptchaSiteKey || "";
   const apiBase = String(options.apiBase || "").replace(/\/$/, "");
+  const botUsername = String(options.botUsername || "").replace(/^@/, "");
   const refLink = escapeHtml(project?.refLink || "");
   const projectName = escapeHtml(project?.name || "проект");
   const askProjectIdOnJoin =
@@ -430,6 +438,25 @@ function renderJoinPage(drawId, draw, project, options = {}) {
               <span class="join-btn-label">Я подписался</span>
             </button>
           </div>
+        </div>`,
+      )}
+
+      ${renderJoinNotifyStepCard(
+        `<div class="join-channel-panel join-notify-panel">
+          <div class="join-channel-hero">
+            <div class="join-channel-avatar-wrap" aria-hidden="true">${JOIN_DONE_BELL_ICON}</div>
+          </div>
+          <h2 class="join-step-title">Уведомление о победе</h2>
+          <p class="join-channel-lead">Бот может написать о выигрыше только если вы разрешите сообщения. Иначе письмо о победе не дойдёт.</p>
+          <div class="join-channel-actions join-actions">
+            <button type="button" class="join-btn join-btn-primary" id="joinNotifyAllowBtn">
+              <span class="join-btn-label">Разрешить уведомления</span>
+            </button>
+            <button type="button" class="join-btn join-btn-secondary${botUsername ? "" : " hidden"}" id="joinNotifyOpenBotBtn">
+              <span class="join-btn-label">Открыть бота</span>
+            </button>
+          </div>
+          <p class="join-notify-error hidden" id="joinNotifyError" role="status"></p>
         </div>`,
       )}
 
@@ -527,7 +554,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           <div class="join-done-tips">
             <div class="join-done-tip">
               <span class="join-done-tip-icon">${JOIN_DONE_BELL_ICON}</span>
-              <p class="join-done-tip-text">При победе вам придёт уведомление о выигрыше.</p>
+              <p class="join-done-tip-text">Если разрешили уведомления, при победе бот напишет в личку.</p>
             </div>
             <div class="join-done-tip">
               <span class="join-done-tip-icon">${JOIN_DONE_CLOCK_ICON}</span>
@@ -591,6 +618,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     const PROJECT_ID_GUIDE_STEPS = ${JSON.stringify(projectIdGuideSteps)};
     const PROJECT_ID_INPUT_CONFIG = ${JSON.stringify(projectIdInputConfig)};
     const RECAPTCHA_SITE_KEY = ${JSON.stringify(recaptchaSiteKey)};
+    const BOT_USERNAME = ${JSON.stringify(botUsername)};
     const PREVIEW_WALLET_STEP = ${JSON.stringify(previewWalletStep)};
     const tg = window.Telegram?.WebApp;
 
@@ -912,6 +940,140 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     const JOIN_STEPS = ${JSON.stringify(JOIN_FLOW_STEPS)};
     let activeStep = null;
     let stepAnimTimer = null;
+    let pendingJoinStep = null;
+    let writeAccessGranted = false;
+    let openedBotForNotify = false;
+
+    function hasWriteAccess() {
+      if (PAGE_MODE === "preview") return true;
+      if (writeAccessGranted) return true;
+      try {
+        return window.Telegram?.WebApp?.initDataUnsafe?.user?.allows_write_to_pm === true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function botNotifyStartUrl() {
+      const name = String(BOT_USERNAME || "").replace(/^@/, "");
+      if (!name) return "";
+      return "https://t.me/" + name + "?start=notify";
+    }
+
+    function requestTelegramWriteAccess() {
+      return new Promise((resolve) => {
+        if (hasWriteAccess()) {
+          writeAccessGranted = true;
+          resolve(true);
+          return;
+        }
+        const webApp = window.Telegram?.WebApp;
+        if (typeof webApp?.requestWriteAccess !== "function") {
+          resolve(false);
+          return;
+        }
+        let settled = false;
+        const finish = (ok) => {
+          if (settled) return;
+          settled = true;
+          if (ok) writeAccessGranted = true;
+          resolve(Boolean(ok));
+        };
+        const timer = setTimeout(() => finish(hasWriteAccess()), 12000);
+        try {
+          const ret = webApp.requestWriteAccess((result) => {
+            clearTimeout(timer);
+            const granted =
+              result === true ||
+              result === "allowed" ||
+              result?.status === "allowed" ||
+              result?.granted === true;
+            finish(granted || hasWriteAccess());
+          });
+          if (ret && typeof ret.then === "function") {
+            ret
+              .then((result) => {
+                clearTimeout(timer);
+                const granted =
+                  result === true ||
+                  result === "allowed" ||
+                  result?.status === "allowed" ||
+                  result?.granted === true;
+                finish(granted || hasWriteAccess());
+              })
+              .catch(() => {
+                clearTimeout(timer);
+                finish(false);
+              });
+          }
+        } catch (_error) {
+          clearTimeout(timer);
+          finish(false);
+        }
+      });
+    }
+
+    function showNotifyError(text) {
+      const err = document.getElementById("joinNotifyError");
+      if (!err) return;
+      err.textContent = String(text || "").trim();
+      err.classList.toggle("hidden", !err.textContent);
+    }
+
+    function canRequestWriteAccess() {
+      return typeof window.Telegram?.WebApp?.requestWriteAccess === "function";
+    }
+
+    function openBotForNotify() {
+      const url = botNotifyStartUrl();
+      if (!url) {
+        showNotifyError("Напишите боту /start в личку, затем вернитесь сюда.");
+        return;
+      }
+      openedBotForNotify = true;
+      const tgApp = window.Telegram?.WebApp;
+      if (tgApp?.openTelegramLink) {
+        tgApp.openTelegramLink(url);
+        return;
+      }
+      window.location.href = url;
+    }
+
+    function continueAfterWriteAccess() {
+      writeAccessGranted = true;
+      const pending = pendingJoinStep;
+      pendingJoinStep = null;
+      if (pending?.step) {
+        applyJoinStep(pending.step, pending.payload);
+      }
+    }
+
+    function tryResumeAfterNotify() {
+      if (activeStep !== "notify" || !pendingJoinStep) return;
+      if (hasWriteAccess() || openedBotForNotify) {
+        continueAfterWriteAccess();
+      }
+    }
+
+    function showNotifyStep() {
+      hideLoading();
+      hideMessage();
+      showNotifyError("");
+      const allowBtn = document.getElementById("joinNotifyAllowBtn");
+      const openBtn = document.getElementById("joinNotifyOpenBotBtn");
+      const canRequest = canRequestWriteAccess();
+      if (allowBtn) {
+        allowBtn.disabled = false;
+        const label = allowBtn.querySelector(".join-btn-label");
+        if (label) {
+          label.textContent = canRequest ? "Разрешить уведомления" : "Открыть бота";
+        }
+      }
+      if (openBtn) {
+        openBtn.classList.toggle("hidden", !canRequest || !BOT_USERNAME);
+      }
+      showStep("notify");
+    }
 
     function updateProgress(stepName) {
       const index = JOIN_STEPS.indexOf(stepName);
@@ -1548,9 +1710,15 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         }
       };
       document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) refreshIfDone();
+        if (!document.hidden) {
+          refreshIfDone();
+          tryResumeAfterNotify();
+        }
       });
-      window.addEventListener("focus", refreshIfDone);
+      window.addEventListener("focus", () => {
+        refreshIfDone();
+        tryResumeAfterNotify();
+      });
       tg?.onEvent?.("viewportChanged", refreshIfDone);
     }
     bindDoneLiveVisibilityRefresh();
@@ -1883,12 +2051,25 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     function handleStep(step, payload) {
+      if (PAGE_MODE !== "preview" && step !== "notify" && !hasWriteAccess()) {
+        pendingJoinStep = { step, payload: payload || {} };
+        showNotifyStep();
+        return;
+      }
+      applyJoinStep(step, payload);
+    }
+
+    function applyJoinStep(step, payload) {
       if (step === "captcha") {
         renderCaptcha();
         return;
       }
       if (step === "channel") {
         showChannelStep(payload || {});
+        return;
+      }
+      if (step === "notify") {
+        showNotifyStep();
         return;
       }
       if (step === "registration") {
@@ -2114,6 +2295,32 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     });
 
+    bindClick("joinNotifyAllowBtn", async () => {
+      const btn = document.getElementById("joinNotifyAllowBtn");
+      showNotifyError("");
+      if (!canRequestWriteAccess()) {
+        openBotForNotify();
+        return;
+      }
+      if (btn) btn.disabled = true;
+      try {
+        const granted = await requestTelegramWriteAccess();
+        if (granted) {
+          continueAfterWriteAccess();
+          return;
+        }
+        showNotifyError("Нужно разрешить сообщения — иначе бот не напишет о победе.");
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+
+    bindClick("joinNotifyOpenBotBtn", (event) => {
+      event.preventDefault();
+      showNotifyError("");
+      openBotForNotify();
+    });
+
     bindClick("joinChannelOpenBtn", (event) => {
       const url = document.getElementById("joinChannelOpenBtn")?.href || "";
       if (!url || url === "#") {
@@ -2185,6 +2392,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         const steps = [
           { id: "captcha", label: "Капча" },
           { id: "channel", label: "Канал" },
+          { id: "notify", label: "ЛС" },
           { id: "registration", label: "Рег." },
           { id: "registration_id", label: "Рег.+ID" },
           { id: "registration_id_pd", label: "Рег.+ID PD" },
@@ -2225,6 +2433,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
                 channelUrl: "https://t.me/demo_channel",
                 channelPhotoUrl: "",
               });
+              return;
+            }
+            if (id === "notify") {
+              showNotifyStep();
               return;
             }
             if (id === "profile") {
@@ -2843,6 +3055,7 @@ function registerJoinMiniApp(app, deps) {
   const joinPageOptions = () => ({
     recaptchaSiteKey: RECAPTCHA_SITE_KEY,
     apiBase: deps.WEB_PUBLIC_URL || "",
+    botUsername: BOT_USERNAME,
   });
 
   app.get("/join/app", (req, res) => {
@@ -3334,7 +3547,12 @@ function registerJoinMiniApp(app, deps) {
     };
 
     app.get("/dev/preview/join", (_req, res) => {
-      res.type("html").send(renderJoinPage("preview", mockDraw, mockProject, { recaptchaSiteKey: RECAPTCHA_SITE_KEY }));
+      res.type("html").send(
+        renderJoinPage("preview", mockDraw, mockProject, {
+          recaptchaSiteKey: RECAPTCHA_SITE_KEY,
+          botUsername: BOT_USERNAME,
+        }),
+      );
     });
 
     app.get("/dev/preview/join-pd", (_req, res) => {
@@ -3343,7 +3561,7 @@ function registerJoinMiniApp(app, deps) {
           "preview",
           mockDraw,
           { name: "Pokerdom", templateSlug: "pokerdom", refLink: "https://example.com/pd" },
-          { recaptchaSiteKey: RECAPTCHA_SITE_KEY, askProjectIdOnJoin: true },
+          { recaptchaSiteKey: RECAPTCHA_SITE_KEY, askProjectIdOnJoin: true, botUsername: BOT_USERNAME },
         ),
       );
     });

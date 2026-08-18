@@ -2091,6 +2091,26 @@ function getJoinFlowStyles() {
       gap: 10px;
     }
 
+    body.join-flow .join-notify-panel .join-channel-avatar-wrap svg {
+      width: 32px;
+      height: 32px;
+      color: var(--tg-theme-button-color, #325fff);
+    }
+
+    body.join-flow .join-notify-panel .join-step-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    body.join-flow .join-notify-error {
+      margin: 0;
+      width: 100%;
+      font-size: 13px;
+      line-height: 1.4;
+      color: #d93025;
+    }
+
     body.join-flow .join-done-boost-btn {
       width: 100%;
       margin-top: 8px;

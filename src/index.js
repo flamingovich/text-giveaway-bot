@@ -11317,6 +11317,11 @@ bot.start(async (ctx) => {
     return;
   }
 
+  if (payload === "notify") {
+    await ctx.reply("Готово. Вернитесь в розыгрыш — бот сможет написать о победе.");
+    return;
+  }
+
   if (payload === "link_channel") {
     await ctx.reply(
       [
