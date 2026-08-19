@@ -20,6 +20,7 @@ const {
   convertRubToUsdt,
 } = require("./rub-usdt-rate");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
+const { applyTelegramApiTimeout } = require("./telegram-timeout");
 const { tryRecordDrawReferral, computeJoinWinChance } = require("./join-referrals");
 const {
   registerParticipantProfile,
@@ -142,6 +143,7 @@ if (ADMIN_IDS.length === 0 || ADMIN_IDS.every((id) => id === 123456789)) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
+applyTelegramApiTimeout(bot.telegram);
 applyNoLinkPreview(bot.telegram);
 const webAuth = createWebAuth({
   botToken: BOT_TOKEN,
@@ -3597,8 +3599,8 @@ async function sendWinnerVerificationNotificationWithRetry(draw, userId, sentBy,
   throw lastError;
 }
 
-async function notifyWinnersOnFinish(draw) {
-  for (const winnerId of draw.winnerIds || []) {
+async function notifyWinnersOnFinish(draw, winnerIds = null) {
+  for (const winnerId of winnerIds || draw.winnerIds || []) {
     try {
       await enrichUserAvatar(winnerId);
       const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, winnerId, {
@@ -5001,11 +5003,35 @@ let lifecycleJobRunning = false;
 let backgroundJobRunning = false;
 let schedulerTimer = null;
 
+const SCHEDULER_JOB_STUCK_MS = Number(process.env.SCHEDULER_JOB_STUCK_MS || 180000);
+let lifecycleJobStartedAt = 0;
+let backgroundJobStartedAt = 0;
+let lifecycleRunToken = 0;
+let backgroundRunToken = 0;
+
+// A hung Telegram call used to hold these flags forever, which silently froze
+// every publish and finish. Take the lock back once a pass overruns.
+function schedulerJobStuckFor(startedAt) {
+  if (!startedAt) {
+    return 0;
+  }
+  const heldMs = Date.now() - startedAt;
+  return heldMs > SCHEDULER_JOB_STUCK_MS ? heldMs : 0;
+}
+
 async function runDueDrawLifecycle() {
   if (lifecycleJobRunning) {
-    return;
+    const stuckMs = schedulerJobStuckFor(lifecycleJobStartedAt);
+    if (!stuckMs) {
+      return;
+    }
+    console.error(
+      `[scheduler] lifecycle завис на ${Math.round(stuckMs / 1000)}с — перезапускаю проход`,
+    );
   }
   lifecycleJobRunning = true;
+  lifecycleJobStartedAt = Date.now();
+  const runToken = (lifecycleRunToken += 1);
   try {
     runDrawArchiveMaintenance();
     const data = readData();
@@ -5029,6 +5055,19 @@ async function runDueDrawLifecycle() {
           }
         }
 
+        if (draw.status === DRAW_STATUS.FINISHED && draw.winnerIds?.length) {
+          const pendingWinnerIds = draw.winnerIds.filter(
+            (winnerId) => !draw.winnerNotifications?.[String(winnerId)],
+          );
+          if (pendingWinnerIds.length > 0) {
+            console.warn(
+              `[finish] ${draw.id}: без уведомления ${pendingWinnerIds.length} победителей — досылаю`,
+            );
+            await notifyWinnersOnFinish(draw, pendingWinnerIds);
+            writeDataPreservingLiveWinners(data);
+          }
+        }
+
         if (draw.status === DRAW_STATUS.FINISHED && draw.finishPostError && draw.messageId) {
           try {
             await updateDrawPost(draw, true);
@@ -5045,7 +5084,10 @@ async function runDueDrawLifecycle() {
       }
     }
   } finally {
-    lifecycleJobRunning = false;
+    if (lifecycleRunToken === runToken) {
+      lifecycleJobRunning = false;
+      lifecycleJobStartedAt = 0;
+    }
   }
 }
 
@@ -5087,15 +5129,26 @@ async function schedulerTick() {
   await runDueDrawLifecycle();
 
   if (backgroundJobRunning) {
-    return;
+    const stuckMs = schedulerJobStuckFor(backgroundJobStartedAt);
+    if (!stuckMs) {
+      return;
+    }
+    console.error(
+      `[scheduler] background завис на ${Math.round(stuckMs / 1000)}с — перезапускаю проход`,
+    );
   }
   backgroundJobRunning = true;
+  backgroundJobStartedAt = Date.now();
+  const runToken = (backgroundRunToken += 1);
   try {
     await runSchedulerBackgroundJobs();
   } catch (error) {
     console.error("[scheduler] background:", error.message);
   } finally {
-    backgroundJobRunning = false;
+    if (backgroundRunToken === runToken) {
+      backgroundJobRunning = false;
+      backgroundJobStartedAt = 0;
+    }
   }
 }
 
