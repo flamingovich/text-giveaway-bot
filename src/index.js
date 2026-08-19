@@ -3426,8 +3426,35 @@ function pickWinners(draw) {
   return participants.slice(0, Math.min(draw.winnersCount, participants.length));
 }
 
+// A snapshot taken before another finisher wrote still says "active", so
+// finishing twice used to roll a second set of winners and message them too.
+// Adopt whoever was already drawn instead of drawing again.
+function adoptWinnersAlreadyDrawn(draw) {
+  if (draw.status === DRAW_STATUS.FINISHED && Array.isArray(draw.winnerIds)) {
+    return true;
+  }
+
+  const liveDraw = (readData().draws || []).find(
+    (item) => String(item.id) === String(draw.id),
+  );
+  if (
+    liveDraw?.status !== DRAW_STATUS.FINISHED ||
+    !Array.isArray(liveDraw.winnerIds) ||
+    liveDraw.winnerIds.length === 0
+  ) {
+    return false;
+  }
+
+  draw.winnerIds = liveDraw.winnerIds;
+  draw.winnerNotifications = liveDraw.winnerNotifications || {};
+  draw.status = DRAW_STATUS.FINISHED;
+  draw.finishedAt = liveDraw.finishedAt || new Date().toISOString();
+  console.warn(`[finish] ${draw.id} уже завершён — беру ранее выбранных победителей`);
+  return true;
+}
+
 async function finishDraw(draw, data = null) {
-  const alreadyFinished = draw.status === DRAW_STATUS.FINISHED && Array.isArray(draw.winnerIds);
+  const alreadyFinished = adoptWinnersAlreadyDrawn(draw);
   if (!alreadyFinished) {
     draw.winnerIds = pickWinners(draw);
     draw.winnerNotifications = {};
@@ -4722,9 +4749,7 @@ async function addUserToDraw(drawId, userId, participationMeta = null) {
   if (drawHasParticipant(draw, userId)) {
     if (participationMeta) {
       upsertDrawParticipantMeta(draw, userId, participationMeta);
-      // Joins are the hottest writer: a plain full-document write here wipes
-      // winner notifications and participants saved since this snapshot.
-      writeDataPreservingLiveWinners(data);
+      writeData(data);
     }
     return { ok: true, cbMessage: "Вы уже участвуете ✅", already: true };
   }
@@ -4736,7 +4761,7 @@ async function addUserToDraw(drawId, userId, participationMeta = null) {
       tryRecordDrawReferral(draw, participationMeta.referrerId, userId);
     }
   }
-  writeDataPreservingLiveWinners(data);
+  writeData(data);
 
   scheduleDrawPostUpdate(draw.id, false);
   void enrichUserAvatar(userId);

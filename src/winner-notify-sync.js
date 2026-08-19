@@ -141,8 +141,10 @@ function mergeDrawProgress(primary, secondary) {
     .map(Number)
     .filter(Number.isFinite);
   if (posted.length > 0) {
-    const minPosted = Math.min(...posted);
-    merged.postParticipantCount = minPosted < actual ? minPosted : actual;
+    // This tracks what the post already shows. Keeping the lower of the two
+    // pinned it at the oldest value, so the button never caught up and every
+    // sync retried the same edit. The higher value is the one already posted.
+    merged.postParticipantCount = Math.min(Math.max(...posted), actual);
   }
 
   return merged;
