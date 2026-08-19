@@ -3660,6 +3660,7 @@ async function notifyWinnerOnFinish(draw, winnerId) {
 
 async function notifyWinnersOnFinish(draw, winnerIds = null) {
   for (const winnerId of winnerIds || draw.winnerIds || []) {
+    console.warn(`[finish] беру победителя draw=${draw.id} user=${winnerId}`);
     try {
       await withWinnerNotifyDeadline(() => notifyWinnerOnFinish(draw, winnerId));
     } catch (error) {
