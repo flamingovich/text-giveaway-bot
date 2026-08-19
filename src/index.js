@@ -3035,17 +3035,100 @@ function normalizePublishTarget(value) {
   return value === "dm" ? "dm" : "channel";
 }
 
+// Розыгрыш идёт, но поста в канале за ним не закреплено: публикация оборвалась
+// без ответа Telegram. Пост либо есть и его нужно привязать, либо его нет
+// и его нужно опубликовать заново.
+function drawNeedsChannelRepost(draw) {
+  return (
+    draw?.status === DRAW_STATUS.ACTIVE &&
+    !draw?.messageId &&
+    Boolean(draw?.awaitingChannelPost) &&
+    normalizePublishTarget(draw?.publishTarget) === "channel"
+  );
+}
+
+// Telegram отказал по существу (нет прав, канал не найден, битый запрос) —
+// поста в канале точно нет, публикацию можно повторить без риска дубля.
+function isDefiniteTelegramRejection(error) {
+  const code = Number(error?.response?.error_code);
+  return code === 400 || code === 403 || code === 404;
+}
+
+function markDrawPublishFailed(draw, error) {
+  draw.publishFailedAt = new Date().toISOString();
+  draw.publishFailedReason = String(error?.message || error || "").slice(0, 300);
+
+  if (isDefiniteTelegramRejection(error)) {
+    draw.status = DRAW_STATUS.SCHEDULED;
+    draw.awaitingChannelPost = false;
+    return;
+  }
+
+  // Ответа нет (таймаут, обрыв, 5xx). Пост мог уже уйти в канал, поэтому
+  // повторная отправка дала бы дубль: ждём привязку существующего поста.
+  draw.status = DRAW_STATUS.ACTIVE;
+  draw.awaitingChannelPost = true;
+}
+
+// Состояние публикации нужно сохранить прямо здесь: вызывающий код на ошибке
+// до writeData не доходит, и розыгрыш оставался активным без messageId навсегда.
+function persistDrawPublishState(draw) {
+  const fresh = readData();
+  const freshDraw = (fresh.draws || []).find((item) => String(item.id) === String(draw.id));
+  if (!freshDraw) {
+    return;
+  }
+
+  freshDraw.status = draw.status;
+  freshDraw.publishTarget = draw.publishTarget;
+  freshDraw.awaitingChannelPost = draw.awaitingChannelPost;
+  freshDraw.messageId = draw.messageId ?? freshDraw.messageId ?? null;
+  freshDraw.messageType = draw.messageType || freshDraw.messageType;
+  freshDraw.publishFailedAt = draw.publishFailedAt ?? null;
+  freshDraw.publishFailedReason = draw.publishFailedReason ?? null;
+  writeData(fresh);
+}
+
+async function notifyOrganizerAboutMissingPostLink(draw) {
+  const organizerId = Number(draw.ownerId || draw.createdBy);
+  if (WEB_ONLY || !Number.isInteger(organizerId)) {
+    return;
+  }
+
+  await bot.telegram.sendMessage(
+    organizerId,
+    [
+      "⚠️ Telegram не подтвердил публикацию поста.",
+      `Розыгрыш: ${formatDrawPrizePlain(draw)} · ${formatDrawChannelLabel(draw.channelId)}`,
+      "",
+      "Если пост в канале уже появился — перешлите его сюда, бот привяжет его и продолжит обновлять счётчик участников.",
+      "Если поста нет — нажмите «Опубликовать пост заново» в панели.",
+    ].join("\n"),
+  );
+}
+
 async function publishDraw(draw, target) {
   const publishTarget = normalizePublishTarget(target ?? draw.publishTarget);
   draw.publishTarget = publishTarget;
 
-  if (publishTarget === "channel") {
-    await publishDrawToChannel(draw);
-  } else {
-    await publishDrawToOrganizer(draw);
+  try {
+    if (publishTarget === "channel") {
+      await publishDrawToChannel(draw);
+    } else {
+      await publishDrawToOrganizer(draw);
+    }
+  } catch (error) {
+    markDrawPublishFailed(draw, error);
+    persistDrawPublishState(draw);
+    if (draw.awaitingChannelPost) {
+      notifyOrganizerAboutMissingPostLink(draw).catch(() => {});
+    }
+    throw error;
   }
 
   draw.status = DRAW_STATUS.ACTIVE;
+  draw.publishFailedAt = null;
+  draw.publishFailedReason = null;
 }
 
 async function sendDrawDraftToOrganizer(draw, organizerId) {
@@ -3167,6 +3250,87 @@ async function tryLinkDrawFromChannelPost(post) {
   writeData(data);
   console.log(`[draw] пост в канале привязан: ${drawId} → message ${post.message_id}`);
   return true;
+}
+
+function findDrawForForwardedPost(draws, userId, forwardedChat, message) {
+  const candidates = (draws || []).filter((draw) => {
+    if (draw.messageId) {
+      return false;
+    }
+    if (draw.status !== DRAW_STATUS.ACTIVE && draw.status !== DRAW_STATUS.SCHEDULED) {
+      return false;
+    }
+    if (!channelIdsMatch(draw.channelId, forwardedChat)) {
+      return false;
+    }
+    return itemBelongsToOwner(draw, userId) || isPlatformAdmin(userId);
+  });
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  // Пересланный пост обычно сохраняет кнопку со ссылкой — по ней розыгрыш
+  // определяется точно. Без кнопки привязываем, только если кандидат один.
+  const markupDrawId = extractDrawIdFromParticipateMarkup(message?.reply_markup);
+  if (markupDrawId) {
+    return candidates.find((draw) => draw.id === markupDrawId) || null;
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+// Если пост уже висит в канале, а бот его id не знает, автопривязка по
+// channel_post не сработает: события для старого поста больше не будет.
+// Пересылка поста боту в личку закрывает этот случай без ручной правки базы.
+async function tryLinkDrawFromForwardedPost(userId, forwardedChat, message) {
+  const messageId = Number(message?.forward_from_message_id);
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    return null;
+  }
+
+  const data = readData();
+  const draw = findDrawForForwardedPost(data.draws, userId, forwardedChat, message);
+  if (!draw) {
+    return null;
+  }
+
+  // Чужое сообщение Telegram редактировать не даст. Пробная правка кнопки —
+  // единственный способ убедиться, что переслали именно пост бота, а не
+  // случайное сообщение из канала: иначе розыгрыш ушёл бы в мёртвую привязку.
+  try {
+    await bot.telegram.editMessageReplyMarkup(
+      draw.channelId,
+      messageId,
+      undefined,
+      getKeyboardMarkup(draw.id, getDrawParticipantCount(draw)),
+    );
+  } catch (error) {
+    // «not modified» приходит только на своё же сообщение — это тоже успех.
+    if (!/message is not modified/i.test(String(error?.message || ""))) {
+      console.warn(`[draw] пересланное сообщение не подошло для ${draw.id}: ${error.message}`);
+      return null;
+    }
+  }
+
+  const linked = await linkDrawChannelPost(draw, {
+    message_id: messageId,
+    chat: forwardedChat,
+    photo: message.photo,
+    reply_markup: message.reply_markup,
+  });
+  if (!linked) {
+    return null;
+  }
+
+  markDrawPostParticipantCount(draw);
+  draw.publishFailedAt = null;
+  draw.publishFailedReason = null;
+  writeDataPreservingLiveWinners(data);
+  console.log(`[draw] пост привязан пересылкой: ${draw.id} → message ${messageId}`);
+
+  // Текст поста остался с обратным отсчётом на момент публикации.
+  scheduleDrawPostUpdate(draw.id);
+  return draw;
 }
 
 const DRAW_POST_UPDATE_DEBOUNCE_MS = Number(process.env.DRAW_POST_UPDATE_DEBOUNCE_MS || 8000);
@@ -6114,7 +6278,8 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = n
     .map((draw) => {
       const project = projects.find((item) => item.id === draw.projectId);
       const panelStatus = getDrawPanelStatusInfo(draw, userProfiles, panelContext);
-      const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED;
+      const needsChannelPost = drawNeedsChannelRepost(draw);
+      const canPublishNow = draw.status === DRAW_STATUS.SCHEDULED || needsChannelPost;
       const canFinishNow = draw.status === DRAW_STATUS.ACTIVE;
       const canRemindNow = canSendDrawReminder(draw);
       const winnerNotifications = draw.winnerNotifications || {};
@@ -6204,7 +6369,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = n
           <div class="history-actions">
             ${
               canPublishNow
-                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/publish-now"><button type="submit" class="history-action-btn">Опубликовать сейчас</button></form>`
+                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/publish-now"><button type="submit" class="history-action-btn">${needsChannelPost ? "Опубликовать пост заново" : "Опубликовать сейчас"}</button></form>`
                 : ""
             }
             ${
@@ -10977,7 +11142,7 @@ panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer
 
   const { data, draw } = loaded;
 
-  if (draw.status !== DRAW_STATUS.SCHEDULED) {
+  if (draw.status !== DRAW_STATUS.SCHEDULED && !drawNeedsChannelRepost(draw)) {
     redirectWithMessage(res, "Можно публиковать сейчас только запланированные розыгрыши.");
     return;
   }
@@ -11483,6 +11648,20 @@ bot.on("message", async (ctx, next) => {
   const forwardedChat = msg?.forward_from_chat;
   if (ctx.chat?.type !== "private" || !forwardedChat || forwardedChat.type !== "channel") {
     return next();
+  }
+
+  try {
+    const linkedDraw = await tryLinkDrawFromForwardedPost(ctx.from?.id, forwardedChat, msg);
+    if (linkedDraw) {
+      await ctx.reply(
+        `✅ Пост привязан к розыгрышу «${formatDrawPrizePlain(linkedDraw)}». Счётчик участников снова обновляется.`,
+        getPanelKeyboardForUser(ctx.from?.id),
+      );
+      await syncOrganizerPanelUi(ctx.from?.id);
+      return;
+    }
+  } catch (error) {
+    console.error("Ошибка привязки поста по пересылке:", error.message);
   }
 
   const result = await linkChannelForUser(ctx, forwardedChat);
