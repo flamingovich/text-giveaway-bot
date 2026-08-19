@@ -4722,7 +4722,9 @@ async function addUserToDraw(drawId, userId, participationMeta = null) {
   if (drawHasParticipant(draw, userId)) {
     if (participationMeta) {
       upsertDrawParticipantMeta(draw, userId, participationMeta);
-      writeData(data);
+      // Joins are the hottest writer: a plain full-document write here wipes
+      // winner notifications and participants saved since this snapshot.
+      writeDataPreservingLiveWinners(data);
     }
     return { ok: true, cbMessage: "Вы уже участвуете ✅", already: true };
   }
@@ -4734,7 +4736,7 @@ async function addUserToDraw(drawId, userId, participationMeta = null) {
       tryRecordDrawReferral(draw, participationMeta.referrerId, userId);
     }
   }
-  writeData(data);
+  writeDataPreservingLiveWinners(data);
 
   scheduleDrawPostUpdate(draw.id, false);
   void enrichUserAvatar(userId);
