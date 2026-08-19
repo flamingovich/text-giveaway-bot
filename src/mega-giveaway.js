@@ -24,6 +24,7 @@ function registerMegaGiveawayBot(deps) {
     isOrganizer,
     readData,
     writeData,
+    writeDataPreservingLiveWinners,
     filterByOwner,
     readKnownChannels,
     findOwnedKnownChannel,
@@ -352,7 +353,9 @@ function registerMegaGiveawayBot(deps) {
     }
     try {
       await publishMegaDrawToChannel(draw);
-      writeData(data);
+      // The snapshot above predates the channel post. A plain write here would
+      // roll back every join and winner notification saved while it was sent.
+      writeDataPreservingLiveWinners(data);
       scheduleDrawPostUpdate?.(draw.id, false);
       await ctx.answerCbQuery("Опубликовано ✅");
       await ctx.reply(`Пост опубликован в канал. Розыгрыш активен.\nID: ${draw.id}`);
@@ -392,7 +395,7 @@ function registerMegaGiveawayBot(deps) {
       session.draft.channelId = channels[0].id;
       session.step = "endMode";
       await ctx.reply(
-        `Канал: ${formatChannelLabel(channels[0])}\n\nШаг 4/6. Когда завершать розыgрыш?`,
+        `Канал: ${formatChannelLabel(channels[0])}\n\nШаг 4/6. Когда завершать розыгрыш?`,
         Markup.inlineKeyboard([
           [Markup.button.callback("✋ Вручную", "mega:end:manual")],
           [Markup.button.callback("⏰ По времени", "mega:end:scheduled")],
