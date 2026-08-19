@@ -5501,10 +5501,6 @@ const LIFECYCLE_OVERDUE_GRACE_MS = Number(process.env.LIFECYCLE_OVERDUE_GRACE_MS
 // the queue instead of the flag - a draw long past its end that nobody has
 // picked up means the lifecycle is not running, whatever the flag says.
 function releaseLifecycleLockIfDrawsOverdue() {
-  if (!lifecycleJobRunning) {
-    return;
-  }
-
   let overdue = [];
   try {
     const now = DateTime.now().setZone(TIMEZONE);
@@ -5524,13 +5520,20 @@ function releaseLifecycleLockIfDrawsOverdue() {
     return;
   }
 
+  // Report the flag state too. The stall on 20 August was never explained, and
+  // whether the lock was held is the one fact that separates "a pass never
+  // finished" from "a pass ran and skipped these draws".
   console.error(
-    `[scheduler] просрочено розыгрышей: ${overdue.length}, а проход занят — снимаю блокировку (${overdue
-      .map((draw) => draw.id)
-      .join(", ")})`,
+    `[scheduler] просрочено розыгрышей: ${overdue.length} (проход ${
+      lifecycleJobRunning ? "занят" : "свободен"
+    }, старт ${lifecycleJobStartedAt || "не записан"}): ${overdue.map((draw) => draw.id).join(", ")}`,
   );
-  lifecycleJobRunning = false;
-  lifecycleJobStartedAt = 0;
+
+  if (lifecycleJobRunning) {
+    console.error("[scheduler] снимаю блокировку прохода завершения");
+    lifecycleJobRunning = false;
+    lifecycleJobStartedAt = 0;
+  }
 }
 
 async function schedulerTick() {
