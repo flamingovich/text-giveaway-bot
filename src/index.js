@@ -3599,39 +3599,69 @@ async function sendWinnerVerificationNotificationWithRetry(draw, userId, sentBy,
   throw lastError;
 }
 
+const WINNER_NOTIFY_DEADLINE_MS = Number(process.env.WINNER_NOTIFY_DEADLINE_MS || 90000);
+
+// One winner must never be able to stall the whole finish pass: a stalled
+// notification has to surface as a stored failure that the next pass retries.
+async function withWinnerNotifyDeadline(task, ms = WINNER_NOTIFY_DEADLINE_MS) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error("winner_notify_timeout");
+          error.code = "winner_notify_timeout";
+          reject(error);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function notifyWinnerOnFinish(draw, winnerId) {
+  await enrichUserAvatar(winnerId);
+  const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, winnerId, {
+    maxAttempts: 3,
+  });
+
+  if (!subscriptionCheck.ok && isWinnerAccountUnavailableError(subscriptionCheck.error)) {
+    if (!draw.winnerNotifications) {
+      draw.winnerNotifications = {};
+    }
+    draw.winnerNotifications[String(winnerId)] = {
+      sentAt: new Date().toISOString(),
+      sentBy: "auto_finish",
+      verifiedAt: null,
+      status: "forfeited",
+      antiFraudFlag: true,
+      forfeitureReason: "account_unavailable",
+      forfeitedAt: new Date().toISOString(),
+      channelSubscribed: false,
+      channelStatus: subscriptionCheck.status || null,
+      channelCheckedAt: subscriptionCheck.checkedAt || new Date().toISOString(),
+      channelCheckError: subscriptionCheck.error || "subscription_check_failed",
+    };
+    console.log(
+      `[finish] аккаунт недоступен: draw=${draw.id} user=${winnerId} → приз сгорел`,
+    );
+    return;
+  }
+
+  await sendWinnerVerificationNotificationWithRetry(draw, winnerId, "auto_finish", subscriptionCheck);
+  console.log(
+    `[finish] уведомление отправлено: draw=${draw.id} user=${winnerId} status=${draw.winnerNotifications?.[String(winnerId)]?.status || "нет записи"}`,
+  );
+}
+
 async function notifyWinnersOnFinish(draw, winnerIds = null) {
   for (const winnerId of winnerIds || draw.winnerIds || []) {
     try {
-      await enrichUserAvatar(winnerId);
-      const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, winnerId, {
-        maxAttempts: 3,
-      });
-      if (!subscriptionCheck.ok && isWinnerAccountUnavailableError(subscriptionCheck.error)) {
-        if (!draw.winnerNotifications) {
-          draw.winnerNotifications = {};
-        }
-        draw.winnerNotifications[String(winnerId)] = {
-          sentAt: new Date().toISOString(),
-          sentBy: "auto_finish",
-          verifiedAt: null,
-          status: "forfeited",
-          antiFraudFlag: true,
-          forfeitureReason: "account_unavailable",
-          forfeitedAt: new Date().toISOString(),
-          channelSubscribed: false,
-          channelStatus: subscriptionCheck.status || null,
-          channelCheckedAt: subscriptionCheck.checkedAt || new Date().toISOString(),
-          channelCheckError: subscriptionCheck.error || "subscription_check_failed",
-        };
-        console.log(
-          `[finish] аккаунт недоступен: draw=${draw.id} user=${winnerId} → приз сгорел`,
-        );
-        continue;
-      }
-      await sendWinnerVerificationNotificationWithRetry(draw, winnerId, "auto_finish", subscriptionCheck);
-      console.log(
-        `[finish] уведомление отправлено: draw=${draw.id} user=${winnerId} status=${draw.winnerNotifications?.[String(winnerId)]?.status || "нет записи"}`,
-      );
+      await withWinnerNotifyDeadline(() => notifyWinnerOnFinish(draw, winnerId));
     } catch (error) {
       if (!draw.winnerNotifications) {
         draw.winnerNotifications = {};
