@@ -5155,6 +5155,29 @@ let winnerNotifyRecoveryRunning = false;
 let winnerNotifyRecoveryStartedAt = 0;
 let winnerNotifyRecoveryToken = 0;
 
+// Writing back a snapshot taken before the send lets archiving or a join wipe
+// the record, which makes the winner get notified again on the next pass.
+// Read and write in one synchronous step so nothing can slip in between.
+function persistWinnerNotification(draw, winnerId) {
+  const record = draw.winnerNotifications?.[String(winnerId)];
+  if (!record) {
+    return;
+  }
+
+  const fresh = readData();
+  const freshDraw = (fresh.draws || []).find((item) => String(item.id) === String(draw.id));
+  if (!freshDraw) {
+    console.warn(`[finish] ${draw.id} исчез из активных — запись не сохранена`);
+    return;
+  }
+
+  if (!freshDraw.winnerNotifications) {
+    freshDraw.winnerNotifications = {};
+  }
+  freshDraw.winnerNotifications[String(winnerId)] = record;
+  writeData(fresh);
+}
+
 // Recovery runs on its own lock: a winner nobody can reach must not be able to
 // hold up finishing, publishing or countdowns for every other draw.
 async function runWinnerNotifyRecovery() {
@@ -5202,8 +5225,7 @@ async function runWinnerNotifyRecovery() {
             `[finish] уведомление не доставлено: draw=${draw.id} user=${winnerId}: ${error.message || error}`,
           );
         }
-        // Persist per winner so a later stall cannot discard earlier progress.
-        writeDataPreservingLiveWinners(data);
+        persistWinnerNotification(draw, winnerId);
       }
     }
   } catch (error) {
