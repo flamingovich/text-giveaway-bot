@@ -5092,25 +5092,6 @@ async function runDueDrawLifecycle() {
           }
         }
 
-        if (draw.status === DRAW_STATUS.FINISHED && draw.winnerIds?.length) {
-          const pendingWinnerIds = draw.winnerIds.filter(
-            (winnerId) => !draw.winnerNotifications?.[String(winnerId)],
-          );
-          if (pendingWinnerIds.length > 0) {
-            console.warn(
-              `[finish] ${draw.id}: без уведомления ${pendingWinnerIds.length} победителей — досылаю`,
-            );
-            await notifyWinnersOnFinish(draw, pendingWinnerIds);
-            writeDataPreservingLiveWinners(data);
-            const stillPending = draw.winnerIds.filter(
-              (winnerId) => !draw.winnerNotifications?.[String(winnerId)],
-            ).length;
-            console.warn(
-              `[finish] ${draw.id}: досылка завершена, без записи осталось ${stillPending}`,
-            );
-          }
-        }
-
         if (draw.status === DRAW_STATUS.FINISHED && draw.finishPostError && draw.messageId) {
           try {
             await updateDrawPost(draw, true);
@@ -5168,8 +5149,76 @@ async function runSchedulerBackgroundJobs() {
   }
 }
 
+let winnerNotifyRecoveryRunning = false;
+let winnerNotifyRecoveryStartedAt = 0;
+let winnerNotifyRecoveryToken = 0;
+
+// Recovery runs on its own lock: a winner nobody can reach must not be able to
+// hold up finishing, publishing or countdowns for every other draw.
+async function runWinnerNotifyRecovery() {
+  if (winnerNotifyRecoveryRunning) {
+    const stuckMs = schedulerJobStuckFor(winnerNotifyRecoveryStartedAt);
+    if (!stuckMs) {
+      return;
+    }
+    console.error(
+      `[finish] досылка зависла на ${Math.round(stuckMs / 1000)}с — перезапускаю`,
+    );
+  }
+  winnerNotifyRecoveryRunning = true;
+  winnerNotifyRecoveryStartedAt = Date.now();
+  const runToken = (winnerNotifyRecoveryToken += 1);
+
+  try {
+    const data = readData();
+    for (const draw of data.draws) {
+      if (draw.status !== DRAW_STATUS.FINISHED || !draw.winnerIds?.length) {
+        continue;
+      }
+      const pendingWinnerIds = draw.winnerIds.filter(
+        (winnerId) => !draw.winnerNotifications?.[String(winnerId)],
+      );
+      if (pendingWinnerIds.length === 0) {
+        continue;
+      }
+
+      console.warn(
+        `[finish] ${draw.id}: без уведомления ${pendingWinnerIds.length} победителей — досылаю`,
+      );
+      for (const winnerId of pendingWinnerIds) {
+        try {
+          await withWinnerNotifyDeadline(() => notifyWinnerOnFinish(draw, winnerId));
+        } catch (error) {
+          if (!draw.winnerNotifications) {
+            draw.winnerNotifications = {};
+          }
+          draw.winnerNotifications[String(winnerId)] = buildWinnerNotificationFailureRecord(
+            "auto_finish",
+            error,
+          );
+          console.error(
+            `[finish] уведомление не доставлено: draw=${draw.id} user=${winnerId}: ${error.message || error}`,
+          );
+        }
+        // Persist per winner so a later stall cannot discard earlier progress.
+        writeDataPreservingLiveWinners(data);
+      }
+    }
+  } catch (error) {
+    console.error("[finish] досылка:", error.message);
+  } finally {
+    if (winnerNotifyRecoveryToken === runToken) {
+      winnerNotifyRecoveryRunning = false;
+      winnerNotifyRecoveryStartedAt = 0;
+    }
+  }
+}
+
 async function schedulerTick() {
   await runDueDrawLifecycle();
+  runWinnerNotifyRecovery().catch((error) => {
+    console.error("[finish] досылка:", error.message);
+  });
 
   if (backgroundJobRunning) {
     const stuckMs = schedulerJobStuckFor(backgroundJobStartedAt);
@@ -5199,6 +5248,7 @@ function startScheduler() {
   if (schedulerTimer || WEB_ONLY || process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
     return;
   }
+  console.log(`[boot] сборка ${process.env.JOIN_PAGE_BUILD || "?"} · winner-notify-v2`);
   schedulerTimer = setInterval(() => {
     schedulerTick().catch((error) => {
       console.error("[scheduler]", error.message);
