@@ -5338,6 +5338,12 @@ async function runDueDrawLifecycle() {
       }
     }
   } finally {
+    // A pass that quietly takes minutes is the shape of the stall above, and
+    // there was no way to see it happening. Say so while it is still fixable.
+    const heldMs = Date.now() - (lifecycleJobStartedAt || Date.now());
+    if (heldMs > 10000) {
+      console.warn(`[scheduler] проход завершения занял ${Math.round(heldMs / 1000)}с`);
+    }
     if (lifecycleRunToken === runToken) {
       lifecycleJobRunning = false;
       lifecycleJobStartedAt = 0;
@@ -5486,7 +5492,49 @@ async function runWinnerNotifyRecovery() {
   }
 }
 
+const LIFECYCLE_OVERDUE_GRACE_MS = Number(process.env.LIFECYCLE_OVERDUE_GRACE_MS || 180000);
+
+// Guarding on the running flag alone assumes a pass always reaches its finally.
+// On 20 August two draws sat active fifteen minutes past their end while joins,
+// countdowns and every other background job kept working: the flag was set, the
+// stuck check saw no start time, and each tick returned without a word. Judge
+// the queue instead of the flag - a draw long past its end that nobody has
+// picked up means the lifecycle is not running, whatever the flag says.
+function releaseLifecycleLockIfDrawsOverdue() {
+  if (!lifecycleJobRunning) {
+    return;
+  }
+
+  let overdue = [];
+  try {
+    const now = DateTime.now().setZone(TIMEZONE);
+    overdue = (readData().draws || []).filter((draw) => {
+      if (draw.status !== DRAW_STATUS.ACTIVE || !draw.endAt) {
+        return false;
+      }
+      const endAt = DateTime.fromISO(draw.endAt, { zone: TIMEZONE });
+      return endAt.isValid && now.diff(endAt).milliseconds > LIFECYCLE_OVERDUE_GRACE_MS;
+    });
+  } catch (error) {
+    console.error("[scheduler] проверка просроченных розыгрышей:", error.message);
+    return;
+  }
+
+  if (overdue.length === 0) {
+    return;
+  }
+
+  console.error(
+    `[scheduler] просрочено розыгрышей: ${overdue.length}, а проход занят — снимаю блокировку (${overdue
+      .map((draw) => draw.id)
+      .join(", ")})`,
+  );
+  lifecycleJobRunning = false;
+  lifecycleJobStartedAt = 0;
+}
+
 async function schedulerTick() {
+  releaseLifecycleLockIfDrawsOverdue();
   await runDueDrawLifecycle();
   runWinnerNotifyRecovery().catch((error) => {
     console.error("[finish] досылка:", error.message);
