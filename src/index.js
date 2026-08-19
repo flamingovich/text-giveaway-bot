@@ -12136,6 +12136,19 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
       return;
     }
 
+    // A re-sent notification carries a new task, and the stored answer belongs
+    // to the newest message alone. The old message keeps its buttons, so tapping
+    // it used to answer "wrong" for every option: the winner ran out of tries on
+    // a message that could not be right, and the prize expired on them.
+    const tappedMessageId = ctx.callbackQuery?.message?.message_id;
+    if (notify.lastMessageId && tappedMessageId && tappedMessageId !== notify.lastMessageId) {
+      await ctx.answerCbQuery(
+        "Это старое сообщение. Откройте последнее уведомление от бота и решите пример в нём.",
+        { show_alert: true },
+      );
+      return;
+    }
+
     if (selected !== correctAnswer) {
       await ctx.answerCbQuery("Неверно, попробуйте еще раз.");
       return;
