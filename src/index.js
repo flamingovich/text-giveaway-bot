@@ -3629,6 +3629,9 @@ async function notifyWinnersOnFinish(draw, winnerIds = null) {
         continue;
       }
       await sendWinnerVerificationNotificationWithRetry(draw, winnerId, "auto_finish", subscriptionCheck);
+      console.log(
+        `[finish] уведомление отправлено: draw=${draw.id} user=${winnerId} status=${draw.winnerNotifications?.[String(winnerId)]?.status || "нет записи"}`,
+      );
     } catch (error) {
       if (!draw.winnerNotifications) {
         draw.winnerNotifications = {};
@@ -3636,6 +3639,9 @@ async function notifyWinnersOnFinish(draw, winnerIds = null) {
       draw.winnerNotifications[String(winnerId)] = buildWinnerNotificationFailureRecord(
         "auto_finish",
         error,
+      );
+      console.error(
+        `[finish] уведомление не доставлено: draw=${draw.id} user=${winnerId}: ${error.message || error}`,
       );
     }
   }
@@ -5065,6 +5071,12 @@ async function runDueDrawLifecycle() {
             );
             await notifyWinnersOnFinish(draw, pendingWinnerIds);
             writeDataPreservingLiveWinners(data);
+            const stillPending = draw.winnerIds.filter(
+              (winnerId) => !draw.winnerNotifications?.[String(winnerId)],
+            ).length;
+            console.warn(
+              `[finish] ${draw.id}: досылка завершена, без записи осталось ${stillPending}`,
+            );
           }
         }
 
