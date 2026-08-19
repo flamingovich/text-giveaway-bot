@@ -77,6 +77,13 @@ function isFinishedDraw(draw) {
   return String(draw?.status || "") === "finished";
 }
 
+const DRAW_STATUS_RANK = { draft: 0, scheduled: 1, active: 2, finished: 3 };
+
+function drawStatusRank(draw) {
+  const rank = DRAW_STATUS_RANK[String(draw?.status || "")];
+  return rank === undefined ? -1 : rank;
+}
+
 function firstMessageId(...draws) {
   for (const draw of draws) {
     if (draw?.messageId) {
@@ -136,6 +143,21 @@ function mergeDrawProgress(primary, secondary) {
     merged.postTimeLeftUpdatedAt = secondary.postTimeLeftUpdatedAt;
   }
 
+  // A snapshot read before a publish still says "scheduled". Writing that back
+  // would hand the draw to the scheduler again and post it to the channel twice,
+  // so the lifecycle only ever moves forward here. A deliberate rollback (a
+  // publish Telegram rejected outright) goes through persistDrawPublishState,
+  // which writes against fresh data and never passes through this merge.
+  if (drawStatusRank(secondary) > drawStatusRank(primary)) {
+    merged.status = secondary.status;
+    if (secondary.finishedAt) {
+      merged.finishedAt = secondary.finishedAt;
+    }
+    if (Array.isArray(secondary.winnerIds) && !(merged.winnerIds || []).length) {
+      merged.winnerIds = secondary.winnerIds;
+    }
+  }
+
   const actual = (merged.participantIds || []).length;
   const posted = [primary.postParticipantCount, secondary.postParticipantCount]
     .map(Number)
@@ -168,27 +190,52 @@ function pickDrawForWrite(stale, live) {
   return mergeDrawProgress(stale, live);
 }
 
+// Replace the contents of an object without replacing the object itself, so a
+// caller still holding a reference to it keeps seeing the merged result.
+function replaceContentsInPlace(target, source) {
+  if (target === source) {
+    return target;
+  }
+  for (const key of Object.keys(target)) {
+    if (!(key in source)) {
+      delete target[key];
+    }
+  }
+  Object.assign(target, source);
+  return target;
+}
+
+// Merging used to hand back fresh draw objects in a fresh array. Callers such as
+// the scheduler pass keep iterating the array they read and keep mutating the
+// draw they picked out of it, so after the first save those references pointed
+// at objects no longer connected to the document. Every later save then wrote
+// the pre-finish copy back: the channel post and the winner DMs went out while
+// the draw stayed "active" with no winners stored, and the next pass drew a
+// different set of winners. Merge in place so references stay live.
 function mergeLiveWinnerNotifications(staleData, liveData = readData()) {
   const staleDraws = staleData.draws || [];
   const liveDraws = liveData.draws || [];
   const liveById = new Map(liveDraws.map((draw) => [String(draw.id), draw]));
   const seen = new Set();
-  const mergedDraws = [];
 
   for (const stale of staleDraws) {
     const id = String(stale.id);
     seen.add(id);
-    mergedDraws.push(pickDrawForWrite(stale, liveById.get(id)));
+    const live = liveById.get(id);
+    if (!live) {
+      continue;
+    }
+    replaceContentsInPlace(stale, pickDrawForWrite(stale, live));
   }
   for (const live of liveDraws) {
     const id = String(live.id);
     if (seen.has(id)) {
       continue;
     }
-    mergedDraws.push(live);
+    staleDraws.push(live);
   }
 
-  staleData.draws = mergedDraws;
+  staleData.draws = staleDraws;
   return staleData;
 }
 

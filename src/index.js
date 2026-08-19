@@ -90,6 +90,7 @@ const {
 const {
   hasSavedWinnerDepositAddress,
   writeDataPreservingLiveWinners,
+  mergeLiveWinnerNotifications,
   getLiveWinnerNotify,
 } = require("./winner-notify-sync");
 
@@ -519,12 +520,28 @@ function loadOwnedDrawForPanel(drawId, ownerId) {
   return { data, archivedData, draw, inArchive };
 }
 
-function persistOwnedDrawContext({ data, archivedData, inArchive }) {
-  if (inArchive) {
-    writeArchivedDraws(archivedData);
+// Panel routes read this snapshot, then spend seconds in Telegram before saving.
+// Writing the whole document back from that snapshot is what used to drop joins
+// and winner notifications recorded meanwhile, so only the edited draw is
+// carried over and everything else comes from fresh data.
+function persistOwnedDrawContext({ data, archivedData, draw, inArchive }) {
+  if (!inArchive) {
+    writeDataPreservingLiveWinners(data);
     return;
   }
-  writeData(data);
+
+  const fresh = readArchivedDraws();
+  const freshDraws = fresh.draws || [];
+  const index = freshDraws.findIndex((item) => String(item.id) === String(draw?.id));
+  if (index >= 0) {
+    freshDraws[index] = draw;
+  } else if (draw) {
+    // The archiver moved more draws across while this route was waiting; writing
+    // the stale list back would have dropped them from both draws and archive.
+    freshDraws.push(draw);
+  }
+  fresh.draws = freshDraws;
+  writeArchivedDraws(fresh);
 }
 
 function normalizeChannelRef(channelId) {
@@ -3247,7 +3264,7 @@ async function tryLinkDrawFromChannelPost(post) {
     return false;
   }
 
-  writeData(data);
+  writeDataPreservingLiveWinners(data);
   console.log(`[draw] пост в канале привязан: ${drawId} → message ${post.message_id}`);
   return true;
 }
@@ -3624,6 +3641,11 @@ async function finishDraw(draw, data = null) {
     draw.winnerNotifications = {};
     draw.status = DRAW_STATUS.FINISHED;
     draw.finishedAt = new Date().toISOString();
+    // The draw is announced in the channel and by DM a moment from now, so the
+    // pick has to survive on its own. Leaving it to the caller's save is what
+    // let a failed save send the pass round again and announce a second,
+    // different set of winners for the same draw.
+    persistDrawWinners(draw);
   }
   if (data) {
     writeDataPreservingLiveWinners(data);
@@ -3866,6 +3888,11 @@ async function notifyWinnersOnFinish(draw, winnerIds = null) {
         `[finish] уведомление не доставлено: draw=${draw.id} user=${winnerId}: ${error.message || error}`,
       );
     }
+    // Store each record the moment it exists rather than leaving it to the
+    // caller's save at the end of the pass. A DM that went out but was never
+    // recorded looks unsent to the recovery pass, which then sends it again and
+    // leaves the winner holding two different captchas.
+    persistWinnerNotification(draw, winnerId);
   }
 }
 
@@ -4549,7 +4576,7 @@ async function syncActiveDrawKeyboards() {
   }
 
   if (updated > 0) {
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
   }
 
   console.log(`[sync] клавиатуры постов: обновлено ${updated}, ошибок ${failed}`);
@@ -4648,15 +4675,9 @@ async function enrichUserAvatar(userId) {
     return;
   }
 
-  const userProfiles = readUserProjectProfiles();
   const userKey = String(userId);
-  if (!userProfiles.users[userKey]) {
-    userProfiles.users[userKey] = { projects: {}, meta: {} };
-  }
-  if (!userProfiles.users[userKey].meta) {
-    userProfiles.users[userKey].meta = {};
-  }
 
+  let avatarFileId = null;
   try {
     const photos = await Promise.race([
       bot.telegram.getUserProfilePhotos(userId, 0, 1),
@@ -4666,15 +4687,31 @@ async function enrichUserAvatar(userId) {
     ]);
     if (photos && photos.total_count > 0 && photos.photos?.[0]?.length) {
       const best = photos.photos[0][photos.photos[0].length - 1];
-      userProfiles.users[userKey].meta.avatarFileId = best.file_id;
-    } else {
-      delete userProfiles.users[userKey].meta.avatarFileId;
+      avatarFileId = best.file_id;
     }
-    userProfiles.users[userKey].meta.avatarUpdatedAt = new Date().toISOString();
-    writeUserProjectProfiles(userProfiles);
   } catch {
     // Игнорируем, если Telegram не вернул фото профиля.
+    return;
   }
+
+  // Читаем профили только теперь: снимок, сделанный до запроса аватарки, за эти
+  // секунды успевал устареть, и запись целого документа стирала TRC-20 адрес или
+  // подтверждение реферала, сохранённые участником в том же окне.
+  const userProfiles = readUserProjectProfiles();
+  if (!userProfiles.users[userKey]) {
+    userProfiles.users[userKey] = { projects: {}, meta: {} };
+  }
+  if (!userProfiles.users[userKey].meta) {
+    userProfiles.users[userKey].meta = {};
+  }
+
+  if (avatarFileId) {
+    userProfiles.users[userKey].meta.avatarFileId = avatarFileId;
+  } else {
+    delete userProfiles.users[userKey].meta.avatarFileId;
+  }
+  userProfiles.users[userKey].meta.avatarUpdatedAt = new Date().toISOString();
+  writeUserProjectProfiles(userProfiles);
 }
 
 let avatarEnrichChain = Promise.resolve();
@@ -4955,12 +4992,12 @@ function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
     (draw) =>
       draw.projectId === projectId &&
       (excludeDrawId ? draw.id !== excludeDrawId : true) &&
-      (draw.participantIds || []).includes(userId),
+      drawHasParticipant(draw, userId),
   );
 }
 
 async function tryAutoJoinDraw(draw, userId) {
-  if (draw.participantIds.includes(userId)) {
+  if (drawHasParticipant(draw, userId)) {
     return { joined: true, already: true, message: "Вы уже участвуете!" };
   }
 
@@ -5141,7 +5178,7 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
     liveNotify.forfeitureReason = "antifraud";
     liveNotify.forfeitedAt = checkedAt;
     liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: true });
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
     await ctx.reply(
       [
         "⚠️ Адрес сохранён, но приз аннулирован антифрод-системой.",
@@ -5156,7 +5193,7 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
   liveNotify.status = "confirmed";
   liveNotify.antiFraudFlag = false;
   liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: false });
-  writeData(data);
+  writeDataPreservingLiveWinners(data);
 
   const receivedLines = [buildWinnerDepositAddressReceivedHtml(text)];
   if (forceNonReferralByWallet) {
@@ -5178,7 +5215,7 @@ async function startWinnersFlow(ctx, drawId) {
   const data = readData();
   const draw = data.draws.find((item) => item.id === drawId);
   if (!draw || draw.status !== DRAW_STATUS.FINISHED) {
-    await ctx.reply("Розыgрыш не найден или ещё не завершён.");
+    await ctx.reply("Розыгрыш не найден или ещё не завершён.");
     return;
   }
 
@@ -5203,7 +5240,7 @@ async function startJoinFlow(ctx, drawId) {
     return;
   }
 
-  if (draw.participantIds.includes(ctx.from.id)) {
+  if (drawHasParticipant(draw, ctx.from.id)) {
     await ctx.reply("Вы уже участвуете ✅");
     return;
   }
@@ -5345,6 +5382,26 @@ async function runSchedulerBackgroundJobs() {
 let winnerNotifyRecoveryRunning = false;
 let winnerNotifyRecoveryStartedAt = 0;
 let winnerNotifyRecoveryToken = 0;
+
+// The winner pick is the one thing that must never be redone: it is already in
+// the channel post and in the winners' DMs. Store it against fresh data in a
+// single synchronous step, independent of whatever the caller saves later.
+function persistDrawWinners(draw) {
+  const fresh = readData();
+  const freshDraw = (fresh.draws || []).find((item) => String(item.id) === String(draw.id));
+  if (!freshDraw) {
+    console.warn(`[finish] ${draw.id} нет в активных — победители не сохранены`);
+    return;
+  }
+
+  freshDraw.status = draw.status;
+  freshDraw.winnerIds = draw.winnerIds;
+  freshDraw.finishedAt = draw.finishedAt;
+  if (!freshDraw.winnerNotifications) {
+    freshDraw.winnerNotifications = {};
+  }
+  writeData(fresh);
+}
 
 // Writing back a snapshot taken before the send lets archiving or a join wipe
 // the record, which makes the winner get notified again on the next pass.
@@ -11107,7 +11164,7 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
 
     if (publishMode === "now") {
       await publishDraw(draw, publishTarget);
-      writeData(data);
+      writeDataPreservingLiveWinners(data);
     }
 
     recordDrawCreate(ownerId, createFingerprint);
@@ -11149,7 +11206,7 @@ panelRouter.post("/draws/:id/publish-now", webAuth.requireAuth, requireOrganizer
 
   try {
     await publishDraw(draw);
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
     const publishedMessages = {
       dm: "Розыгрыш опубликован. Пост отправлен в личку бота — перешлите его в канал.",
       channel: "Розыгрыш опубликован в канал.",
@@ -11193,7 +11250,7 @@ panelRouter.post("/draws/remind-active", webAuth.requireAuth, requireOrganizer, 
       projects: digestProjects,
       projectIds: digestProjects.map((project) => project.id),
     });
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
     const projectsNote =
       digestProjects.length > 0 ? ` Проектов в посте: ${digestProjects.length}.` : "";
     redirectWithMessage(
@@ -11225,7 +11282,7 @@ panelRouter.post("/draws/:id/remind", webAuth.requireAuth, requireOrganizer, asy
 
   try {
     await sendDrawReminderReply(draw);
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
     redirectWithMessage(res, "Напоминание отправлено в канал.");
   } catch (error) {
     console.error("Ошибка отправки напоминания:", error);
@@ -11250,7 +11307,7 @@ panelRouter.post("/draws/:id/finish-now", webAuth.requireAuth, requireOrganizer,
 
   try {
     await finishDraw(draw, data);
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
     redirectWithMessage(res, "Розыгрыш завершен вручную.");
   } catch (error) {
     console.error("Ошибка ручного завершения:", error);
@@ -11295,6 +11352,11 @@ panelRouter.post("/draws/:id/delete", webAuth.requireAuth, requireOrganizer, asy
   } else {
     data.draws = data.draws.filter((item) => item.id !== draw.id);
     await syncActiveDrawsDigestAfterDrawChange(data, draw);
+    // The Telegram deletions above ran on a snapshot read before them. Merging
+    // is what keeps joins and winner notifications from that window, but it also
+    // brings the deleted draw back, so drop it again before writing.
+    mergeLiveWinnerNotifications(data);
+    data.draws = (data.draws || []).filter((item) => item.id !== draw.id);
     writeData(data);
   }
   redirectWithMessage(res, "Розыгрыш удалён.");
@@ -11376,7 +11438,7 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
       draw.winnerNotifications[String(userId)].channelCheckedAt =
         subscriptionCheck.checkedAt || new Date().toISOString();
       await markWinnerAccountUnavailableForfeited(draw, userId, subscriptionCheck.error);
-      persistOwnedDrawContext({ data, archivedData, inArchive });
+      persistOwnedDrawContext({ data, archivedData, draw, inArchive });
       redirectWithMessage(res, "Аккаунт победителя недоступен — приз сгорел.");
       return;
     }
@@ -11386,7 +11448,7 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
       draw.winnerNotifications = {};
     }
     draw.winnerNotifications[String(userId)] = buildWinnerNotificationFailureRecord(ownerId, error);
-    persistOwnedDrawContext({ data, archivedData, inArchive });
+    persistOwnedDrawContext({ data, archivedData, draw, inArchive });
     const failureReason = getWinnerDeliveryFailureReason(
       draw.winnerNotifications[String(userId)],
     );
@@ -11401,7 +11463,7 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
     return;
   }
 
-  persistOwnedDrawContext({ data, archivedData, inArchive });
+  persistOwnedDrawContext({ data, archivedData, draw, inArchive });
 
   redirectWithMessage(res, `Уведомление отправлено пользователю ${userId}.`);
 });
@@ -11449,10 +11511,10 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     : (subscriptionCheck.error || "subscription_check_failed");
 
   if (!subscriptionCheck.ok) {
-    persistOwnedDrawContext({ data, archivedData, inArchive });
+    persistOwnedDrawContext({ data, archivedData, draw, inArchive });
     if (isWinnerAccountUnavailableError(subscriptionCheck.error)) {
       await markWinnerAccountUnavailableForfeited(draw, userId, subscriptionCheck.error);
-      persistOwnedDrawContext({ data, archivedData, inArchive });
+      persistOwnedDrawContext({ data, archivedData, draw, inArchive });
       redirectWithMessage(
         res,
         "Аккаунт победителя недоступен — приз сгорел.",
@@ -11465,7 +11527,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
   }
 
   if (!subscriptionCheck.subscribed) {
-    persistOwnedDrawContext({ data, archivedData, inArchive });
+    persistOwnedDrawContext({ data, archivedData, draw, inArchive });
     redirectWithMessage(res, "Победитель не подписан на канал. Выплата недоступна.", panelReturn);
     return;
   }
@@ -11480,7 +11542,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     draw.winnerNotifications[String(userId)],
   );
   if (antiFraud.hasFraudFlag) {
-    persistOwnedDrawContext({ data, archivedData, inArchive });
+    persistOwnedDrawContext({ data, archivedData, draw, inArchive });
     redirectWithMessage(res, "Выплата недоступна — сработала антифрод-проверка.", panelReturn);
     return;
   }
@@ -11497,7 +11559,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
 
   draw.winnerNotifications[String(userId)].paidAt = new Date().toISOString();
   draw.winnerNotifications[String(userId)].paidBy = ownerId;
-  persistOwnedDrawContext({ data, archivedData, inArchive });
+  persistOwnedDrawContext({ data, archivedData, draw, inArchive });
 
   redirectWithMessage(res, `Победителю ${userId} отмечена выплата.`, panelReturn);
 });
@@ -11546,7 +11608,7 @@ panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrga
 
   draw.winnerNotifications[String(userId)].paymentDeniedAt = new Date().toISOString();
   draw.winnerNotifications[String(userId)].paymentDeniedBy = ownerId;
-  persistOwnedDrawContext({ data, archivedData, inArchive });
+  persistOwnedDrawContext({ data, archivedData, draw, inArchive });
 
   redirectWithMessage(res, `Победителю ${userId} отмечен отказ в выплате.`, panelReturn);
 });
@@ -11803,6 +11865,7 @@ registerMegaGiveawayBot({
   isOrganizer,
   readData,
   writeData,
+  writeDataPreservingLiveWinners,
   filterByOwner,
   readKnownChannels,
   findOwnedKnownChannel,
@@ -11982,7 +12045,7 @@ bot.action(/^join:(.+)$/, async (ctx) => {
     return;
   }
 
-  if (draw.participantIds.includes(ctx.from.id)) {
+  if (drawHasParticipant(draw, ctx.from.id)) {
     await ctx.answerCbQuery("Вы уже участвуете ✅");
     return;
   }
@@ -12061,7 +12124,7 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
         : false;
     if (isExpired) {
       await markWinnerNotificationExpired(draw, userId);
-      writeData(data);
+      writeDataPreservingLiveWinners(data);
       await ctx.answerCbQuery("Время подтверждения истекло.");
       return;
     }
@@ -12084,7 +12147,7 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
     if (drawAsksWinnerDepositAddress(draw)) {
       try {
         await requestWinnerDepositAddress(draw, userId, notify);
-        writeData(data);
+        writeDataPreservingLiveWinners(data);
         await ctx.answerCbQuery("Проверка пройдена ✅");
       } catch (error) {
         notify.status = "awaiting_address";
@@ -12092,7 +12155,7 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
           .setZone(TIMEZONE)
           .plus({ minutes: WINNER_DEPOSIT_ADDRESS_MINUTES })
           .toISO();
-        writeData(data);
+        writeDataPreservingLiveWinners(data);
         await ctx.answerCbQuery("Проверка пройдена ✅");
         try {
           await ctx.reply(
@@ -12111,7 +12174,7 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
     }
 
     notify.status = "confirmed";
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
 
     await ctx.answerCbQuery("Проверка пройдена ✅");
     await ctx.reply("✅ Успешно! Ожидайте выплаты приза!");
@@ -12264,7 +12327,7 @@ async function runPayoutQueueSubscriptionRecheckCli() {
   console.log("[payout-queue] принудительная проверка подписки…");
   const changed = await processWinnerChannelSubscriptions(data, { force: true });
   if (changed) {
-    writeData(data);
+    writeDataPreservingLiveWinners(data);
   }
   console.log(`[payout-queue] готово${changed ? ", данные обновлены" : ""}`);
 }
