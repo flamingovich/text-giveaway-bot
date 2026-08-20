@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   pickDrawForWrite,
   pickParticipantIds,
+  pickWinnerNotify,
   mergeLiveWinnerNotifications,
 } = require("./winner-notify-sync");
 
@@ -163,4 +164,40 @@ test("a draw created after the snapshot is not deleted by a stale save", () => {
     data.draws.map((draw) => draw.id).sort(),
     ["A", "NEW"],
   );
+});
+
+test("a forfeit decided now is not undone by the confirmation it replaces", () => {
+  // The record already carries an address, which used to pin its comparison
+  // timestamp to the moment the address arrived and made later decisions lose.
+  const confirmed = {
+    status: "confirmed",
+    verifiedAt: "2026-08-15T23:29:51.297Z",
+    addressReceivedAt: "2026-08-15T23:30:58.098Z",
+    trc20Address: "TJho7Na756B51yEnm7XVR2qLqAeoPUkSvD",
+  };
+  const forfeited = {
+    ...confirmed,
+    status: "forfeited",
+    forfeitureReason: "unsubscribed",
+    forfeitedAt: "2026-08-20T05:00:00.000Z",
+  };
+
+  assert.equal(pickWinnerNotify(forfeited, confirmed).status, "forfeited");
+  assert.equal(pickWinnerNotify(confirmed, forfeited).status, "forfeited");
+});
+
+test("a confirmation that came after a forfeit also stands", () => {
+  const forfeited = { status: "forfeited", forfeitedAt: "2026-08-01T00:00:00.000Z" };
+  const confirmed = { status: "confirmed", verifiedAt: "2026-08-02T00:00:00.000Z" };
+
+  assert.equal(pickWinnerNotify(forfeited, confirmed).status, "confirmed");
+  assert.equal(pickWinnerNotify(confirmed, forfeited).status, "confirmed");
+});
+
+test("payment survives any later decision", () => {
+  const paid = { status: "confirmed", paidAt: "2026-08-01T00:00:00.000Z" };
+  const forfeited = { status: "forfeited", forfeitedAt: "2026-08-20T00:00:00.000Z" };
+
+  assert.equal(pickWinnerNotify(forfeited, paid).paidAt, paid.paidAt);
+  assert.equal(pickWinnerNotify(paid, forfeited).paidAt, paid.paidAt);
 });

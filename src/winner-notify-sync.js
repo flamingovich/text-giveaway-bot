@@ -32,17 +32,31 @@ function winnerNotifyRank(notify) {
   return 10;
 }
 
+// The moment of the most recent decision about this winner, of whatever kind.
+// The old version read a priority list with addressReceivedAt first, which made
+// the address the winner's permanent high-water mark: a forfeit decided days
+// later compared as older than the address it already had, lost the merge, and
+// was made again on the next pass. One prize was forfeited 117 times that way,
+// spending a getChatMember call and a write every time, and never actually
+// changed in the database.
 function notifyTimestamp(notify) {
   if (!notify) {
     return "";
   }
   return (
-    notify.addressReceivedAt ||
-    notify.forfeitedAt ||
-    notify.verifiedAt ||
-    notify.addressExpiresAt ||
-    notify.expiredAt ||
-    ""
+    [
+      notify.paidAt,
+      notify.forfeitedAt,
+      notify.expiredAt,
+      notify.addressReceivedAt,
+      notify.verifiedAt,
+      notify.addressExpiresAt,
+      notify.sentAt,
+    ]
+      .filter(Boolean)
+      .map(String)
+      .sort()
+      .pop() || ""
   );
 }
 
@@ -53,15 +67,21 @@ function pickWinnerNotify(stale, live) {
   if (!stale) {
     return live;
   }
-  const liveRank = winnerNotifyRank(live);
-  const staleRank = winnerNotifyRank(stale);
-  if (liveRank > staleRank) {
-    return live;
+
+  // Payment is the one thing nothing undoes.
+  if (Boolean(live.paidAt) !== Boolean(stale.paidAt)) {
+    return live.paidAt ? live : stale;
   }
-  if (staleRank > liveRank) {
-    return stale;
+
+  // Otherwise the newer decision stands, whichever side made it.
+  const liveAt = notifyTimestamp(live);
+  const staleAt = notifyTimestamp(stale);
+  if (liveAt !== staleAt) {
+    return liveAt > staleAt ? live : stale;
   }
-  return notifyTimestamp(live) >= notifyTimestamp(stale) ? live : stale;
+
+  // Same instant, or neither is dated: fall back to how far along each is.
+  return winnerNotifyRank(live) >= winnerNotifyRank(stale) ? live : stale;
 }
 
 function mergeWinnerNotificationMaps(staleNotifies = {}, liveNotifies = {}) {
