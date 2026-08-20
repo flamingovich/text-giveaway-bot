@@ -3412,6 +3412,23 @@ function isIgnorableTelegramEditError(error) {
   );
 }
 
+// Some edit failures will never succeed no matter how often they are repeated:
+// the post was deleted, it is too old to edit, or the code is editing a photo
+// caption as if it were text. Retrying those every thirty seconds burns the
+// Telegram quota that the posts which CAN be edited then get 429'd on - one
+// draw alone produced 1 328 of these lines.
+function isPermanentTelegramEditError(error) {
+  const message = String(error?.message || error || "");
+  return (
+    message.includes("message to edit not found") ||
+    message.includes("message can't be edited") ||
+    message.includes("there is no text in the message to edit") ||
+    message.includes("MESSAGE_ID_INVALID") ||
+    message.includes("chat not found") ||
+    message.includes("bot was blocked")
+  );
+}
+
 function isMissingTelegramMessageError(error) {
   const message = String(error?.message || error || "");
   return message.includes("message to edit not found") || message.includes("message identifier is not specified");
@@ -3575,13 +3592,26 @@ function scheduleDrawPostUpdate(drawId, includeWinners = false) {
     if (!draw || !draw.messageId || draw.status === DRAW_STATUS.DRAFT) {
       return;
     }
+    // Marked uneditable earlier: the post is gone or cannot take this edit, so
+    // asking again on every join only spends quota the editable posts need.
+    if (draw.postUneditableAt) {
+      return;
+    }
     const winners = flushIncludeWinners || draw.status === DRAW_STATUS.FINISHED;
     try {
       await updateDrawPost(draw, winners);
       markDrawPostParticipantCount(draw);
       writeDataPreservingLiveWinners(data);
     } catch (error) {
-      if (!isIgnorableTelegramEditError(error)) {
+      if (isPermanentTelegramEditError(error)) {
+        // The post cannot be edited any more, so stop trying on every join.
+        draw.postUneditableReason = error.message || String(error);
+        draw.postUneditableAt = new Date().toISOString();
+        writeDataPreservingLiveWinners(data);
+        console.warn(
+          `[draw] пост ${drawId} больше не редактируется (${error.message}) — счётчик замер`,
+        );
+      } else if (!isIgnorableTelegramEditError(error)) {
         console.error(`Не удалось обновить пост ${drawId}:`, error.message);
       }
     }
@@ -5322,7 +5352,12 @@ async function runDueDrawLifecycle() {
           }
         }
 
-        if (draw.status === DRAW_STATUS.FINISHED && draw.finishPostError && draw.messageId) {
+        if (
+          draw.status === DRAW_STATUS.FINISHED &&
+          draw.finishPostError &&
+          draw.messageId &&
+          !draw.finishPostGaveUpAt
+        ) {
           try {
             await updateDrawPost(draw, true);
             draw.finishPostError = null;
@@ -5330,7 +5365,17 @@ async function runDueDrawLifecycle() {
             writeDataPreservingLiveWinners(data);
           } catch (error) {
             draw.finishPostError = error.message || String(error);
-            console.warn(`[finish] повтор поста ${draw.id}: ${draw.finishPostError}`);
+            if (isPermanentTelegramEditError(error)) {
+              // Nothing to retry: record why and stop asking Telegram forever.
+              draw.finishPostGaveUpAt = new Date().toISOString();
+              draw.finishPostError = null;
+              console.warn(
+                `[finish] пост ${draw.id} отредактировать невозможно (${error.message}) — больше не пробую`,
+              );
+              writeDataPreservingLiveWinners(data);
+            } else {
+              console.warn(`[finish] повтор поста ${draw.id}: ${draw.finishPostError}`);
+            }
           }
         }
       } catch (error) {
