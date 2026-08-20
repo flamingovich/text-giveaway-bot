@@ -8,6 +8,7 @@ const {
 } = require("./admin-user-stats");
 const { collectAllDraws } = require("./admin-draw-source");
 const { buildUserCard } = require("./admin-user-card");
+const { buildSupportView } = require("./admin-support-view");
 const {
   readSupportChats,
   updateSupportChat,
@@ -1452,24 +1453,57 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
 </html>`;
 }
 
-function renderSupportListPage(chats, timezone) {
-  const rows = chats
+function renderSupportListPage(view, timezone) {
+  const params = (overrides = {}) => {
+    const query = new URLSearchParams();
+    const tab = overrides.tab ?? view.activeTab;
+    const q = overrides.q ?? view.query;
+    const page = overrides.page ?? 1;
+    if (tab && tab !== "attention") query.set("tab", tab);
+    if (q) query.set("q", q);
+    if (page > 1) query.set("page", String(page));
+    const text = query.toString();
+    return text ? `/admin/support?${text}` : "/admin/support";
+  };
+
+  const tabs = view.tabs
+    .map((tab) => {
+      const counts = {
+        attention: view.summary.attention,
+        open: view.summary.open,
+        errors: view.summary.withErrors,
+        closed: view.summary.total - view.summary.open,
+        all: view.summary.total,
+      };
+      const cls = tab.id === view.activeTab ? "btn btn-ghost btn-nav-active" : "btn btn-ghost";
+      return `<a class="${cls}" href="${params({ tab: tab.id })}">${escapeHtml(tab.label)} <span class="tab-count">${counts[tab.id] ?? 0}</span></a>`;
+    })
+    .join("");
+
+  const rows = view.rows
     .map((chat) => {
       const time = formatMessageTime(chat.lastMessageAt, timezone);
-      const statusBadge = chat.sessionClosed
-        ? '<span class="badge badge-warn">завершён</span>'
-        : '<span class="badge">активен</span>';
+      const flags = chat.flags.length
+        ? chat.flags
+            .map((flag) => `<span class="badge outcome-${escapeHtml(flag.tone)}">${escapeHtml(flag.label)}</span>`)
+            .join(" ")
+        : '<span class="badge badge-ok">Норм</span>';
       return `<tr>
-        <td><a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.label)}</a>
-          <div class="mono"><a class="user-link" href="/admin/users/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.chatId)}</a></div></td>
-        <td>${escapeHtml(chat.botLabel || "—")}</td>
-        <td>${statusBadge}</td>
-        <td class="preview-cell">${escapeHtml(chat.preview)}</td>
+        <td>
+          <a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.label)}</a>
+          <div class="mono"><a class="user-link" href="/admin/users/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.chatId)}</a></div>
+        </td>
+        <td class="nowrap">${escapeHtml(chat.botLabel || "—")}</td>
+        <td><div class="fraud-badges">${flags}</div></td>
+        <td class="preview-cell">${escapeHtml(chat.preview || "")}</td>
         <td>${chat.messageCount}</td>
-        <td>${escapeHtml(time)}</td>
+        <td class="nowrap">${escapeHtml(time)}</td>
       </tr>`;
     })
     .join("");
+
+  const prevHref = view.page > 1 ? params({ page: view.page - 1 }) : "";
+  const nextHref = view.page < view.totalPages ? params({ page: view.page + 1 }) : "";
 
   return `<!doctype html>
 <html lang="ru">
@@ -1481,28 +1515,53 @@ function renderSupportListPage(chats, timezone) {
     ${getAdminBaseStyles()}
     .support-table a { color: #93c5fd; text-decoration: none; }
     .support-table a:hover { text-decoration: underline; }
-    .preview-cell { max-width: 320px; color: #cbd5e1; }
+    .preview-cell { max-width: 340px; color: #cbd5e1; }
+    .tab-count { opacity: 0.65; font-size: 12px; }
+    .support-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+    .support-search { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .support-search input[type="search"] { flex: 1; min-width: 220px; }
   </style>
 </head>
 <body>
   ${renderAdminTop("Поддержка", "support")}
-  <main class="wrap">
+  <main class="wrap wrap-wide">
+    <div class="grid">
+      <div class="stat"><span>Всего диалогов</span><b>${view.summary.total}</b></div>
+      <div class="stat"><span>Требуют внимания</span><b>${view.summary.attention}</b></div>
+      <div class="stat"><span>Живых</span><b>${view.summary.open}</b></div>
+      <div class="stat"><span>Со сбоями AI</span><b>${view.summary.withErrors}</b></div>
+    </div>
+
     <section class="panel">
-      <h2>Диалоги с ботом поддержки</h2>
-      <p class="hint">Переписки из SQLite (<code>data/giveaway.db</code>, ключ support-chats). В диалоге можно отправить ответ пользователю в Telegram.</p>
-      <table class="support-table">
-        <thead>
-          <tr>
-            <th>Пользователь</th>
-            <th>Бот</th>
-            <th>Статус</th>
-            <th>Последнее</th>
-            <th>Сообщ.</th>
-            <th>Время</th>
-          </tr>
-        </thead>
-        <tbody>${rows || "<tr><td colspan='6'>Пока нет диалогов</td></tr>"}</tbody>
-      </table>
+      <div class="support-tabs">${tabs}</div>
+      <form class="support-search" method="get" action="/admin/support">
+        <input type="hidden" name="tab" value="${escapeHtml(view.activeTab)}" />
+        <input type="search" name="q" value="${escapeHtml(view.query)}" placeholder="Поиск по тексту переписки, имени или ID…" />
+        <button class="btn btn-primary" type="submit">Найти</button>
+        ${view.query ? `<a class="btn btn-ghost" href="${params({ q: "" })}">Сбросить</a>` : ""}
+      </form>
+
+      <div class="users-table-wrap">
+        <table class="support-table">
+          <thead>
+            <tr>
+              <th>Пользователь</th>
+              <th>Бот</th>
+              <th>Метки</th>
+              <th>Последнее сообщение</th>
+              <th>Сообщ.</th>
+              <th>Время</th>
+            </tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="6"><p class="empty">Ничего не найдено.</p></td></tr>`}</tbody>
+        </table>
+      </div>
+
+      <div class="pager">
+        <span>Показано ${view.rows.length} из ${view.totalFiltered} · страница ${view.page} из ${view.totalPages}</span>
+        ${prevHref ? `<a class="btn btn-ghost" href="${prevHref}">← Назад</a>` : ""}
+        ${nextHref ? `<a class="btn btn-ghost" href="${nextHref}">Вперёд →</a>` : ""}
+      </div>
     </section>
   </main>
 </body>
@@ -1815,15 +1874,23 @@ function registerAdminDashboard(app, deps) {
     }
   });
 
-  app.get("/admin/support", requireAuth, (_req, res) => {
+  app.get("/admin/support", requireAuth, (req, res) => {
     // Both bots, not just the first one.
-    const chats = SUPPORT_STORES.flatMap((store) =>
-      listSupportChats(readSupportChatsFor(store.key)).map((chat) => ({
+    const chats = SUPPORT_STORES.flatMap((store) => {
+      const raw = readSupportChatsFor(store.key);
+      return listSupportChats(raw).map((chat) => ({
         ...chat,
         botLabel: store.label,
-      })),
-    ).sort((left, right) => String(right.lastMessageAt || "").localeCompare(String(left.lastMessageAt || "")));
-    res.type("html").send(renderSupportListPage(chats, deps.timezone));
+        transcript: getChatTranscript(raw[chat.chatId] || {}),
+      }));
+    });
+
+    const view = buildSupportView(chats, {
+      tab: String(req.query.tab || "attention"),
+      query: String(req.query.q || ""),
+      page: Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1),
+    });
+    res.type("html").send(renderSupportListPage(view, deps.timezone));
   });
 
   function renderSupportChatView(res, chatId, flash) {
