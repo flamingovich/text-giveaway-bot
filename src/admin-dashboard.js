@@ -10,6 +10,7 @@ const { collectAllDraws } = require("./admin-draw-source");
 const { buildUserCard } = require("./admin-user-card");
 const { buildSupportView } = require("./admin-support-view");
 const { resolveProjectId, resolveUserProjects } = require("./project-identity");
+const { buildDashboardStats } = require("./admin-dashboard-stats");
 const {
   readSupportChats,
   updateSupportChat,
@@ -186,165 +187,6 @@ function countReferralsForOwner(ownerId, projectsData, profiles) {
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
-}
-
-// One definition of "when did this person join", used by every series on the
-// chart. The old code bucketed the participants line by the draw's publish date
-// and the unique line by the join timestamp, so the two were not comparable.
-// 3% of joins predate participantMeta, hence the fallbacks.
-function participantJoinDay(draw, participantId, timezone) {
-  const meta = draw.participantMeta?.[String(participantId)];
-  return formatStatsDay(
-    meta?.updatedAt || draw.publishAt || draw.createdAt,
-    timezone,
-  );
-}
-
-function formatStatsDay(isoValue, timezone) {
-  if (!isoValue) {
-    return "";
-  }
-  const dt = DateTime.fromISO(isoValue, { zone: timezone });
-  if (!dt.isValid) {
-    return "";
-  }
-  return dt.toFormat("yyyy-MM-dd");
-}
-
-function buildStats(deps, ownerFilter = "") {
-  const { readUserProjectProfiles, readProjects, timezone } = deps;
-  const profiles = readUserProjectProfiles() || { users: {} };
-  const projects = readProjects() || { projects: [] };
-
-  // Active + archive. Reading only the active document hid three quarters of
-  // the history here, so every total on this page was understated.
-  const allDraws = collectAllDraws(deps);
-  const draws = ownerFilter
-    ? allDraws.filter((draw) => String(draw.ownerId || "") === ownerFilter)
-    : allDraws;
-
-  const statusCounts = { draft: 0, scheduled: 0, active: 0, finished: 0 };
-  let totalWinners = 0;
-  const participantSet = new Set();
-
-  for (const draw of draws) {
-    statusCounts[draw.status] = (statusCounts[draw.status] || 0) + 1;
-    for (const id of draw.participantIds || []) {
-      participantSet.add(String(id));
-    }
-    totalWinners += (draw.winnerIds || []).length;
-  }
-
-  const allUsers = Object.keys(profiles.users || {});
-  const withTrc = allUsers.filter((key) => {
-    const projectsNode = profiles.users[key]?.projects || {};
-    return Object.values(projectsNode).some((p) => p.trc20Address);
-  }).length;
-
-  const dayMap = new Map();
-  for (let i = 13; i >= 0; i -= 1) {
-    const day = DateTime.now().setZone(timezone).minus({ days: i }).toFormat("yyyy-MM-dd");
-    dayMap.set(day, { draws: 0, joins: 0, uniqueJoins: new Set() });
-  }
-
-  for (const draw of draws) {
-    const created = formatStatsDay(draw.createdAt, timezone);
-    if (dayMap.has(created)) {
-      dayMap.get(created).draws += 1;
-    }
-    for (const participantId of asArray(draw.participantIds)) {
-      const joinDay = participantJoinDay(draw, participantId, timezone);
-      if (joinDay && dayMap.has(joinDay)) {
-        dayMap.get(joinDay).uniqueJoins.add(String(participantId));
-        dayMap.get(joinDay).joins += 1;
-      }
-    }
-  }
-
-  const chartLabels = [...dayMap.keys()];
-  const chartDraws = chartLabels.map((k) => dayMap.get(k).draws);
-  const chartParticipants = chartLabels.map((k) => dayMap.get(k).joins);
-  const chartUniqueJoins = chartLabels.map((k) => dayMap.get(k).uniqueJoins.size);
-
-  const participantFirstJoinDay = new Map();
-  for (const draw of draws) {
-    for (const participantId of asArray(draw.participantIds)) {
-      const joinDay = participantJoinDay(draw, participantId, timezone);
-      if (!joinDay) {
-        continue;
-      }
-      const userKey = String(participantId);
-      const prev = participantFirstJoinDay.get(userKey);
-      if (!prev || joinDay < prev) {
-        participantFirstJoinDay.set(userKey, joinDay);
-      }
-    }
-  }
-  const chartTotalParticipants = chartLabels.map((day) => {
-    let count = 0;
-    for (const joinDay of participantFirstJoinDay.values()) {
-      if (joinDay <= day) {
-        count += 1;
-      }
-    }
-    return count;
-  });
-
-  const recentDraws = [...draws]
-    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-    .slice(0, 50)
-    .map((draw) => ({
-      id: draw.id,
-      prize: draw.prize,
-      status: draw.status,
-      ownerId: draw.ownerId,
-      participants: (draw.participantIds || []).length,
-      winners: (draw.winnerIds || []).length,
-      createdAt: draw.createdAt,
-    }));
-
-  const topOrganizers = new Map();
-  // Used to iterate every draw regardless of the selected organizer, so the
-  // table contradicted the rest of the page whenever a filter was applied.
-  for (const draw of draws) {
-    const key = String(draw.ownerId || "unknown");
-    const row = topOrganizers.get(key) || { draws: 0, referrals: 0 };
-    row.draws += 1;
-    topOrganizers.set(key, row);
-  }
-  for (const [ownerId, row] of topOrganizers.entries()) {
-    if (ownerId === "unknown") {
-      row.referrals = 0;
-      continue;
-    }
-    row.referrals = countReferralsForOwner(ownerId, projects, profiles);
-  }
-
-  const organizerRows = [...topOrganizers.entries()]
-    .map(([id, row]) => ({ id, ...row }))
-    .sort((a, b) => b.draws - a.draws)
-    .slice(0, 20);
-
-  return {
-    totals: {
-      users: allUsers.length,
-      usersWithWallet: withTrc,
-      draws: draws.length,
-      uniqueParticipants: participantSet.size,
-      referrals: countReferralsForOwner(ownerFilter, projects, profiles),
-      winners: totalWinners,
-      active: statusCounts.active || 0,
-      finished: statusCounts.finished || 0,
-    },
-    statusCounts,
-    chartLabels,
-    chartDraws,
-    chartParticipants,
-    chartUniqueJoins,
-    chartTotalParticipants,
-    recentDraws,
-    organizerRows,
-  };
 }
 
 const USERS_PAGE_SIZE = 100;
@@ -1183,74 +1025,136 @@ function renderAdminTop(title, active = "stats") {
 
 function getAdminBaseStyles() {
   return `
+    /* Dense dark, desktop first: this panel is read at night, on a big screen,
+       and the job is to scan a lot of rows quickly rather than to look roomy. */
+    :root {
+      --bg: #0b0f17;
+      --panel: #131926;
+      --panel-2: #0f1523;
+      --line: #212b3d;
+      --line-soft: #1a2233;
+      --text: #e6edf7;
+      --muted: #8b98ad;
+      --accent: #4f8cff;
+      --ok-bg: #10331f; --ok-fg: #7ee2a8;
+      --warn-bg: #3a2a10; --warn-fg: #f0c975;
+      --danger-bg: #3a1618; --danger-fg: #ff9ea4;
+      --muted-bg: #1c2434; --muted-fg: #a9b6c9;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
-    .top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #334155; background: #1e293b; }
-    .top h1 { margin: 0; font-size: 20px; }
-    .wrap { padding: 20px; max-width: 1200px; margin: 0 auto; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
-    .stat { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; }
-    .stat b { display: block; font-size: 24px; margin-top: 4px; }
-    .stat span { font-size: 12px; color: #94a3b8; }
-    .panel { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-    .panel h2 { margin: 0 0 12px; font-size: 16px; }
-    .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
-    select, .btn, input[type="search"], input[type="text"] { padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px; }
-    .btn { text-decoration: none; display: inline-block; cursor: pointer; }
-    .btn-primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
-    .btn-ghost { background: transparent; }
-    .btn-nav-active { background: #334155; border-color: #64748b; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; vertical-align: top; }
-    th { color: #94a3b8; font-weight: 600; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-variant-numeric: tabular-nums;
+    }
+    a { color: var(--accent); }
+
+    .top {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+      padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; z-index: 20;
+    }
+    .top h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: .2px; }
+    .top-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .admin-nav { display: flex; gap: 4px; }
     .logout { margin: 0; }
-    .top-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .admin-nav { display: flex; gap: 6px; }
-    .hint { color: #94a3b8; font-size: 13px; margin: 0 0 14px; }
-    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; white-space: nowrap; }
-    .badge-ok { background: #14532d; color: #bbf7d0; }
-    .badge-warn { background: #713f12; color: #fde68a; }
-    .badge-muted { background: #334155; color: #cbd5e1; }
-    .badge-danger { background: #7f1d1d; color: #fecaca; }
-    .pager { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; font-size: 13px; color: #94a3b8; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
-    .wrap-wide { max-width: 1600px; }
-    .users-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .users-table-wrap > table { min-width: 900px; }
-    .fraud-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
-    .fraud-details { margin: 4px 0 0; padding-left: 16px; color: #94a3b8; font-size: 12px; max-width: 360px; }
-    .fraud-details li { margin-bottom: 2px; }
-    .fraud-panel { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
-    .user-projects { display: flex; flex-wrap: wrap; gap: 4px; }
-    .project-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; color: #e2e8f0; white-space: nowrap; }
-    .project-chip-ref { background: #14532d; color: #bbf7d0; }
-    .project-chip-non-ref { background: #713f12; color: #fde68a; }
-    .project-chip-more { background: #1e293b; color: #94a3b8; border: 1px solid #475569; }
-    .owner-line { margin-top: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .user-link { color: #93c5fd; text-decoration: none; font-weight: 600; }
-    .user-link:hover { text-decoration: underline; }
-    .card-head { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
-    .card-title { display: flex; flex-direction: column; gap: 4px; }
-    .card-title h2 { margin: 0; font-size: 22px; }
-    .card-badges { display: flex; flex-wrap: wrap; gap: 6px; }
-    .kv { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; font-size: 13px; }
-    .kv dt { color: #94a3b8; }
-    .kv dd { margin: 0; }
-    .empty { color: #94a3b8; font-size: 13px; padding: 10px 0; }
-    .outcome-ok { background: #14532d; color: #bbf7d0; }
-    .outcome-warn { background: #713f12; color: #fde68a; }
-    .outcome-danger { background: #7f1d1d; color: #fecaca; }
-    .outcome-muted { background: #334155; color: #cbd5e1; }
+
+    .wrap { padding: 14px 16px 40px; max-width: 1240px; margin: 0 auto; }
+    .wrap-wide { max-width: 1720px; }
+
+    .btn {
+      display: inline-block; text-decoration: none; cursor: pointer;
+      padding: 5px 10px; border-radius: 7px; font-size: 12.5px; line-height: 1.3;
+      border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+    }
+    .btn:hover { border-color: #33405a; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 650; }
+    .btn-ghost { background: transparent; }
+    .btn-nav-active { background: #1d2739; border-color: #33405a; color: #fff; }
+    .btn-danger { background: var(--danger-bg); border-color: #5a2429; color: var(--danger-fg); }
+
+    select, input[type="search"], input[type="text"], input[type="password"], textarea {
+      padding: 5px 8px; border-radius: 7px; font-size: 12.5px; font-family: inherit;
+      border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+    }
+    select:focus, input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+
+    /* Counters. The three headline numbers come first and are meant to be read
+       from across the room; everything after them is context. */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+    .grid-hero { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+    .stat {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    }
+    .stat span { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .stat b { display: block; font-size: 20px; font-weight: 650; margin-top: 3px; letter-spacing: -.01em; }
+    .stat-hero b { font-size: 30px; }
+    .stat small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    .panel {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+      padding: 12px 14px; margin-bottom: 12px;
+    }
+    .panel h2 { margin: 0 0 10px; font-size: 12px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    .panel-flush { padding: 0; overflow: hidden; }
+    .panel-flush h2 { padding: 10px 14px 0; margin-bottom: 8px; }
+    .hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+    .empty { color: var(--muted); font-size: 12.5px; padding: 14px; text-align: center; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    thead th {
+      position: sticky; top: 41px; z-index: 5;
+      background: var(--panel-2); color: var(--muted);
+      font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+      text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line);
+    }
+    tbody td { padding: 6px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+    tbody tr:hover td { background: #161d2c; }
+    tbody tr:last-child td { border-bottom: none; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    .badge {
+      display: inline-block; font-size: 10.5px; line-height: 1.6; padding: 1px 7px; border-radius: 999px;
+      background: var(--muted-bg); color: var(--muted-fg); white-space: nowrap;
+    }
+    .badge-ok { background: var(--ok-bg); color: var(--ok-fg); }
+    .badge-warn { background: var(--warn-bg); color: var(--warn-fg); }
+    .badge-muted { background: var(--muted-bg); color: var(--muted-fg); }
+    .badge-danger { background: var(--danger-bg); color: var(--danger-fg); }
+    .outcome-ok { background: var(--ok-bg); color: var(--ok-fg); }
+    .outcome-warn { background: var(--warn-bg); color: var(--warn-fg); }
+    .outcome-danger { background: var(--danger-bg); color: var(--danger-fg); }
+    .outcome-muted { background: var(--muted-bg); color: var(--muted-fg); }
+
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+    .filters label { display: block; }
+    .filters label > span { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+
+    .pager { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 14px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line-soft); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--muted); }
     .nowrap { white-space: nowrap; }
-    .fraud-group { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 10px; }
-    .fraud-group-title { margin-bottom: 6px; }
-    .fraud-item { padding: 6px 0; border-top: 1px solid #1e293b; font-size: 12px; }
-    .fraud-item:first-of-type { border-top: 0; padding-top: 0; }
-    .fraud-project { display: inline-block; color: #93c5fd; margin-right: 6px; font-size: 11px; }
-    .fraud-draw { color: #e2e8f0; font-weight: 600; margin-bottom: 2px; }
-    .fraud-linked { color: #94a3b8; line-height: 1.35; }
-    .sort-link { color: #cbd5e1; text-decoration: none; }
-    .sort-link:hover { color: #93c5fd; text-decoration: underline; }
+    .users-table-wrap { overflow-x: auto; }
+    .users-table-wrap > table { min-width: 980px; }
+
+    .user-link { color: var(--accent); text-decoration: none; font-weight: 600; }
+    .user-link:hover { text-decoration: underline; }
+    .user-projects { display: flex; flex-wrap: wrap; gap: 3px; }
+    .project-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--muted-bg); color: var(--muted-fg); white-space: nowrap; }
+    .project-chip-ref { background: var(--ok-bg); color: var(--ok-fg); }
+    .project-chip-non-ref { background: var(--warn-bg); color: var(--warn-fg); }
+    .project-chip-more { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+    .owner-line { margin-top: 3px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fraud-badges { display: flex; flex-wrap: wrap; gap: 3px; }
+    .fraud-details { margin: 3px 0 0; padding-left: 15px; color: var(--muted); font-size: 11.5px; }
+    .fraud-details li { margin-bottom: 2px; }
+    .fraud-panel { display: flex; flex-direction: column; gap: 6px; max-width: 420px; }
+
+    .card-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+    .card-title h2 { margin: 0; font-size: 18px; color: var(--text); text-transform: none; letter-spacing: 0; }
+    .card-badges { display: flex; flex-wrap: wrap; gap: 5px; }
   `;
 }
 
@@ -1301,7 +1205,7 @@ function renderLoginPage(error = "") {
 </html>`;
 }
 
-function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfiles) {
+function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfiles, period) {
   const ownerOptions = organizers
     .map(
       (o) =>
@@ -1309,44 +1213,54 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     )
     .join("");
 
-  const drawRows = stats.recentDraws
-    .map((draw) => {
-      const ownerLabel = labelForUser(draw.ownerId, userProfiles);
-      return `<tr>
-        <td>${escapeHtml(draw.prize)}</td>
-        <td><span class="tag tag-${escapeHtml(draw.status)}">${escapeHtml(draw.status)}</span></td>
-        <td>${escapeHtml(ownerLabel)}</td>
-        <td>${draw.participants}</td>
-        <td>${draw.winners}</td>
-        <td>${escapeHtml(draw.createdAt ? draw.createdAt.slice(0, 16).replace("T", " ") : "—")}</td>
-      </tr>`;
+  const periodTabs = stats.periods
+    .map((item) => {
+      const query = new URLSearchParams();
+      if (selectedOwner) query.set("ownerId", selectedOwner);
+      if (item.id !== "30") query.set("period", item.id);
+      const href = query.toString() ? `/admin/dashboard?${query}` : "/admin/dashboard";
+      const cls = item.id === stats.period.id ? "btn btn-ghost btn-nav-active" : "btn btn-ghost";
+      return `<a class="${cls}" href="${href}">${escapeHtml(item.label)}</a>`;
     })
+    .join("");
+
+  const brandRows = stats.breakdowns.brands
+    .map(
+      ([name, count]) =>
+        `<tr><td>${escapeHtml(name)}</td><td class="num">${count}</td></tr>`,
+    )
     .join("");
 
   const orgRows = stats.organizerRows
     .map((row) => {
       const label = labelForUser(row.id, userProfiles);
+      const query = new URLSearchParams({ ownerId: row.id });
+      if (stats.period.id !== "30") query.set("period", stats.period.id);
       return `<tr>
-        <td>${escapeHtml(label)}</td>
-        <td>${row.draws}</td>
-        <td>${row.referrals}</td>
-        <td><a href="/admin/dashboard?ownerId=${encodeURIComponent(row.id)}">Фильтр</a></td>
+        <td><a class="user-link" href="/admin/dashboard?${query}">${escapeHtml(label)}</a></td>
+        <td class="num">${row.draws}</td>
+        <td class="num">${row.referrals}</td>
       </tr>`;
     })
     .join("");
 
-  const chartPayload = JSON.stringify({
-    labels: stats.chartLabels.map((label) => label.slice(5)),
-    uniqueJoins: stats.chartUniqueJoins,
-    totalParticipants: stats.chartTotalParticipants,
-    status: stats.statusCounts,
-    referrals: stats.organizerRows
-      .filter((row) => row.referrals > 0)
-      .map((row) => ({
-        label: labelForUser(row.id, userProfiles),
-        count: row.referrals,
-      })),
+  const payload = JSON.stringify({
+    labels: stats.series.labels.map((day) => day.slice(5)),
+    newUsers: stats.series.newUsers,
+    totalUsers: stats.series.totalUsers,
+    newParticipants: stats.series.newParticipants,
+    totalParticipants: stats.series.totalParticipants,
+    joins: stats.series.joins,
+    draws: stats.series.draws,
+    status: stats.breakdowns.status,
+    prizeTypes: stats.breakdowns.prizeTypes,
+    brands: stats.breakdowns.brands.slice(0, 6),
+    referrals: stats.breakdowns.referrals,
   });
+
+  const participantShare = stats.totals.users
+    ? Math.round((stats.totals.participants / stats.totals.users) * 100)
+    : 0;
 
   return `<!doctype html>
 <html lang="ru">
@@ -1356,208 +1270,182 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
   <title>RollerBot — Admin</title>
   <style>
     ${getAdminBaseStyles()}
-    .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; }
-    .tag-active { background: #14532d; color: #bbf7d0; }
-    .tag-finished { background: #1e3a5f; color: #bfdbfe; }
-    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-    .chart-card { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 12px; }
-    .chart-card h3 { margin: 0 0 10px; font-size: 13px; color: #94a3b8; font-weight: 600; }
-    .chart-box { position: relative; height: 280px; }
-    .chart-box.chart-box-sm { height: 240px; }
+    .charts-row { display: grid; gap: 10px; margin-bottom: 12px; }
+    .charts-2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+    .charts-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .chart-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+    .chart-card h3 { margin: 0 0 8px; font-size: 11px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+    .chart-box { position: relative; height: 240px; }
+    .chart-box-sm { height: 190px; }
+    .period-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  ${renderAdminTop("RollerBot Admin", "stats")}
-  <main class="wrap">
-    <div class="grid">
-      <div class="stat"><span>Пользователей</span><b>${stats.totals.users}</b></div>
-      <div class="stat"><span>С кошельком TRC-20</span><b>${stats.totals.usersWithWallet}</b></div>
-      <div class="stat"><span>Розыгрышей</span><b>${stats.totals.draws}</b></div>
-      <div class="stat"><span>Активных</span><b>${stats.totals.active}</b></div>
-      <div class="stat"><span>Завершённых</span><b>${stats.totals.finished}</b></div>
-      <div class="stat"><span>Участников (уник.)</span><b>${stats.totals.uniqueParticipants}</b></div>
-    </div>
+  ${renderAdminTop("Статистика", "stats")}
+  <main class="wrap wrap-wide">
 
-    <section class="panel">
-      <h2>Фильтр по организатору</h2>
-      <form class="filters" method="get" action="/admin/dashboard">
+    <div class="toolbar">
+      <div class="period-tabs">${periodTabs}</div>
+      <form method="get" action="/admin/dashboard" class="filters">
+        <input type="hidden" name="period" value="${escapeHtml(stats.period.id)}" />
         <label>
-          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Организатор</span>
-          <select name="ownerId">
-            <option value="">Все</option>
+          <span>Организатор</span>
+          <select name="ownerId" onchange="this.form.submit()">
+            <option value="">Все организаторы</option>
             ${ownerOptions}
           </select>
         </label>
-        <button type="submit" class="btn btn-primary">Применить</button>
-        ${selectedOwner ? `<a class="btn btn-ghost" href="/admin/dashboard">Сбросить</a>` : ""}
       </form>
-    </section>
+    </div>
 
-    <section class="panel">
-      <h2>Графики (14 дней)</h2>
-      <div class="charts-grid">
-        <div class="chart-card" style="grid-column: 1 / -1;">
-          <h3>Участники</h3>
-          <div class="chart-box"><canvas id="chartActivity"></canvas></div>
-        </div>
-        <div class="chart-card">
-          <h3>Статусы розыгрышей</h3>
-          <div class="chart-box chart-box-sm"><canvas id="chartStatus"></canvas></div>
-        </div>
-        <div class="chart-card">
-          <h3>Рефералы по организаторам</h3>
-          <div class="chart-box chart-box-sm"><canvas id="chartReferrals"></canvas></div>
-        </div>
+    <div class="grid grid-hero">
+      <div class="stat stat-hero">
+        <span>Пользователей в боте</span><b>${stats.totals.users}</b>
+        <small>всего известных боту</small>
       </div>
-    </section>
+      <div class="stat stat-hero">
+        <span>Участников</span><b>${stats.totals.participants}</b>
+        <small>хотя бы один розыгрыш · ${participantShare}% от всех</small>
+      </div>
+      <div class="stat stat-hero">
+        <span>Розыгрышей</span><b>${stats.totals.draws}</b>
+        <small>активных ${stats.totals.active} · завершённых ${stats.totals.finished}</small>
+      </div>
+    </div>
 
-    <section class="panel">
-      <h2>Организаторы</h2>
-      <table>
-        <thead><tr><th>Организатор</th><th>Розыгрышей</th><th>Рефералов</th><th></th></tr></thead>
-        <tbody>${orgRows || "<tr><td colspan='4'>Нет данных</td></tr>"}</tbody>
-      </table>
-    </section>
+    <div class="grid">
+      <div class="stat"><span>Победителей</span><b>${stats.totals.winners}</b><small>уникальных людей</small></div>
+      <div class="stat"><span>Побед всего</span><b>${stats.totals.wins}</b><small>с повторными</small></div>
+      <div class="stat"><span>С кошельком</span><b>${stats.totals.withWallet}</b><small>указан TRC-20</small></div>
+    </div>
 
-    <section class="panel">
-      <h2>Последние розыгрыши</h2>
-      <table>
-        <thead><tr><th>Приз</th><th>Статус</th><th>Организатор</th><th>Участн.</th><th>Побед.</th><th>Создан</th></tr></thead>
-        <tbody>${drawRows || "<tr><td colspan='6'>Нет данных</td></tr>"}</tbody>
-      </table>
-    </section>
+    <div class="charts-row charts-2">
+      <div class="chart-card">
+        <h3>Рост пользователей</h3>
+        <div class="chart-box"><canvas id="usersChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>Рост участников</h3>
+        <div class="chart-box"><canvas id="participantsChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="charts-row charts-2">
+      <div class="chart-card">
+        <h3>Розыгрышей создано</h3>
+        <div class="chart-box"><canvas id="drawsChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>Вступлений в розыгрыши</h3>
+        <div class="chart-box"><canvas id="joinsChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="charts-row charts-3">
+      <div class="chart-card">
+        <h3>Статусы розыгрышей</h3>
+        <div class="chart-box chart-box-sm"><canvas id="statusChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>Типы призов</h3>
+        <div class="chart-box chart-box-sm"><canvas id="prizeChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>Реф-статус пользователей</h3>
+        <div class="chart-box chart-box-sm"><canvas id="refChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="charts-row charts-2">
+      <div class="panel panel-flush">
+        <h2>Розыгрышей по брендам</h2>
+        <table>
+          <thead><tr><th>Бренд</th><th class="num">Розыгрышей</th></tr></thead>
+          <tbody>${brandRows || '<tr><td colspan="2"><p class="empty">Нет данных.</p></td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="panel panel-flush">
+        <h2>Организаторы</h2>
+        <table>
+          <thead><tr><th>Организатор</th><th class="num">Розыгрышей</th><th class="num">Рефералов</th></tr></thead>
+          <tbody>${orgRows || '<tr><td colspan="3"><p class="empty">Нет данных.</p></td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
   </main>
+
   <script>
-    (function () {
-      const payload = ${chartPayload};
-      const axisColor = "#94a3b8";
-      const gridColor = "rgba(148, 163, 184, 0.15)";
-      const commonOptions = {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { labels: { color: axisColor } },
-          tooltip: {
-            backgroundColor: "#1e293b",
-            borderColor: "#475569",
-            borderWidth: 1,
-            titleColor: "#f8fafc",
-            bodyColor: "#e2e8f0",
+    const D = ${payload};
+    const GRID = "rgba(148,163,184,.12)";
+    const TICK = "#8b98ad";
+    Chart.defaults.color = TICK;
+    Chart.defaults.font.size = 11;
+    Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+
+    const lineOpts = (leftTitle, rightTitle) => ({
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true } } },
+      scales: {
+        x: { grid: { color: GRID }, ticks: { maxRotation: 0, autoSkipPadding: 16 } },
+        y: { position: "left", beginAtZero: true, grid: { color: GRID }, title: { display: true, text: leftTitle } },
+        y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: rightTitle } },
+      },
+    });
+
+    const growth = (canvasId, newData, totalData, newLabel, totalLabel) =>
+      new Chart(document.getElementById(canvasId), {
+        data: {
+          labels: D.labels,
+          datasets: [
+            { type: "bar", label: newLabel, data: newData, yAxisID: "y",
+              backgroundColor: "rgba(79,140,255,.45)", borderColor: "#4f8cff", borderWidth: 1, borderRadius: 2 },
+            { type: "line", label: totalLabel, data: totalData, yAxisID: "y1",
+              borderColor: "#7ee2a8", backgroundColor: "rgba(126,226,168,.12)",
+              borderWidth: 2, pointRadius: 0, tension: .3, fill: true },
+          ],
+        },
+        options: lineOpts(newLabel, totalLabel),
+      });
+
+    growth("usersChart", D.newUsers, D.totalUsers, "Новые", "Всего");
+    growth("participantsChart", D.newParticipants, D.totalParticipants, "Новые", "Всего");
+
+    const bars = (canvasId, data, label, color) =>
+      new Chart(document.getElementById(canvasId), {
+        type: "bar",
+        data: { labels: D.labels, datasets: [{ label, data, backgroundColor: color, borderRadius: 2 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { color: GRID }, ticks: { maxRotation: 0, autoSkipPadding: 16 } },
+            y: { beginAtZero: true, grid: { color: GRID } },
           },
         },
-      };
+      });
 
-      const activityCtx = document.getElementById("chartActivity");
-      if (activityCtx) {
-        new Chart(activityCtx, {
-          type: "line",
-          data: {
-            labels: payload.labels,
-            datasets: [
-              {
-                label: "Новые участники",
-                data: payload.uniqueJoins,
-                borderColor: "#facc15",
-                backgroundColor: "rgba(250, 204, 21, 0.18)",
-                fill: true,
-                tension: 0.3,
-                yAxisID: "y",
-              },
-              {
-                label: "Всего участников",
-                data: payload.totalParticipants,
-                borderColor: "#4ade80",
-                backgroundColor: "rgba(74, 222, 128, 0.12)",
-                fill: true,
-                tension: 0.3,
-                yAxisID: "y1",
-              },
-            ],
-          },
-          options: {
-            ...commonOptions,
-            scales: {
-              x: { ticks: { color: axisColor }, grid: { color: gridColor } },
-              y: {
-                position: "left",
-                ticks: { color: axisColor, precision: 0 },
-                grid: { color: gridColor },
-                title: { display: true, text: "Новые", color: axisColor },
-              },
-              y1: {
-                position: "right",
-                ticks: { color: axisColor, precision: 0 },
-                grid: { drawOnChartArea: false },
-                title: { display: true, text: "Всего", color: axisColor },
-              },
-            },
-          },
-        });
-      }
+    bars("drawsChart", D.draws, "Розыгрышей", "rgba(240,201,117,.7)");
+    bars("joinsChart", D.joins, "Вступлений", "rgba(79,140,255,.6)");
 
-      const statusCtx = document.getElementById("chartStatus");
-      if (statusCtx) {
-        const status = payload.status || {};
-        new Chart(statusCtx, {
-          type: "doughnut",
-          data: {
-            labels: ["Активные", "Завершённые", "Запланированные", "Черновики"],
-            datasets: [
-              {
-                data: [
-                  status.active || 0,
-                  status.finished || 0,
-                  status.scheduled || 0,
-                  status.draft || 0,
-                ],
-                backgroundColor: ["#22c55e", "#3b82f6", "#f59e0b", "#64748b"],
-                borderColor: "#0f172a",
-                borderWidth: 2,
-              },
-            ],
-          },
-          options: {
-            ...commonOptions,
-            plugins: {
-              ...commonOptions.plugins,
-              legend: { position: "bottom", labels: { color: axisColor } },
-            },
-          },
-        });
-      }
+    const PIE = ["#4f8cff", "#7ee2a8", "#f0c975", "#ff9ea4", "#b48ef0", "#67d5e0"];
+    const donut = (canvasId, labels, values) =>
+      new Chart(document.getElementById(canvasId), {
+        type: "doughnut",
+        data: { labels, datasets: [{ data: values, backgroundColor: PIE, borderColor: "#131926", borderWidth: 2 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: "58%",
+          plugins: { legend: { position: "bottom", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, padding: 10 } } },
+        },
+      });
 
-      const referralsCtx = document.getElementById("chartReferrals");
-      if (referralsCtx) {
-        const refs = payload.referrals || [];
-        const refColors = [
-          "#60a5fa", "#4ade80", "#facc15", "#f472b6", "#a78bfa", "#fb923c",
-          "#22d3ee", "#f87171", "#34d399", "#818cf8", "#fcd34d", "#c084fc",
-        ];
-        new Chart(referralsCtx, {
-          type: "pie",
-          data: {
-            labels: refs.map((item) => item.label),
-            datasets: [
-              {
-                data: refs.map((item) => item.count),
-                backgroundColor: refs.map((_, index) => refColors[index % refColors.length]),
-                borderColor: "#0f172a",
-                borderWidth: 2,
-              },
-            ],
-          },
-          options: {
-            ...commonOptions,
-            plugins: {
-              ...commonOptions.plugins,
-              legend: { position: "bottom", labels: { color: axisColor, boxWidth: 12, font: { size: 11 } } },
-            },
-          },
-        });
-      }
-    })();
+    donut("statusChart", ["Активные", "Завершённые", "Запланированные", "Черновики"],
+      [D.status.active || 0, D.status.finished || 0, D.status.scheduled || 0, D.status.draft || 0]);
+    donut("prizeChart", D.prizeTypes.map(x => x[0]), D.prizeTypes.map(x => x[1]));
+    donut("refChart", ["Рефы", "Не рефы", "Не определено"],
+      [D.referrals.refs, D.referrals.nonRefs, D.referrals.unknown]);
   </script>
 </body>
 </html>`;
@@ -1868,22 +1756,40 @@ function registerAdminDashboard(app, deps) {
   app.get("/admin/dashboard", requireAuth, (req, res) => {
     try {
       const selectedOwner = String(req.query.ownerId || "").trim();
-      const data = deps.readData();
+      const period = String(req.query.period || "30").trim();
       const profiles = deps.readUserProjectProfiles() || { users: {} };
       const delegated = deps.readDelegatedAdmins()?.admins || [];
-      const organizers = collectOrganizerOptions(
-        asArray(data.draws),
-        deps.adminIds,
-        delegated,
-        profiles,
+      const allDraws = collectAllDraws(deps);
+      const organizers = collectOrganizerOptions(allDraws, deps.adminIds, delegated, profiles);
+
+      const stats = buildDashboardStats(deps, { ownerFilter: selectedOwner, period });
+
+      // Built here rather than in the stats module: counting an organiser's
+      // referrals needs the project list and the label lookup this file owns.
+      const projectsData = deps.readProjects() || { projects: [] };
+      const drawsByOwner = new Map();
+      const scopedDraws = selectedOwner
+        ? allDraws.filter((draw) => String(draw.ownerId || "") === selectedOwner)
+        : allDraws;
+      for (const draw of scopedDraws) {
+        const key = String(draw.ownerId || "unknown");
+        drawsByOwner.set(key, (drawsByOwner.get(key) || 0) + 1);
+      }
+      stats.organizerRows = [...drawsByOwner.entries()]
+        .map(([id, draws]) => ({
+          id,
+          draws,
+          referrals: id === "unknown" ? 0 : countReferralsForOwner(id, projectsData, profiles),
+        }))
+        .sort((left, right) => right.draws - left.draws)
+        .slice(0, 20);
+
+      res.type("html").send(
+        renderDashboardPage(deps, stats, organizers, selectedOwner, profiles, period),
       );
-      const stats = buildStats(deps, selectedOwner);
-      res.type("html").send(renderDashboardPage(deps, stats, organizers, selectedOwner, profiles));
     } catch (error) {
       console.error("[admin] GET /admin/dashboard:", error);
-      res.status(500).type("html").send(
-        `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Admin — ошибка</title></head><body style="font-family:system-ui,sans-serif;padding:24px;background:#0f172a;color:#e2e8f0"><h1>Не удалось загрузить дашборд</h1><p>Проверьте логи giveaway-bot на сервере. Частая причина — битые даты или формат данных в базе.</p><p><a href="/admin/login" style="color:#93c5fd">Вернуться ко входу</a></p></body></html>`,
-      );
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось загрузить статистику."));
     }
   });
 
@@ -2111,5 +2017,4 @@ module.exports = {
   buildAdminUserRows,
   sortAdminUserRows,
   filterAdminUserRows,
-  buildStats,
 };
