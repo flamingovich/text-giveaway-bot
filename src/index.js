@@ -5619,6 +5619,21 @@ function startSchedulerGuard() {
   schedulerGuardTimer.unref?.();
 }
 
+// Polling ending means this process is no longer the one Telegram talks to, so
+// it must stop finishing draws and paying out against a database another
+// process may now own.
+function stopScheduler() {
+  if (schedulerTimer) {
+    clearInterval(schedulerTimer);
+    schedulerTimer = null;
+  }
+  if (schedulerGuardTimer) {
+    clearInterval(schedulerGuardTimer);
+    schedulerGuardTimer = null;
+  }
+  lastSchedulerTickAt = 0;
+}
+
 function startScheduler() {
   if (schedulerTimer || WEB_ONLY || process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
     return;
@@ -12405,25 +12420,38 @@ async function bootstrap() {
       "[boot] SKIP_TELEGRAM_POLLING=true — getUpdates не запущен (прод-бот может работать параллельно)",
     );
   } else {
-    try {
-      await bot.launch();
-    } catch (error) {
-      const message = String(error.message || error);
-      if (/409|Conflict/i.test(message)) {
-        console.error(
-          "[boot] Telegram 409: другой процесс уже слушает этого бота. Планировщик не запускаем, чтобы не сжигать призы по старой базе.",
-        );
-      }
-      throw error;
-    }
-    console.log("[boot] Telegram bot polling started");
-    startScheduler();
-    void syncActiveDrawKeyboards().catch((error) => {
-      console.warn("[boot] sync keyboards:", error.message);
-    });
-    void syncAllOrganizerPanelMenus().catch((error) => {
-      console.warn("[boot] sync menus:", error.message);
-    });
+    // launch() resolves when polling ENDS, not when it begins: telegraf awaits
+    // the polling loop inside it. Everything that used to sit after the await
+    // therefore ran only once Telegram had stopped delivering - the scheduler
+    // was started by polling dying, and a healthy bot had no scheduler at all.
+    // Draws sat past their end while joins, which come over HTTP, kept working.
+    // Start on the launch callback, which fires as soon as getMe succeeds.
+    bot
+      .launch({}, () => {
+        console.log("[boot] Telegram bot polling started");
+        startScheduler();
+        void syncActiveDrawKeyboards().catch((error) => {
+          console.warn("[boot] sync keyboards:", error.message);
+        });
+        void syncAllOrganizerPanelMenus().catch((error) => {
+          console.warn("[boot] sync menus:", error.message);
+        });
+      })
+      .then(() => {
+        console.error("[boot] Telegram polling остановлен — планировщик выключен");
+        stopScheduler();
+      })
+      .catch((error) => {
+        const message = String(error.message || error);
+        if (/409|Conflict/i.test(message)) {
+          console.error(
+            "[boot] Telegram 409: другой процесс уже слушает этого бота. Останавливаю планировщик, чтобы не сжигать призы по старой базе.",
+          );
+        } else {
+          console.error("[boot] Telegram polling упал:", message);
+        }
+        stopScheduler();
+      });
   }
   console.log(
     `[boot] participate example: ${getJoinParticipateUrl("draw_example") || "(нет URL — проверьте BOT_USERNAME и JOIN_MINI_APP_SHORT_NAME)"}`,
