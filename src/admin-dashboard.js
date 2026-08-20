@@ -139,6 +139,18 @@ function collectOrganizerOptions(draws, adminIds, delegatedAdmins, userProfiles)
     .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 }
 
+// The table prints the id in its own line underneath, so repeating it inside
+// the label showed the same number twice in one cell.
+function displayNameForUser(userId, userProfiles, entry = {}) {
+  const meta = userProfiles.users?.[String(userId)]?.meta || {};
+  const name = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
+  const username = meta.username ? `@${meta.username}` : entry.username ? `@${entry.username}` : "";
+  if (name && username) {
+    return `${name} (${username})`;
+  }
+  return username || name || `ID ${userId}`;
+}
+
 function labelForUser(userId, userProfiles, entry = {}) {
   const meta = userProfiles.users?.[String(userId)]?.meta || {};
   const name = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
@@ -351,13 +363,14 @@ function collectBrandOptions(projectsList) {
 }
 
 function missingProject(projectId) {
-  return { id: projectId, name: `Проект удалён (${projectId})`, ownerId: null, missing: true };
+  return { id: projectId, name: "Проект удалён", ownerId: null, missing: true };
 }
 
-function emptyProjectRow(userId, userLabel) {
+function emptyProjectRow(userId, userLabel, userName = userLabel) {
   return {
     userId,
     userLabel,
+    userName,
     projectId: "",
     projectName: "Без проекта",
     brandKey: "",
@@ -387,7 +400,7 @@ function buildAdminUserProjectRows(deps) {
     // the whole row, hiding 288 users on production. Keep the person and mark
     // the project instead.
     if (projectEntries.length === 0) {
-      rows.push(emptyProjectRow(userId, userLabel));
+      rows.push(emptyProjectRow(userId, userLabel, displayNameForUser(userId, profiles)));
     }
 
     for (const [projectId, projectData] of projectEntries) {
@@ -406,6 +419,7 @@ function buildAdminUserProjectRows(deps) {
       rows.push({
         userId,
         userLabel,
+        userName: displayNameForUser(userId, profiles),
         projectId,
         projectName: project.name,
         brandKey: normalizeProjectBrandName(project.name),
@@ -459,13 +473,16 @@ function addActivityOnlyRows(deps, projectRows, activityIndex) {
     known.add(`${userId}:${projectId}`);
     // Mega giveaways have no project of their own.
     if (!projectId) {
-      projectRows.push(emptyProjectRow(userId, labelForUser(userId, profiles)));
+      projectRows.push(
+        emptyProjectRow(userId, labelForUser(userId, profiles), displayNameForUser(userId, profiles)),
+      );
       continue;
     }
     const project = projectById.get(projectId) || missingProject(projectId);
     projectRows.push({
       userId,
       userLabel: labelForUser(userId, profiles),
+      userName: displayNameForUser(userId, profiles),
       projectId,
       projectName: project.name,
       brandKey: normalizeProjectBrandName(project.name),
@@ -497,6 +514,7 @@ function buildAdminUserRows(deps, activityIndex, prebuiltProjectRows = null) {
       userRow = {
         userId: row.userId,
         userLabel: row.userLabel,
+        userName: row.userName || row.userLabel,
         projects: [],
         participations: 0,
         wins: 0,
@@ -513,6 +531,7 @@ function buildAdminUserRows(deps, activityIndex, prebuiltProjectRows = null) {
     }
 
     userRow.projects.push({
+      projectId: row.projectId,
       projectName: row.projectName,
       brandKey: row.brandKey,
       refStatus: row.refStatus,
@@ -548,6 +567,7 @@ function buildAdminUserRows(deps, activityIndex, prebuiltProjectRows = null) {
     .map((row) => ({
       userId: row.userId,
       userLabel: row.userLabel,
+      userName: row.userName,
       projects: row.projects,
       participations: row.participations,
       wins: row.wins,
@@ -572,8 +592,23 @@ function filterAdminUserRows(rows, filters) {
   const brand = String(filters.brand || "").trim();
   const refOwnerId = String(filters.refOwnerId || "").trim();
   const refFilter = String(filters.ref || "").trim();
+  const activity = String(filters.activity || "").trim();
 
   return rows.filter((row) => {
+    // Listing everyone who ever touched the bot is correct but noisy: about two
+    // thousand of them never entered a draw.
+    if (activity === "participated" && row.participations === 0) {
+      return false;
+    }
+    if (activity === "won" && row.wins === 0) {
+      return false;
+    }
+    if (activity === "unpaid" && !(row.wins > 0 && row.paidRub === 0 && row.paidUsd === 0)) {
+      return false;
+    }
+    if (activity === "fraud" && !row.hasFraud) {
+      return false;
+    }
     if (brand && !row.projects.some((project) => project.brandKey === brand)) {
       return false;
     }
@@ -641,7 +676,18 @@ function compareAdminUserRows(left, right, sortKey, sortDir) {
 function sortAdminUserRows(rows, sortKey, sortDir) {
   const allowed = new Set(["participations", "wins", "winnings", "payouts"]);
   if (!allowed.has(sortKey)) {
-    return rows;
+    // Alphabetical order put whoever happens to start with "A" on page one.
+    // Now that everyone who ever touched the bot is listed, the people worth
+    // seeing first are the ones who actually took part.
+    return [...rows].sort((left, right) => {
+      if (right.participations !== left.participations) {
+        return right.participations - left.participations;
+      }
+      if (right.wins !== left.wins) {
+        return right.wins - left.wins;
+      }
+      return String(left.userName || "").localeCompare(String(right.userName || ""), "ru");
+    });
   }
   const direction = sortDir === "asc" ? "asc" : "desc";
   return [...rows].sort((left, right) => compareAdminUserRows(left, right, sortKey, direction));
@@ -657,19 +703,65 @@ function renderRefStatusBadge(refStatus) {
   return '<span class="badge badge-muted">—</span>';
 }
 
+const PROJECTS_SHOWN_IN_CELL = 3;
+
+// One user can carry eight project bindings, and printing each with its own
+// referral-owner line turned a single row into half a screen of repeated text.
+// The cell summarises; the user's own page has the full list.
 function renderUserProjectsCell(projects) {
-  if (!projects.length) {
-    return "—";
+  const named = projects.filter((project) => project.projectId);
+  if (named.length === 0) {
+    return '<span class="badge badge-muted">Без проекта</span>';
   }
-  return `<div class="user-projects">${projects
+
+  // Legacy bindings from before the brand migration all resolve to the same
+  // "deleted" label, and printing it three times in a row says nothing.
+  const withName = named.filter((project) => project.projectName !== "Проект удалён");
+  const orphans = named.length - withName.length;
+
+  // The same brand exists as a separate project per owner, so one person can
+  // hold three bindings all called Pokerdom. Show the brand once.
+  const live = [];
+  const seenNames = new Set();
+  for (const project of withName) {
+    if (seenNames.has(project.projectName)) {
+      continue;
+    }
+    seenNames.add(project.projectName);
+    live.push(project);
+  }
+
+  const chips = live
+    .slice(0, PROJECTS_SHOWN_IN_CELL)
     .map(
-      (project) => `<div class="user-project-item">
-        <span class="user-project-name">${escapeHtml(project.projectName)}</span>
-        ${renderRefStatusBadge(project.refStatus)}
-        ${project.referralOwnerLabel && project.referralOwnerLabel !== "—" ? `<span class="user-project-ref">${escapeHtml(project.referralOwnerLabel)}</span>` : ""}
-      </div>`,
+      (project) =>
+        `<span class="project-chip project-chip-${escapeHtml(project.refStatus)}">${escapeHtml(project.projectName)}</span>`,
     )
-    .join("")}</div>`;
+    .join("");
+
+  const rest = Math.max(0, live.length - PROJECTS_SHOWN_IN_CELL);
+  const more = rest > 0 ? `<span class="project-chip project-chip-more">+${rest}</span>` : "";
+  const orphanChip = orphans
+    ? `<span class="project-chip project-chip-more" title="привязки к удалённым проектам">удалённых: ${orphans}</span>`
+    : "";
+
+  // The referral owner is nearly always the same across a user's projects, so
+  // it belongs on one line rather than repeated under every chip.
+  const owners = [
+    ...new Set(
+      named
+        .map((project) => project.referralOwnerLabel)
+        .filter((label) => label && label !== "—"),
+    ),
+  ];
+  const ownerLine = owners.length
+    ? `<div class="hint owner-line" title="${escapeHtml(owners.join(", "))}">реф: ${escapeHtml(owners[0])}${owners.length > 1 ? ` +${owners.length - 1}` : ""}</div>`
+    : "";
+
+  if (!chips && !orphanChip) {
+    return '<span class="badge badge-muted">Без проекта</span>';
+  }
+  return `<div class="user-projects">${chips}${more}${orphanChip}</div>${ownerLine}`;
 }
 
 function renderAntiFraudCell(row) {
@@ -758,7 +850,7 @@ function renderUsersPage(deps, viewModel) {
   const tableRows = rows
     .map(
       (row) => `<tr>
-        <td><a class="user-link" href="/admin/users/${encodeURIComponent(row.userId)}">${escapeHtml(row.userLabel)}</a><div class="mono">${escapeHtml(row.userId)}</div></td>
+        <td><a class="user-link" href="/admin/users/${encodeURIComponent(row.userId)}">${escapeHtml(row.userName || row.userLabel)}</a><div class="mono">${escapeHtml(row.userId)}</div></td>
         <td>${renderUserProjectsCell(row.projects)}</td>
         <td>${renderAntiFraudCell(row)}</td>
         <td>${row.hasWallet ? '<span class="badge badge-ok">Есть</span>' : '<span class="badge badge-muted">Нет</span>'}</td>
@@ -774,6 +866,7 @@ function renderUsersPage(deps, viewModel) {
   if (filters.brand) queryBase.set("brand", filters.brand);
   if (filters.refOwnerId) queryBase.set("refOwnerId", filters.refOwnerId);
   if (filters.ref) queryBase.set("ref", filters.ref);
+  if (filters.activity) queryBase.set("activity", filters.activity);
   if (filters.q) queryBase.set("q", filters.q);
   if (filters.sort) queryBase.set("sort", filters.sort);
   if (filters.dir) queryBase.set("dir", filters.dir);
@@ -829,6 +922,16 @@ function renderUsersPage(deps, viewModel) {
             <option value=""${filters.ref === "" ? " selected" : ""}>Все</option>
             <option value="ref"${filters.ref === "ref" ? " selected" : ""}>Только рефы</option>
             <option value="non-ref"${filters.ref === "non-ref" ? " selected" : ""}>Только не рефы</option>
+          </select>
+        </label>
+        <label>
+          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Активность</span>
+          <select name="activity">
+            <option value=""${filters.activity === "" ? " selected" : ""}>Все</option>
+            <option value="participated"${filters.activity === "participated" ? " selected" : ""}>Участвовали</option>
+            <option value="won"${filters.activity === "won" ? " selected" : ""}>Побеждали</option>
+            <option value="unpaid"${filters.activity === "unpaid" ? " selected" : ""}>Выиграли, но не выплачено</option>
+            <option value="fraud"${filters.activity === "fraud" ? " selected" : ""}>С антифродом</option>
           </select>
         </label>
         <label>
@@ -1108,11 +1211,18 @@ function getAdminBaseStyles() {
     .pager { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; font-size: 13px; color: #94a3b8; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
     .wrap-wide { max-width: 1600px; }
-    .users-table-wrap { overflow-x: auto; }
+    .users-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .users-table-wrap > table { min-width: 900px; }
     .fraud-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
     .fraud-details { margin: 4px 0 0; padding-left: 16px; color: #94a3b8; font-size: 12px; max-width: 360px; }
     .fraud-details li { margin-bottom: 2px; }
     .fraud-panel { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
+    .user-projects { display: flex; flex-wrap: wrap; gap: 4px; }
+    .project-chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #334155; color: #e2e8f0; white-space: nowrap; }
+    .project-chip-ref { background: #14532d; color: #bbf7d0; }
+    .project-chip-non-ref { background: #713f12; color: #fde68a; }
+    .project-chip-more { background: #1e293b; color: #94a3b8; border: 1px solid #475569; }
+    .owner-line { margin-top: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .user-link { color: #93c5fd; text-decoration: none; font-weight: 600; }
     .user-link:hover { text-decoration: underline; }
     .card-head { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
@@ -1135,10 +1245,6 @@ function getAdminBaseStyles() {
     .fraud-project { display: inline-block; color: #93c5fd; margin-right: 6px; font-size: 11px; }
     .fraud-draw { color: #e2e8f0; font-weight: 600; margin-bottom: 2px; }
     .fraud-linked { color: #94a3b8; line-height: 1.35; }
-    .user-projects { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
-    .user-project-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-    .user-project-name { font-weight: 600; color: #e2e8f0; }
-    .user-project-ref { font-size: 11px; color: #94a3b8; }
     .sort-link { color: #cbd5e1; text-decoration: none; }
     .sort-link:hover { color: #93c5fd; text-decoration: underline; }
   `;
@@ -1490,7 +1596,7 @@ function renderSupportListPage(view, timezone) {
         : '<span class="badge badge-ok">Норм</span>';
       return `<tr>
         <td>
-          <a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.label)}</a>
+          <a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.name || chat.label)}</a>
           <div class="mono"><a class="user-link" href="/admin/users/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.chatId)}</a></div>
         </td>
         <td class="nowrap">${escapeHtml(chat.botLabel || "—")}</td>
@@ -1515,8 +1621,18 @@ function renderSupportListPage(view, timezone) {
     ${getAdminBaseStyles()}
     .support-table a { color: #93c5fd; text-decoration: none; }
     .support-table a:hover { text-decoration: underline; }
-    .preview-cell { max-width: 340px; color: #cbd5e1; }
+    .preview-cell { color: #cbd5e1; }
     .tab-count { opacity: 0.65; font-size: 12px; }
+    /* Inside a horizontally scrolling wrapper: below this width the columns
+       crushed into each other instead of letting the table scroll. */
+    .support-table { table-layout: fixed; min-width: 900px; }
+    .support-table th:nth-child(1), .support-table td:nth-child(1) { width: 20%; }
+    .support-table th:nth-child(2), .support-table td:nth-child(2) { width: 9%; }
+    .support-table th:nth-child(3), .support-table td:nth-child(3) { width: 20%; }
+    .support-table th:nth-child(4), .support-table td:nth-child(4) { width: 33%; }
+    .support-table th:nth-child(5), .support-table td:nth-child(5) { width: 7%; }
+    .support-table th:nth-child(6), .support-table td:nth-child(6) { width: 11%; }
+    .support-table td { overflow-wrap: anywhere; }
     .support-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
     .support-search { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
     .support-search input[type="search"] { flex: 1; min-width: 220px; }
@@ -1772,6 +1888,7 @@ function registerAdminDashboard(app, deps) {
       brand: String(req.query.brand || "").trim(),
       refOwnerId: String(req.query.refOwnerId || "").trim(),
       ref: String(req.query.ref || "").trim(),
+      activity: String(req.query.activity || "").trim(),
       q: String(req.query.q || "").trim(),
       sort: String(req.query.sort || "").trim(),
       dir: String(req.query.dir || "desc").trim(),
@@ -1982,4 +2099,13 @@ function registerAdminDashboard(app, deps) {
   });
 }
 
-module.exports = { registerAdminDashboard, hashPassword };
+module.exports = {
+  registerAdminDashboard,
+  hashPassword,
+  // Exported for tests: these decide what the users page actually shows.
+  buildAdminUserProjectRows,
+  buildAdminUserRows,
+  sortAdminUserRows,
+  filterAdminUserRows,
+  buildStats,
+};

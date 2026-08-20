@@ -146,6 +146,18 @@ function getChatTranscript(state) {
   }));
 }
 
+// The list prints the id on its own line underneath, so a label that also ends
+// in "· ID 7137562023" showed the same number twice in one cell.
+function formatSupportChatName(state, chatId) {
+  const user = state?.user || {};
+  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  const username = user.username ? `@${user.username}` : "";
+  if (name && username) {
+    return `${name} (${username})`;
+  }
+  return username || name || `ID ${user.id || chatId}`;
+}
+
 function formatSupportChatUser(state, chatId) {
   const user = state?.user || {};
   const parts = [];
@@ -178,6 +190,7 @@ function listSupportChats(raw) {
       return {
         chatId,
         label: formatSupportChatUser(normalized, chatId),
+        name: formatSupportChatName(normalized, chatId),
         agentName: normalized.agentName || "—",
         escalated: Boolean(normalized.escalated),
         greeted: Boolean(normalized.greeted),
@@ -239,6 +252,7 @@ module.exports = {
   appendTranscript,
   getChatTranscript,
   formatSupportChatUser,
+  formatSupportChatName,
   listSupportChats,
   formatMessageTime,
   SUPPORT_STORES,
