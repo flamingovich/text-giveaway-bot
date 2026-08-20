@@ -12428,32 +12428,55 @@ async function bootstrap() {
     // was started by polling dying, and a healthy bot had no scheduler at all.
     // Draws sat past their end while joins, which come over HTTP, kept working.
     // Start on the launch callback, which fires as soon as getMe succeeds.
-    bot
-      .launch({}, () => {
-        console.log("[boot] Telegram bot polling started");
-        startScheduler();
-        void syncActiveDrawKeyboards().catch((error) => {
-          console.warn("[boot] sync keyboards:", error.message);
+    // A rejected launch used to stop the scheduler whatever the reason. In
+    // practice the usual reason is a network blip on deleteWebhook, which has
+    // nothing to do with another process owning the bot - and killing the
+    // scheduler over it left draws unfinished and prizes expiring unprocessed
+    // while the web side kept working, so nothing looked wrong. Only a real
+    // conflict stops it; anything else is retried with the scheduler left alone.
+    let telegramAttempt = 0;
+
+    async function connectTelegram() {
+      telegramAttempt += 1;
+      try {
+        await bot.launch({}, () => {
+          console.log("[boot] Telegram: соединение установлено");
+          startScheduler();
+          void syncActiveDrawKeyboards().catch((error) => {
+            console.warn("[boot] sync keyboards:", error.message);
+          });
+          void syncAllOrganizerPanelMenus().catch((error) => {
+            console.warn("[boot] sync menus:", error.message);
+          });
         });
-        void syncAllOrganizerPanelMenus().catch((error) => {
-          console.warn("[boot] sync menus:", error.message);
-        });
-      })
-      .then(() => {
         console.error("[boot] Telegram polling остановлен — планировщик выключен");
         stopScheduler();
-      })
-      .catch((error) => {
+      } catch (error) {
         const message = String(error.message || error);
         if (/409|Conflict/i.test(message)) {
           console.error(
             "[boot] Telegram 409: другой процесс уже слушает этого бота. Останавливаю планировщик, чтобы не сжигать призы по старой базе.",
           );
-        } else {
-          console.error("[boot] Telegram polling упал:", message);
+          stopScheduler();
+          return;
         }
-        stopScheduler();
-      });
+
+        const waitMs = Math.min(60000, 5000 * telegramAttempt);
+        console.error(
+          `[boot] Telegram не подключился (попытка ${telegramAttempt}): ${message} — повтор через ${Math.round(waitMs / 1000)}с. Планировщик продолжает работать.`,
+        );
+        setTimeout(() => {
+          connectTelegram().catch((retryError) => {
+            console.error("[boot] Telegram повтор:", retryError.message || retryError);
+          });
+        }, waitMs);
+      }
+    }
+
+    // Finishing draws does not depend on Telegram updates arriving, so it starts
+    // regardless and keeps going while the connection is retried.
+    startScheduler();
+    void connectTelegram();
   }
   console.log(
     `[boot] participate example: ${getJoinParticipateUrl("draw_example") || "(нет URL — проверьте BOT_USERNAME и JOIN_MINI_APP_SHORT_NAME)"}`,
