@@ -5571,9 +5571,27 @@ let lastSchedulerTickAt = 0;
 let schedulerTickCount = 0;
 let schedulerGuardTimer = null;
 
+// The heartbeat is a file rather than an endpoint on purpose: a watchdog has to
+// be able to tell a wedged process from a healthy one, and an HTTP check cannot
+// do that if the thing that is wedged is the web layer. A file's mtime can.
+const SCHEDULER_HEARTBEAT_FILE = path.join(DATA_DIR, ".scheduler-heartbeat");
+
+function writeSchedulerHeartbeat() {
+  try {
+    fs.writeFileSync(
+      SCHEDULER_HEARTBEAT_FILE,
+      JSON.stringify({ at: new Date().toISOString(), tick: schedulerTickCount }),
+      "utf8",
+    );
+  } catch (error) {
+    console.warn("[scheduler] пульс не записан:", error.message);
+  }
+}
+
 function runSchedulerTickOnce() {
   lastSchedulerTickAt = Date.now();
   schedulerTickCount += 1;
+  writeSchedulerHeartbeat();
   // A silent scheduler is indistinguishable from a busy one from the outside,
   // and that cost two draws a twenty minute delay before anyone noticed. Say
   // the count out loud on a slow cadence so a stopped scheduler is obvious.
