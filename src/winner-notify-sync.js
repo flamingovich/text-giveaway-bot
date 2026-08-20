@@ -60,6 +60,29 @@ function notifyTimestamp(notify) {
   );
 }
 
+// "When did we last look at this" is bookkeeping, not a decision, so whichever
+// side looked more recently is right no matter which object won the merge.
+// Without this the payout queue stamped the time on every pass and the merge
+// threw the stamp away whenever nothing else had changed - which is the common
+// case, since a winner who is still subscribed produces no new decision. Every
+// pending winner then looked overdue on every scheduler tick, and a recheck
+// meant to run once an hour became most of the bot's Telegram traffic.
+const CHECK_STAMP_FIELDS = ["payoutQueueSubscriptionCheckedAt"];
+
+function carryNewerCheckStamps(chosen, other) {
+  if (!chosen || !other) {
+    return chosen;
+  }
+  for (const field of CHECK_STAMP_FIELDS) {
+    const mine = String(chosen[field] || "");
+    const theirs = String(other[field] || "");
+    if (theirs > mine) {
+      chosen[field] = other[field];
+    }
+  }
+  return chosen;
+}
+
 function pickWinnerNotify(stale, live) {
   if (!live) {
     return stale;
@@ -70,18 +93,20 @@ function pickWinnerNotify(stale, live) {
 
   // Payment is the one thing nothing undoes.
   if (Boolean(live.paidAt) !== Boolean(stale.paidAt)) {
-    return live.paidAt ? live : stale;
+    return live.paidAt ? carryNewerCheckStamps(live, stale) : carryNewerCheckStamps(stale, live);
   }
 
   // Otherwise the newer decision stands, whichever side made it.
   const liveAt = notifyTimestamp(live);
   const staleAt = notifyTimestamp(stale);
   if (liveAt !== staleAt) {
-    return liveAt > staleAt ? live : stale;
+    return liveAt > staleAt ? carryNewerCheckStamps(live, stale) : carryNewerCheckStamps(stale, live);
   }
 
   // Same instant, or neither is dated: fall back to how far along each is.
-  return winnerNotifyRank(live) >= winnerNotifyRank(stale) ? live : stale;
+  return winnerNotifyRank(live) >= winnerNotifyRank(stale)
+    ? carryNewerCheckStamps(live, stale)
+    : carryNewerCheckStamps(stale, live);
 }
 
 function mergeWinnerNotificationMaps(staleNotifies = {}, liveNotifies = {}) {

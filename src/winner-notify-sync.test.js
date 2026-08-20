@@ -201,3 +201,88 @@ test("payment survives any later decision", () => {
   assert.equal(pickWinnerNotify(forfeited, paid).paidAt, paid.paidAt);
   assert.equal(pickWinnerNotify(paid, forfeited).paidAt, paid.paidAt);
 });
+
+// The payout queue rechecks each pending winner once an hour and stamps the
+// time. A winner who is still subscribed produces no other change, so the two
+// sides of the merge tie - and the stamp used to be dropped, making every
+// winner look overdue on every 30-second tick.
+test("the time of the last subscription recheck is not lost when nothing else changed", () => {
+  const stored = {
+    draws: [
+      {
+        id: "d1",
+        status: "finished",
+        winnerIds: [7],
+        winnerNotifications: {
+          7: { status: "sent", sentAt: "2026-08-20T05:00:00.000Z", payoutQueueSubscriptionCheckedAt: "2026-08-20T05:00:00.000Z" },
+        },
+      },
+    ],
+  };
+  const inHand = JSON.parse(JSON.stringify(stored));
+  inHand.draws[0].winnerNotifications[7].payoutQueueSubscriptionCheckedAt = "2026-08-20T06:00:00.000Z";
+
+  const merged = mergeLiveWinnerNotifications(inHand, stored);
+
+  assert.equal(
+    merged.draws[0].winnerNotifications[7].payoutQueueSubscriptionCheckedAt,
+    "2026-08-20T06:00:00.000Z",
+    "a recheck that just happened must not be forgotten",
+  );
+});
+
+test("an older recheck stamp never overwrites a newer one", () => {
+  const stored = {
+    draws: [
+      {
+        id: "d1",
+        status: "finished",
+        winnerIds: [7],
+        winnerNotifications: {
+          7: { status: "sent", sentAt: "2026-08-20T05:00:00.000Z", payoutQueueSubscriptionCheckedAt: "2026-08-20T07:00:00.000Z" },
+        },
+      },
+    ],
+  };
+  const inHand = JSON.parse(JSON.stringify(stored));
+  inHand.draws[0].winnerNotifications[7].payoutQueueSubscriptionCheckedAt = "2026-08-20T06:00:00.000Z";
+
+  const merged = mergeLiveWinnerNotifications(inHand, stored);
+
+  assert.equal(
+    merged.draws[0].winnerNotifications[7].payoutQueueSubscriptionCheckedAt,
+    "2026-08-20T07:00:00.000Z",
+  );
+});
+
+test("carrying the recheck stamp does not resurrect a decision that lost", () => {
+  const stored = {
+    draws: [
+      {
+        id: "d1",
+        status: "finished",
+        winnerIds: [7],
+        winnerNotifications: {
+          7: {
+            status: "forfeited",
+            forfeitureReason: "unsubscribed",
+            forfeitedAt: "2026-08-20T06:30:00.000Z",
+            payoutQueueSubscriptionCheckedAt: "2026-08-20T06:30:00.000Z",
+          },
+        },
+      },
+    ],
+  };
+  const inHand = JSON.parse(JSON.stringify(stored));
+  inHand.draws[0].winnerNotifications[7] = {
+    status: "sent",
+    sentAt: "2026-08-20T05:00:00.000Z",
+    payoutQueueSubscriptionCheckedAt: "2026-08-20T07:00:00.000Z",
+  };
+
+  const merged = mergeLiveWinnerNotifications(inHand, stored);
+  const notify = merged.draws[0].winnerNotifications[7];
+
+  assert.equal(notify.status, "forfeited", "the newer decision still stands");
+  assert.equal(notify.payoutQueueSubscriptionCheckedAt, "2026-08-20T07:00:00.000Z");
+});
