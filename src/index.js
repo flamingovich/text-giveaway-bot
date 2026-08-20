@@ -5696,9 +5696,20 @@ const SCHEDULER_HEARTBEAT_FILE = path.join(DATA_DIR, ".scheduler-heartbeat");
 
 function writeSchedulerHeartbeat() {
   try {
+    const calls = getTelegramCallStats();
     fs.writeFileSync(
       SCHEDULER_HEARTBEAT_FILE,
-      JSON.stringify({ at: new Date().toISOString(), tick: schedulerTickCount }),
+      JSON.stringify({
+        at: new Date().toISOString(),
+        tick: schedulerTickCount,
+        // Carried here so the load on Telegram can be read without logging into
+        // the panel - by the watchdog, or by anyone with a shell.
+        calls: {
+          total: calls.total,
+          perMinute: calls.perMinute,
+          top: calls.methods.slice(0, 6).map((row) => `${row.method}:${row.count}`),
+        },
+      }),
       "utf8",
     );
   } catch (error) {
