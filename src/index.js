@@ -121,6 +121,7 @@ const COUNTDOWN_MINUTE_THROTTLE_MS = Number(process.env.COUNTDOWN_MINUTE_THROTTL
 const PAYOUT_QUEUE_SUBSCRIPTION_RECHECK_MS = Number(
   process.env.PAYOUT_QUEUE_SUBSCRIPTION_RECHECK_MS || 60 * 60 * 1000,
 );
+let shuttingDown = false;
 const PANEL_POLL_MS = Number(process.env.PANEL_POLL_MS || 8_000);
 const PANEL_HISTORY_PAGE_SIZE = 10;
 const PANEL_PAGE_BUILD = process.env.PANEL_PAGE_BUILD || String(Date.now());
@@ -4020,7 +4021,7 @@ async function notifyWinnerOnFinish(draw, winnerId) {
 
 async function notifyWinnersOnFinish(draw, winnerIds = null) {
   for (const winnerId of winnerIds || draw.winnerIds || []) {
-    console.warn(`[finish] беру победителя draw=${draw.id} user=${winnerId}`);
+    console.log(`[finish] беру победителя draw=${draw.id} user=${winnerId}`);
     try {
       await withWinnerNotifyDeadline(() => notifyWinnerOnFinish(draw, winnerId));
     } catch (error) {
@@ -12698,7 +12699,17 @@ async function bootstrap() {
             console.warn("[boot] sync menus:", error.message);
           });
         });
-        console.error("[boot] Telegram polling остановлен — планировщик выключен");
+        // telegraf resolves launch() only when polling really stops, which in
+        // practice means we asked it to on the way out. Saying "планировщик
+        // выключен" in red made every ordinary restart look like a failure in
+        // the report, and that noise cost more than one morning of chasing it.
+        if (shuttingDown) {
+          console.log("[boot] Остановка бота: Telegram отключён, планировщик остановлен — штатно");
+        } else {
+          console.error(
+            "[boot] Telegram polling прекратился сам по себе — планировщик остановлен, нужен перезапуск",
+          );
+        }
         stopScheduler();
       } catch (error) {
         const message = String(error.message || error);
@@ -12760,6 +12771,12 @@ if (process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
 }
 
 if (!WEB_ONLY && !SKIP_TELEGRAM_POLLING) {
-  process.once("SIGINT", () => bot.stop("SIGINT"));
-  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+  process.once("SIGINT", () => {
+    shuttingDown = true;
+    bot.stop("SIGINT");
+  });
+  process.once("SIGTERM", () => {
+    shuttingDown = true;
+    bot.stop("SIGTERM");
+  });
 }
