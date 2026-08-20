@@ -87,3 +87,58 @@ test("normalises a host:port:user:pass proxy into a url", () => {
   assert.equal(normalizeOpenRouterProxyUrl("socks5://host:1080"), "socks5://host:1080");
   assert.equal(normalizeOpenRouterProxyUrl(""), "");
 });
+
+test("stops paying the proxy timeout once it has failed repeatedly", async () => {
+  const { resetProxyBreakerForTests } = require("./openrouter-fetch");
+  resetProxyBreakerForTests();
+
+  let proxyAttempts = 0;
+  let directCalls = 0;
+  const impl = {
+    dispatcher: { proxy: true },
+    proxyFetch: () => {
+      proxyAttempts += 1;
+      return Promise.reject(new Error("timeout"));
+    },
+    directFetch: () => {
+      directCalls += 1;
+      return Promise.resolve(OK);
+    },
+  };
+
+  for (let i = 0; i < 5; i += 1) {
+    await openRouterFetch("https://openrouter.ai/x", {}, impl);
+  }
+
+  assert.equal(directCalls, 5, "every request still succeeds");
+  assert.equal(proxyAttempts, 3, "the proxy is dropped after three failures in a row");
+  resetProxyBreakerForTests();
+});
+
+test("a success clears the failure streak", async () => {
+  const { resetProxyBreakerForTests } = require("./openrouter-fetch");
+  resetProxyBreakerForTests();
+
+  let proxyAttempts = 0;
+  let failNext = true;
+  const impl = {
+    dispatcher: { proxy: true },
+    proxyFetch: () => {
+      proxyAttempts += 1;
+      if (failNext) {
+        failNext = false;
+        return Promise.reject(new Error("timeout"));
+      }
+      return Promise.resolve(OK);
+    },
+    directFetch: () => Promise.resolve(OK),
+  };
+
+  for (let i = 0; i < 6; i += 1) {
+    failNext = i % 2 === 0;
+    await openRouterFetch("https://openrouter.ai/x", {}, impl);
+  }
+
+  assert.equal(proxyAttempts, 6, "an intermittent proxy is still used");
+  resetProxyBreakerForTests();
+});

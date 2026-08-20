@@ -8,8 +8,40 @@ const { ProxyAgent, fetch: undiciFetch } = require("undici");
 // early and repeating without it.
 const ATTEMPT_TIMEOUT_MS = Number(process.env.OPENROUTER_ATTEMPT_TIMEOUT_MS || 15000);
 
+// Waiting fifteen seconds for a proxy that is down half the time, on every
+// single message, is still a bad conversation. After a few failures in a row,
+// go straight out for a while and try the proxy again later.
+const PROXY_TRIP_AFTER = Number(process.env.OPENROUTER_PROXY_TRIP_AFTER || 3);
+const PROXY_COOLDOWN_MS = Number(process.env.OPENROUTER_PROXY_COOLDOWN_MS || 300000);
+
 let cachedProxyUrl = null;
 let cachedDispatcher = undefined;
+let consecutiveProxyFailures = 0;
+let proxySkippedUntil = 0;
+
+function proxyIsTripped(now = Date.now()) {
+  return now < proxySkippedUntil;
+}
+
+function noteProxyFailure(now = Date.now()) {
+  consecutiveProxyFailures += 1;
+  if (consecutiveProxyFailures >= PROXY_TRIP_AFTER) {
+    proxySkippedUntil = now + PROXY_COOLDOWN_MS;
+    consecutiveProxyFailures = 0;
+    console.warn(
+      `[openrouter] прокси отключён на ${Math.round(PROXY_COOLDOWN_MS / 1000)}с — запросы идут напрямую`,
+    );
+  }
+}
+
+function noteProxySuccess() {
+  consecutiveProxyFailures = 0;
+}
+
+function resetProxyBreakerForTests() {
+  consecutiveProxyFailures = 0;
+  proxySkippedUntil = 0;
+}
 
 function normalizeOpenRouterProxyUrl(raw) {
   const value = String(raw || "").trim();
@@ -64,21 +96,24 @@ async function openRouterFetch(url, options = {}, impl = {}) {
   const directFetch = impl.directFetch || fetch;
   const dispatcher = impl.dispatcher !== undefined ? impl.dispatcher : getOpenRouterProxyDispatcher();
 
-  if (!dispatcher) {
+  if (!dispatcher || proxyIsTripped()) {
     return directFetch(url, { ...options, signal: attemptSignal(options.signal) });
   }
 
   try {
-    return await proxyFetch(url, {
+    const response = await proxyFetch(url, {
       ...options,
       dispatcher,
       signal: attemptSignal(options.signal),
     });
+    noteProxySuccess();
+    return response;
   } catch (error) {
     // The caller giving up is not a proxy failure, and repeating would ignore it.
     if (options.signal?.aborted) {
       throw error;
     }
+    noteProxyFailure();
     console.warn(
       `[openrouter] прокси не ответил (${error?.message || error}) — повторяю напрямую`,
     );
@@ -104,4 +139,5 @@ module.exports = {
   extractOpenRouterError,
   normalizeOpenRouterProxyUrl,
   ATTEMPT_TIMEOUT_MS,
+  resetProxyBreakerForTests,
 };
