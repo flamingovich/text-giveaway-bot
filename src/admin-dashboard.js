@@ -7,6 +7,7 @@ const {
   listActivityKeys,
 } = require("./admin-user-stats");
 const { collectAllDraws } = require("./admin-draw-source");
+const { buildUserCard } = require("./admin-user-card");
 const {
   readSupportChats,
   updateSupportChat,
@@ -17,6 +18,9 @@ const {
   formatSupportChatUser,
   listSupportChats,
   formatMessageTime,
+  SUPPORT_STORES,
+  readSupportChatsFor,
+  findSupportChatAnywhere,
 } = require("./support-transcripts");
 
 const COOKIE_NAME = "admin_panel";
@@ -753,7 +757,7 @@ function renderUsersPage(deps, viewModel) {
   const tableRows = rows
     .map(
       (row) => `<tr>
-        <td>${escapeHtml(row.userLabel)}<div class="mono">${escapeHtml(row.userId)}</div></td>
+        <td><a class="user-link" href="/admin/users/${encodeURIComponent(row.userId)}">${escapeHtml(row.userLabel)}</a><div class="mono">${escapeHtml(row.userId)}</div></td>
         <td>${renderUserProjectsCell(row.projects)}</td>
         <td>${renderAntiFraudCell(row)}</td>
         <td>${row.hasWallet ? '<span class="badge badge-ok">Есть</span>' : '<span class="badge badge-muted">Нет</span>'}</td>
@@ -871,6 +875,186 @@ const ADMIN_NAV_ITEMS = [
   { id: "support", href: "/admin/support", label: "Поддержка" },
 ];
 
+function formatCardDate(iso, timezone) {
+  if (!iso) {
+    return "—";
+  }
+  const dt = DateTime.fromISO(iso, { zone: timezone });
+  return dt.isValid ? dt.toFormat("dd.MM.yyyy HH:mm") : String(iso).slice(0, 16);
+}
+
+function renderUserCardPage(deps, card) {
+  const tz = deps.timezone;
+  const money = (rub, usd) => formatMoneyTotalsLocal(rub, usd, deps);
+
+  const badges = [];
+  if (card.fraud.length) {
+    badges.push(`<span class="badge badge-danger">Антифрод: ${card.fraud.length}</span>`);
+  }
+  if (card.totals.awaitingPayout > 0) {
+    badges.push(`<span class="badge badge-warn">Ждёт выплаты: ${card.totals.awaitingPayout}</span>`);
+  }
+  if (!card.known) {
+    badges.push('<span class="badge badge-muted">Нет профиля</span>');
+  }
+
+  const drawRows = card.draws
+    .map((draw) => {
+      const outcome = draw.outcome
+        ? `<span class="badge outcome-${escapeHtml(draw.outcome.tone)}">${escapeHtml(draw.outcome.label)}</span>`
+        : '<span class="badge badge-muted">Участвовал</span>';
+      const details = draw.outcome
+        ? [
+            draw.outcome.payoutPrize ? `к выплате ${escapeHtml(draw.outcome.payoutPrize)}` : "",
+            draw.outcome.paidAt ? `выплачено ${escapeHtml(formatCardDate(draw.outcome.paidAt, tz))}` : "",
+            draw.outcome.reason ? `причина: ${escapeHtml(draw.outcome.reason)}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : "";
+      return `<tr>
+        <td class="nowrap">${escapeHtml(formatCardDate(draw.at, tz))}</td>
+        <td>${escapeHtml(draw.prize)}<div class="mono">${escapeHtml(draw.id)}</div></td>
+        <td>${escapeHtml(draw.projectName)}</td>
+        <td>${outcome}${details ? `<div class="hint" style="margin:4px 0 0">${details}</div>` : ""}</td>
+        <td class="mono">${draw.outcome?.wallet ? escapeHtml(draw.outcome.wallet) : "—"}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const projectRows = card.projects
+    .map(
+      (project) => `<tr>
+        <td>${escapeHtml(project.projectName)}</td>
+        <td>${renderRefStatusBadge(project.refStatus)}</td>
+        <td>${escapeHtml(project.nickname || project.accountId || "—")}</td>
+        <td class="mono">${escapeHtml(project.wallet || "—")}</td>
+        <td class="nowrap">${escapeHtml(formatCardDate(project.updatedAt, tz))}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const fraudItems = card.fraud
+    .map((detail) => {
+      const linked = (detail.linkedUserIds || [])
+        .map(
+          (id) =>
+            `<a class="user-link" href="/admin/users/${encodeURIComponent(id)}">${escapeHtml(id)}</a>`,
+        )
+        .join(", ");
+      return `<li><b>${escapeHtml(detail.label)}</b> — ${escapeHtml(detail.drawTitle || detail.drawId || "")}${
+        linked ? `<br><span class="hint">связан с: ${linked}</span>` : ""
+      }</li>`;
+    })
+    .join("");
+
+  const supportRows = card.supportChats
+    .map(
+      (chat) => `<tr>
+        <td><a class="user-link" href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.botLabel)}</a></td>
+        <td>${chat.sessionClosed ? '<span class="badge badge-muted">завершён</span>' : '<span class="badge badge-ok">активен</span>'}</td>
+        <td>${chat.messageCount}</td>
+        <td class="nowrap">${escapeHtml(formatCardDate(chat.lastMessageAt, tz))}</td>
+        <td class="preview-cell">${escapeHtml(chat.preview || "")}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const walletItems = card.wallets
+    .map(
+      (wallet) =>
+        `<li class="mono">${escapeHtml(wallet.address)} <span class="hint">(${escapeHtml(wallet.source)})</span></li>`,
+    )
+    .join("");
+
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(card.label)} — Admin</title>
+  <style>
+    ${getAdminBaseStyles()}
+    .preview-cell { max-width: 320px; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  ${renderAdminTop(card.label, "users")}
+  <main class="wrap wrap-wide">
+    <p><a class="btn btn-ghost" href="/admin/users">← Все юзеры</a></p>
+
+    <section class="panel">
+      <div class="card-head">
+        <div class="card-title">
+          <h2>${escapeHtml(card.label)}</h2>
+          <div class="hint mono">ID ${escapeHtml(card.userId)}${card.fullName ? ` · ${escapeHtml(card.fullName)}` : ""}</div>
+        </div>
+        <div class="card-badges">${badges.join("") || '<span class="badge badge-ok">Чисто</span>'}</div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <div class="stat"><span>Участий</span><b>${card.totals.participations}</b></div>
+      <div class="stat"><span>Побед</span><b>${card.totals.wins}</b></div>
+      <div class="stat"><span>Выиграно</span><b>${escapeHtml(money(card.totals.winningsRub, card.totals.winningsUsd))}</b></div>
+      <div class="stat"><span>Выплачено</span><b>${escapeHtml(money(card.totals.paidRub, card.totals.paidUsd))}</b></div>
+      <div class="stat"><span>Ждёт выплаты</span><b>${card.totals.awaitingPayout}</b></div>
+    </div>
+
+    <section class="panel">
+      <h2>Кошельки</h2>
+      ${walletItems ? `<ul class="fraud-details">${walletItems}</ul>` : '<p class="empty">Кошелёк не указан.</p>'}
+    </section>
+
+    <section class="panel">
+      <h2>Проекты</h2>
+      ${
+        projectRows
+          ? `<table><thead><tr><th>Проект</th><th>Статус</th><th>Ник / ID</th><th>Кошелёк</th><th>Обновлён</th></tr></thead><tbody>${projectRows}</tbody></table>`
+          : '<p class="empty">Нет привязок к проектам.</p>'
+      }
+    </section>
+
+    <section class="panel">
+      <h2>Розыгрыши (${card.draws.length})</h2>
+      ${
+        drawRows
+          ? `<div class="users-table-wrap"><table><thead><tr><th>Дата</th><th>Приз</th><th>Проект</th><th>Итог</th><th>Кошелёк выплаты</th></tr></thead><tbody>${drawRows}</tbody></table></div>`
+          : '<p class="empty">Не участвовал ни в одном розыгрыше.</p>'
+      }
+    </section>
+
+    <section class="panel">
+      <h2>Антифрод</h2>
+      ${fraudItems ? `<ul class="fraud-details">${fraudItems}</ul>` : '<p class="empty">Отметок нет.</p>'}
+    </section>
+
+    <section class="panel">
+      <h2>Поддержка</h2>
+      ${
+        supportRows
+          ? `<table><thead><tr><th>Бот</th><th>Статус</th><th>Сообщ.</th><th>Последнее</th><th>Превью</th></tr></thead><tbody>${supportRows}</tbody></table>`
+          : '<p class="empty">Обращений в поддержку не было.</p>'
+      }
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function renderAdminNotFound(message) {
+  return `<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Admin</title>
+<style>${getAdminBaseStyles()}</style></head>
+<body>
+  ${renderAdminTop("Admin", "users")}
+  <main class="wrap"><section class="panel"><p class="empty">${escapeHtml(message)}</p>
+  <p><a class="btn btn-ghost" href="/admin/users">← Все юзеры</a></p></section></main>
+</body>
+</html>`;
+}
+
 function renderAdminNav(active = "stats") {
   const links = ADMIN_NAV_ITEMS.map((item) => {
     const cls = item.id === active ? "btn btn-ghost btn-nav-active" : "btn btn-ghost";
@@ -928,6 +1112,21 @@ function getAdminBaseStyles() {
     .fraud-details { margin: 4px 0 0; padding-left: 16px; color: #94a3b8; font-size: 12px; max-width: 360px; }
     .fraud-details li { margin-bottom: 2px; }
     .fraud-panel { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
+    .user-link { color: #93c5fd; text-decoration: none; font-weight: 600; }
+    .user-link:hover { text-decoration: underline; }
+    .card-head { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
+    .card-title { display: flex; flex-direction: column; gap: 4px; }
+    .card-title h2 { margin: 0; font-size: 22px; }
+    .card-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+    .kv { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 6px 14px; font-size: 13px; }
+    .kv dt { color: #94a3b8; }
+    .kv dd { margin: 0; }
+    .empty { color: #94a3b8; font-size: 13px; padding: 10px 0; }
+    .outcome-ok { background: #14532d; color: #bbf7d0; }
+    .outcome-warn { background: #713f12; color: #fde68a; }
+    .outcome-danger { background: #7f1d1d; color: #fecaca; }
+    .outcome-muted { background: #334155; color: #cbd5e1; }
+    .nowrap { white-space: nowrap; }
     .fraud-group { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 10px; }
     .fraud-group-title { margin-bottom: 6px; }
     .fraud-item { padding: 6px 0; border-top: 1px solid #1e293b; font-size: 12px; }
@@ -1261,8 +1460,9 @@ function renderSupportListPage(chats, timezone) {
         ? '<span class="badge badge-warn">завершён</span>'
         : '<span class="badge">активен</span>';
       return `<tr>
-        <td><a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.label)}</a></td>
-        <td>${escapeHtml(chat.agentName)}</td>
+        <td><a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.label)}</a>
+          <div class="mono"><a class="user-link" href="/admin/users/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.chatId)}</a></div></td>
+        <td>${escapeHtml(chat.botLabel || "—")}</td>
         <td>${statusBadge}</td>
         <td class="preview-cell">${escapeHtml(chat.preview)}</td>
         <td>${chat.messageCount}</td>
@@ -1294,7 +1494,7 @@ function renderSupportListPage(chats, timezone) {
         <thead>
           <tr>
             <th>Пользователь</th>
-            <th>Оператор</th>
+            <th>Бот</th>
             <th>Статус</th>
             <th>Последнее</th>
             <th>Сообщ.</th>
@@ -1389,9 +1589,13 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
 <body>
   ${renderAdminTop("Диалог", "support")}
   <main class="wrap">
-    <p><a class="btn btn-ghost" href="/admin/support">← Все диалоги</a></p>
+    <p>
+      <a class="btn btn-ghost" href="/admin/support">← Все диалоги</a>
+      <a class="btn btn-ghost" href="/admin/users/${encodeURIComponent(chatId)}">Карточка пользователя →</a>
+    </p>
     <section class="panel">
       <h2 style="margin:0 0 8px">${escapeHtml(label)}</h2>
+      ${options.storeLabel ? `<p class="hint">Бот: ${escapeHtml(options.storeLabel)}</p>` : ""}
       ${
         sessionClosed
           ? ""
@@ -1407,7 +1611,9 @@ function renderSupportChatPage(chatId, state, timezone, options = {}) {
       ${flashHtml}
       <div class="chat-log" id="chatLog">${messages || '<div class="chat-msg chat-msg-system">Сообщений пока нет</div>'}</div>
       ${
-        sessionClosed
+        options.canReply === false
+          ? `<p class="compose-hint">Диалог второго бота поддержки — доступен только для чтения.</p>`
+          : sessionClosed
           ? `<p class="compose-hint">Диалог завершён. Пользователь получил сообщение с просьбой нажать /start для нового оператора.</p>`
           : `<form class="chat-compose" method="post" action="/admin/support/${encodeURIComponent(chatId)}/reply">
         <label class="compose-hint" for="replyText">Сообщение уйдёт пользователю в Telegram от support-бота. AI-бот продолжает отвечать как обычно.</label>
@@ -1555,20 +1761,87 @@ function registerAdminDashboard(app, deps) {
     );
   });
 
+  app.get("/admin/users/:userId", requireAuth, (req, res) => {
+    const userId = String(req.params.userId || "").trim();
+    if (!/^\d+$/.test(userId)) {
+      res.status(404).type("html").send(renderAdminNotFound("Пользователь не найден."));
+      return;
+    }
+
+    try {
+      const profiles = deps.readUserProjectProfiles();
+      const activityIndex = buildUserProjectActivityIndex(deps, profiles, (id) =>
+        labelForUser(id, profiles),
+      );
+
+      const fraudDetails = [];
+      const seen = new Set();
+      for (const { userId: activityUserId, projectId } of listActivityKeys(activityIndex)) {
+        if (activityUserId !== userId) {
+          continue;
+        }
+        for (const detail of getUserProjectActivity(activityIndex, userId, projectId).fraudDetails) {
+          const key = `${detail.kind}:${detail.drawId}:${detail.label}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          seen.add(key);
+          fraudDetails.push(detail);
+        }
+      }
+
+      const supportChats = [];
+      for (const store of SUPPORT_STORES) {
+        const state = readSupportChatsFor(store.key)[userId];
+        if (!state) {
+          continue;
+        }
+        const transcript = getChatTranscript(state);
+        supportChats.push({
+          chatId: userId,
+          botLabel: store.label,
+          sessionClosed: Boolean(state.sessionClosed),
+          messageCount: transcript.length,
+          lastMessageAt: state.lastMessageAt || transcript[transcript.length - 1]?.at || "",
+          preview: transcript[transcript.length - 1]?.content || "",
+        });
+      }
+
+      const card = buildUserCard(deps, userId, { fraudDetails, supportChats });
+      res.type("html").send(renderUserCardPage(deps, card));
+    } catch (error) {
+      console.error("[admin] GET /admin/users/:userId:", error);
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать карточку пользователя."));
+    }
+  });
+
   app.get("/admin/support", requireAuth, (_req, res) => {
-    const raw = readSupportChats();
-    const chats = listSupportChats(raw);
+    // Both bots, not just the first one.
+    const chats = SUPPORT_STORES.flatMap((store) =>
+      listSupportChats(readSupportChatsFor(store.key)).map((chat) => ({
+        ...chat,
+        botLabel: store.label,
+      })),
+    ).sort((left, right) => String(right.lastMessageAt || "").localeCompare(String(left.lastMessageAt || "")));
     res.type("html").send(renderSupportListPage(chats, deps.timezone));
   });
 
   function renderSupportChatView(res, chatId, flash) {
-    const raw = readSupportChats();
-    const state = raw[chatId];
+    // The second support bot writes to its own store, and the panel used to look
+    // only in the first one, so those conversations 404'd.
+    const found = findSupportChatAnywhere(chatId);
+    const state = found?.state;
     if (!state) {
       res.status(404).type("html").send(`<!doctype html><html lang="ru"><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:24px"><p>Диалог не найден.</p><p><a href="/admin/support" style="color:#93c5fd">← К списку</a></p></body></html>`);
       return false;
     }
-    res.type("html").send(renderSupportChatPage(chatId, state, deps.timezone, { flash }));
+    res.type("html").send(
+      renderSupportChatPage(chatId, state, deps.timezone, {
+        flash,
+        storeLabel: found.store.label,
+        canReply: found.store.canReply,
+      }),
+    );
     return true;
   }
 

@@ -14,6 +14,33 @@ function writeSupportChats(raw) {
   writeDocument(STORE_KEYS.SUPPORT_CHATS, raw);
 }
 
+// Two bots write transcripts, but the admin panel only ever read the first one,
+// so the second bot's conversations existed and were invisible.
+const SUPPORT_STORES = [
+  { key: STORE_KEYS.SUPPORT_CHATS, label: "Основной", canReply: true },
+  { key: STORE_KEYS.DEPMAN_SUPPORT_CHATS, label: "Депмен", canReply: false },
+];
+
+function readSupportChatsFor(storeKey) {
+  try {
+    return readDocument(storeKey) || {};
+  } catch {
+    return {};
+  }
+}
+
+// A chat id is the user's Telegram id, so the same person can appear in both.
+function findSupportChatAnywhere(chatId) {
+  const key = String(chatId);
+  for (const store of SUPPORT_STORES) {
+    const state = readSupportChatsFor(store.key)[key];
+    if (state) {
+      return { store, state };
+    }
+  }
+  return null;
+}
+
 function createEmptySupportChatState(chatId) {
   return {
     agentName: "Оператор",
@@ -214,6 +241,9 @@ module.exports = {
   formatSupportChatUser,
   listSupportChats,
   formatMessageTime,
+  SUPPORT_STORES,
+  readSupportChatsFor,
+  findSupportChatAnywhere,
   buildSupportStopReply,
   closeSupportChatFromAdmin,
 };
