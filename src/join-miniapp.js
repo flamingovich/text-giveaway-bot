@@ -1048,10 +1048,42 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
-    function tryResumeAfterNotify() {
-      if (activeStep !== "notify" || !pendingJoinStep) return;
-      if (hasWriteAccess() || openedBotForNotify) {
+    let notifyCheckInFlight = false;
+
+    async function botCanMessageMe() {
+      if (PAGE_MODE === "preview") return true;
+      try {
+        const data = await api(
+          "/api/join/" + encodeURIComponent(drawId) + "/notify-status",
+          {},
+          { timeoutMs: 8000 },
+        );
+        return data.canMessage === true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    async function tryResumeAfterNotify() {
+      if (activeStep !== "notify" || !pendingJoinStep || notifyCheckInFlight) return;
+      // A granted permission is Telegram's own word for it and needs no probe.
+      if (hasWriteAccess()) {
         continueAfterWriteAccess();
+        return;
+      }
+      // Opening the bot is not the same as pressing Start in it. Treating the
+      // one as the other is how people ended up in draws the bot could never
+      // write to - and, when they won, lost the prize for being unreachable.
+      if (!openedBotForNotify) return;
+      notifyCheckInFlight = true;
+      try {
+        if (await botCanMessageMe()) {
+          continueAfterWriteAccess();
+        } else {
+          showNotifyError("Откройте бота и нажмите «Начать» — иначе он не сможет написать вам о победе.");
+        }
+      } finally {
+        notifyCheckInFlight = false;
       }
     }
 
@@ -2606,6 +2638,7 @@ function registerJoinMiniApp(app, deps) {
     BOT_USERNAME = "",
     JOIN_MINI_APP_SHORT_NAME = "join",
     checkChannelSubscription = null,
+    canMessageUser = null,
     getChannelSubscribePayload = null,
     computeJoinWinChance: computeJoinWinChanceFn = null,
     buildJoinReferralDirectLink = null,
@@ -3085,6 +3118,25 @@ function registerJoinMiniApp(app, deps) {
       res,
       renderJoinPage(req.params.drawId, draw, project, joinPageOptions()),
     );
+  });
+
+  // Whether the bot can actually reach this person - the only trustworthy
+  // answer, since the client can report only what the person meant to do.
+  app.post("/api/join/:drawId/notify-status", requireJoinUser, async (req, res) => {
+    if (typeof canMessageUser !== "function") {
+      res.json({ canMessage: true });
+      return;
+    }
+    try {
+      const canMessage = await canMessageUser(req.telegramUser.id);
+      if (!canMessage) {
+        console.log(`[join] личка закрыта, участие придержано: user=${req.telegramUser.id} draw=${req.params.drawId}`);
+      }
+      res.json({ canMessage: canMessage === true });
+    } catch (error) {
+      console.warn(`[join] проверка доступа к личке ${req.telegramUser.id}: ${error.message}`);
+      res.json({ canMessage: true });
+    }
   });
 
   app.post("/api/join/:drawId/live", requireJoinUser, async (req, res) => {

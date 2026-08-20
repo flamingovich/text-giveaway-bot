@@ -22,6 +22,7 @@ const {
 const { applyNoLinkPreview } = require("./telegram-no-preview");
 const { createSubscriptionCache } = require("./subscription-cache");
 const { resolveFileLink, getFileLinkCacheStats } = require("./file-link-cache");
+const { isCannotMessageUserError } = require("./telegram-reach");
 const {
   isIgnorableTelegramEditError,
   isPermanentTelegramEditError,
@@ -2144,6 +2145,26 @@ function getParticipationReplyOptions() {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   };
+}
+
+// Telegram offers no "may I write to this person" query, but a chat action
+// fails with the very same 403 a message would and shows the person nothing.
+async function canMessageUser(userId) {
+  if (WEB_ONLY || !bot || !userId) {
+    return true;
+  }
+  try {
+    await bot.telegram.sendChatAction(userId, "typing");
+    return true;
+  } catch (error) {
+    if (isCannotMessageUserError(error)) {
+      return false;
+    }
+    // A network blip or a rate limit says nothing about whether the person is
+    // reachable, and refusing them entry over one would be worse than letting
+    // them through.
+    return true;
+  }
 }
 
 async function sendParticipationDm(draw, userId) {
@@ -10927,6 +10948,7 @@ registerJoinMiniApp(app, {
   RECAPTCHA_SITE_KEY,
   RECAPTCHA_SECRET_KEY,
   checkChannelSubscription: WEB_ONLY ? null : checkChannelSubscriptionWithRetry,
+  canMessageUser: WEB_ONLY ? null : canMessageUser,
   getChannelSubscribePayload,
   computeJoinWinChance,
   buildJoinReferralDirectLink: require("./join-referrals").buildJoinReferralDirectLink,
