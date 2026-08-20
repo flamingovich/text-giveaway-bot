@@ -144,9 +144,12 @@ function buildUserCard(deps, userId, options = {}) {
 
   draws.sort((left, right) => String(right.at).localeCompare(String(left.at)));
 
+  // The same brand exists once per organiser, so a person can hold two
+  // Pokerdom bindings. Without the owner they read as a duplicated row.
   const projects = Object.entries(resolveUserProjects(userNode?.projects)).map(([projectId, projectData]) => ({
     projectId,
     projectName: projectName(projectId),
+    ownerId: projectById.get(resolveProjectId(projectId))?.ownerId ?? null,
     refStatus: projectData.referralVerified
       ? "ref"
       : projectData.selfReportedNonReferral

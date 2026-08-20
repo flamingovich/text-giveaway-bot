@@ -11,6 +11,7 @@ const { buildUserCard } = require("./admin-user-card");
 const { buildSupportView } = require("./admin-support-view");
 const { resolveProjectId, resolveUserProjects } = require("./project-identity");
 const { buildDashboardStats } = require("./admin-dashboard-stats");
+const UI = require("./admin-ui");
 const {
   readSupportChats,
   updateSupportChat,
@@ -19,6 +20,7 @@ const {
   appendTranscript,
   getChatTranscript,
   formatSupportChatUser,
+  formatSupportChatName,
   listSupportChats,
   formatMessageTime,
   SUPPORT_STORES,
@@ -541,12 +543,12 @@ function sortAdminUserRows(rows, sortKey, sortDir) {
 
 function renderRefStatusBadge(refStatus) {
   if (refStatus === "ref") {
-    return '<span class="badge badge-ok">Реф</span>';
+    return '<span class="chip chip-ok">реф</span>';
   }
   if (refStatus === "non-ref") {
-    return '<span class="badge badge-warn">Не реф</span>';
+    return '<span class="chip chip-warn">не реф</span>';
   }
-  return '<span class="badge badge-muted">—</span>';
+  return '<span class="chip chip-muted">—</span>';
 }
 
 const PROJECTS_SHOWN_IN_CELL = 3;
@@ -557,7 +559,7 @@ const PROJECTS_SHOWN_IN_CELL = 3;
 function renderUserProjectsCell(projects) {
   const named = projects.filter((project) => project.projectId);
   if (named.length === 0) {
-    return '<span class="badge badge-muted">Без проекта</span>';
+    return '<span class="chip chip-muted">без проекта</span>';
   }
 
   // Legacy bindings from before the brand migration all resolve to the same
@@ -581,14 +583,14 @@ function renderUserProjectsCell(projects) {
     .slice(0, PROJECTS_SHOWN_IN_CELL)
     .map(
       (project) =>
-        `<span class="project-chip project-chip-${escapeHtml(project.refStatus)}">${escapeHtml(project.projectName)}</span>`,
+        `<span class="chip chip-${project.refStatus === "ref" ? "ok" : project.refStatus === "non-ref" ? "warn" : "muted"}">${escapeHtml(project.projectName)}</span>`,
     )
     .join("");
 
   const rest = Math.max(0, live.length - PROJECTS_SHOWN_IN_CELL);
-  const more = rest > 0 ? `<span class="project-chip project-chip-more">+${rest}</span>` : "";
+  const more = rest > 0 ? `<span class="chip">+${rest}</span>` : "";
   const orphanChip = orphans
-    ? `<span class="project-chip project-chip-more" title="привязки к удалённым проектам">удалённых: ${orphans}</span>`
+    ? `<span class="chip" title="привязки к удалённым проектам">удалённых: ${orphans}</span>`
     : "";
 
   // The referral owner is nearly always the same across a user's projects, so
@@ -601,13 +603,13 @@ function renderUserProjectsCell(projects) {
     ),
   ];
   const ownerLine = owners.length
-    ? `<div class="hint owner-line" title="${escapeHtml(owners.join(", "))}">реф: ${escapeHtml(owners[0])}${owners.length > 1 ? ` +${owners.length - 1}` : ""}</div>`
+    ? `<div class="dim ellip" style="margin-top:3px;font-size:11.5px" title="${escapeHtml(owners.join(", "))}">реф: ${escapeHtml(owners[0])}${owners.length > 1 ? ` +${owners.length - 1}` : ""}</div>`
     : "";
 
   if (!chips && !orphanChip) {
-    return '<span class="badge badge-muted">Без проекта</span>';
+    return '<span class="chip chip-muted">без проекта</span>';
   }
-  return `<div class="user-projects">${chips}${more}${orphanChip}</div>${ownerLine}`;
+  return `<div class="chips">${chips}${more}${orphanChip}</div>${ownerLine}`;
 }
 
 function renderAntiFraudCell(row) {
@@ -676,154 +678,137 @@ function renderSortHeader(label, columnKey, filters) {
 }
 
 function renderUsersPage(deps, viewModel) {
-  const { rows, page, totalPages, totalFiltered, totalAll, filters, brands, refOwners, stats } =
-    viewModel;
+  const { rows, page, totalPages, totalFiltered, filters, brands, refOwners, stats } = viewModel;
 
-  const brandOptions = brands
-    .map(
-      (brand) =>
-        `<option value="${escapeHtml(brand.key)}"${brand.key === filters.brand ? " selected" : ""}>${escapeHtml(brand.label)}</option>`,
-    )
-    .join("");
+  const href = (overrides = {}) => {
+    const query = new URLSearchParams();
+    const merged = { ...filters, page: 1, ...overrides };
+    for (const key of ["brand", "refOwnerId", "ref", "activity", "q", "sort", "dir"]) {
+      if (merged[key]) query.set(key, merged[key]);
+    }
+    if (merged.page && Number(merged.page) > 1) query.set("page", String(merged.page));
+    const text = query.toString();
+    return text ? `/admin/users?${text}` : "/admin/users";
+  };
 
-  const refOwnerOptions = refOwners
-    .map(
-      (owner) =>
-        `<option value="${escapeHtml(owner.id)}"${owner.id === filters.refOwnerId ? " selected" : ""}>${escapeHtml(owner.label)}</option>`,
-    )
-    .join("");
+  const sortLink = (label, key, alignRight = false) => {
+    const active = filters.sort === key;
+    const dir = active && filters.dir === "desc" ? "asc" : "desc";
+    const arrow = active ? (filters.dir === "desc" ? "↓" : "↑") : "";
+    return `<th class="${alignRight ? "num" : ""}"><a href="${href({ sort: key, dir })}">${escapeHtml(label)}${arrow ? ` <span class="dim">${arrow}</span>` : ""}</a></th>`;
+  };
+
+  const option = (value, label, selected) =>
+    `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`;
+
+  const filterBar = `<form method="get" action="/admin/users" class="filterbar">
+    <label class="field"><span>Бренд</span><select name="brand">
+      ${option("", "Все", filters.brand)}${brands.map((b) => option(b.key, b.label, filters.brand)).join("")}
+    </select></label>
+    <label class="field"><span>Реф организатора</span><select name="refOwnerId">
+      ${option("", "Все", filters.refOwnerId)}${refOwners.map((o) => option(o.id, o.label, filters.refOwnerId)).join("")}
+    </select></label>
+    <label class="field"><span>Статус</span><select name="ref">
+      ${option("", "Все", filters.ref)}${option("ref", "Рефы", filters.ref)}${option("non-ref", "Не рефы", filters.ref)}
+    </select></label>
+    <label class="field"><span>Активность</span><select name="activity">
+      ${option("", "Все", filters.activity)}
+      ${option("participated", "Участвовали", filters.activity)}
+      ${option("won", "Побеждали", filters.activity)}
+      ${option("unpaid", "Не выплачено", filters.activity)}
+      ${option("fraud", "Антифрод", filters.activity)}
+    </select></label>
+    <label class="field"><span>Поиск</span><input type="search" name="q" value="${escapeHtml(filters.q)}" placeholder="ID, имя, @username" /></label>
+    <button class="btn btn-primary" type="submit">Применить</button>
+    ${
+      filters.brand || filters.refOwnerId || filters.ref || filters.activity || filters.q
+        ? `<a class="btn btn-quiet" href="/admin/users">Сбросить</a>`
+        : ""
+    }
+  </form>`;
+
+  const activeFilters = [
+    filters.brand && "бренд",
+    filters.refOwnerId && "реф-организатор",
+    filters.ref && "статус",
+    filters.activity && "активность",
+    filters.q && "поиск",
+  ].filter(Boolean);
 
   const tableRows = rows
     .map(
       (row) => `<tr>
-        <td><a class="user-link" href="/admin/users/${encodeURIComponent(row.userId)}">${escapeHtml(row.userName || row.userLabel)}</a><div class="mono">${escapeHtml(row.userId)}</div></td>
+        <td>
+          <a class="link" href="/admin/users/${encodeURIComponent(row.userId)}">${escapeHtml(row.userName || row.userLabel)}</a>
+          <div class="mono">${escapeHtml(row.userId)}</div>
+        </td>
         <td>${renderUserProjectsCell(row.projects)}</td>
         <td>${renderAntiFraudCell(row)}</td>
-        <td>${row.hasWallet ? '<span class="badge badge-ok">Есть</span>' : '<span class="badge badge-muted">Нет</span>'}</td>
-        <td>${row.participations}</td>
-        <td>${row.wins}</td>
-        <td>${escapeHtml(row.winningsText)}</td>
-        <td>${escapeHtml(row.payoutsText)}</td>
+        <td>${row.hasWallet ? '<span class="chip chip-ok">есть</span>' : '<span class="chip chip-muted">нет</span>'}</td>
+        <td class="num strong">${row.participations}</td>
+        <td class="num strong">${row.wins}</td>
+        <td class="num nowrap">${escapeHtml(row.winningsText)}</td>
+        <td class="num nowrap">${escapeHtml(row.payoutsText)}</td>
       </tr>`,
     )
     .join("");
 
-  const queryBase = new URLSearchParams();
-  if (filters.brand) queryBase.set("brand", filters.brand);
-  if (filters.refOwnerId) queryBase.set("refOwnerId", filters.refOwnerId);
-  if (filters.ref) queryBase.set("ref", filters.ref);
-  if (filters.activity) queryBase.set("activity", filters.activity);
-  if (filters.q) queryBase.set("q", filters.q);
-  if (filters.sort) queryBase.set("sort", filters.sort);
-  if (filters.dir) queryBase.set("dir", filters.dir);
+  const table = tableRows
+    ? `<div class="tbl-wrap"><table class="tbl tbl-sticky">
+        <thead><tr>
+          <th>Пользователь</th>
+          <th>Проекты</th>
+          <th>Антифрод</th>
+          <th>Кошелёк</th>
+          ${sortLink("Участий", "participations", true)}
+          ${sortLink("Побед", "wins", true)}
+          ${sortLink("Выиграно", "winnings", true)}
+          ${sortLink("Выплачено", "payouts", true)}
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table></div>`
+    : UI.blank("Никого не нашлось", "Попробуйте снять фильтры или изменить запрос.");
 
-  const prevPage = page > 1 ? page - 1 : null;
-  const nextPage = page < totalPages ? page + 1 : null;
-  const prevHref = prevPage
-    ? `/admin/users?${new URLSearchParams({ ...Object.fromEntries(queryBase), page: String(prevPage) }).toString()}`
-    : "";
-  const nextHref = nextPage
-    ? `/admin/users?${new URLSearchParams({ ...Object.fromEntries(queryBase), page: String(nextPage) }).toString()}`
-    : "";
+  const from = totalFiltered === 0 ? 0 : (page - 1) * USERS_PAGE_SIZE + 1;
+  const to = Math.min(totalFiltered, page * USERS_PAGE_SIZE);
+  const foot = `<div class="foot-bar">
+    <span>${from}–${to} из ${totalFiltered.toLocaleString("ru-RU")}${
+      totalFiltered !== stats.usersTotal ? ` (всего ${stats.usersTotal.toLocaleString("ru-RU")})` : ""
+    }</span>
+    <span class="foot-actions">
+      ${page > 1 ? `<a class="btn" href="${href({ page: page - 1 })}">← Назад</a>` : ""}
+      <span class="dim">стр. ${page} из ${totalPages}</span>
+      ${page < totalPages ? `<a class="btn" href="${href({ page: page + 1 })}">Вперёд →</a>` : ""}
+    </span>
+  </div>`;
 
-  return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Юзеры — Admin</title>
-  <style>${getAdminBaseStyles()}</style>
-</head>
-<body>
-  ${renderAdminTop("Юзеры и рефы", "users")}
-  <main class="wrap wrap-wide">
-    <div class="grid">
-      <div class="stat"><span>Пользователей в базе</span><b>${stats.usersTotal}</b></div>
-      <div class="stat"><span>Привязок к проектам</span><b>${stats.bindingsTotal}</b></div>
-      <div class="stat"><span>Рефов</span><b>${stats.refsTotal}</b></div>
-      <div class="stat"><span>Не реф</span><b>${stats.nonRefsTotal}</b></div>
+  const body = `
+    <div class="kpis kpis-4">
+      ${UI.kpi({ label: "Пользователей", value: stats.usersTotal.toLocaleString("ru-RU"), note: "всего в базе" })}
+      ${UI.kpi({ label: "Привязок к проектам", value: stats.bindingsTotal.toLocaleString("ru-RU"), note: "профиль по бренду" })}
+      ${UI.kpi({ label: "Рефов", value: stats.refsTotal.toLocaleString("ru-RU"), note: "подтверждённых" })}
+      ${UI.kpi({ label: "Не рефов", value: stats.nonRefsTotal.toLocaleString("ru-RU"), note: "отметились сами" })}
     </div>
+    ${UI.card({ flush: true, body: `<div class="filterbar-wrap">${filterBar}</div>${table}${tableRows ? foot : ""}` })}`;
 
-    <section class="panel">
-      <h2>Фильтры</h2>
-      <p class="hint">Один пользователь — одна строка; проекты и реф-статус показаны в колонке «Проекты». Данные из SQLite (<code>data/giveaway.db</code>).</p>
-      <form class="filters" method="get" action="/admin/users">
-        <label>
-          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Бренд / проект</span>
-          <select name="brand">
-            <option value="">Все</option>
-            ${brandOptions}
-          </select>
-        </label>
-        <label>
-          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Реф организатора</span>
-          <select name="refOwnerId">
-            <option value="">Все</option>
-            ${refOwnerOptions}
-          </select>
-        </label>
-        <label>
-          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Статус</span>
-          <select name="ref">
-            <option value=""${filters.ref === "" ? " selected" : ""}>Все</option>
-            <option value="ref"${filters.ref === "ref" ? " selected" : ""}>Только рефы</option>
-            <option value="non-ref"${filters.ref === "non-ref" ? " selected" : ""}>Только не рефы</option>
-          </select>
-        </label>
-        <label>
-          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Активность</span>
-          <select name="activity">
-            <option value=""${filters.activity === "" ? " selected" : ""}>Все</option>
-            <option value="participated"${filters.activity === "participated" ? " selected" : ""}>Участвовали</option>
-            <option value="won"${filters.activity === "won" ? " selected" : ""}>Побеждали</option>
-            <option value="unpaid"${filters.activity === "unpaid" ? " selected" : ""}>Выиграли, но не выплачено</option>
-            <option value="fraud"${filters.activity === "fraud" ? " selected" : ""}>С антифродом</option>
-          </select>
-        </label>
-        <label>
-          <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:4px">Поиск</span>
-          <input type="search" name="q" value="${escapeHtml(filters.q)}" placeholder="ID, имя, @username" />
-        </label>
-        <button type="submit" class="btn btn-primary">Применить</button>
-        <a class="btn btn-ghost" href="/admin/users">Сбросить</a>
-      </form>
-    </section>
-
-    <section class="panel">
-      <h2>Записи (${totalFiltered}${totalFiltered !== totalAll ? ` из ${totalAll}` : ""})</h2>
-      <div class="users-table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Пользователь</th>
-            <th>Проекты</th>
-            <th>Антифрод</th>
-            <th>Кошелёк</th>
-            ${renderSortHeader("Участия", "participations", filters)}
-            ${renderSortHeader("Побед", "wins", filters)}
-            ${renderSortHeader("Выигрыши", "winnings", filters)}
-            ${renderSortHeader("Выплаты", "payouts", filters)}
-          </tr>
-        </thead>
-        <tbody>${tableRows || "<tr><td colspan='8'>Нет записей по выбранным фильтрам</td></tr>"}</tbody>
-      </table>
-      </div>
-      <div class="pager">
-        <span>Страница ${page} из ${totalPages}</span>
-        ${prevHref ? `<a class="btn btn-ghost" href="${prevHref}">← Назад</a>` : ""}
-        ${nextHref ? `<a class="btn btn-ghost" href="${nextHref}">Вперёд →</a>` : ""}
-      </div>
-    </section>
-  </main>
-</body>
-</html>`;
+  return UI.renderShell({
+    title: "Пользователи",
+    subtitle: activeFilters.length
+      ? `${totalFiltered.toLocaleString("ru-RU")} по фильтру · ${activeFilters.join(", ")}`
+      : `${totalFiltered.toLocaleString("ru-RU")} всего`,
+    active: "users",
+    body,
+    styles: `
+      /* Filters belong above the table, not in the header: five selects there
+         collided with the page title as soon as the window narrowed. */
+      .filterbar-wrap { padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
+      .filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+      .filterbar select, .filterbar input { min-width: 128px; }
+      .filterbar input[type="search"] { min-width: 190px; }
+      .filterbar .btn { margin-bottom: 1px; }
+    `,
+  });
 }
-
-const ADMIN_NAV_ITEMS = [
-  { id: "stats", href: "/admin/dashboard", label: "Статистика" },
-  { id: "users", href: "/admin/users", label: "Юзеры" },
-  { id: "support", href: "/admin/support", label: "Поддержка" },
-];
 
 function formatCardDate(iso, timezone) {
   if (!iso) {
@@ -835,38 +820,68 @@ function formatCardDate(iso, timezone) {
 
 function renderUserCardPage(deps, card) {
   const tz = deps.timezone;
+  const allProfiles = deps.readUserProjectProfiles() || { users: {} };
   const money = (rub, usd) => formatMoneyTotalsLocal(rub, usd, deps);
 
   const badges = [];
   if (card.fraud.length) {
-    badges.push(`<span class="badge badge-danger">Антифрод: ${card.fraud.length}</span>`);
+    badges.push(`<span class="chip chip-danger">антифрод: ${card.fraud.length}</span>`);
   }
   if (card.totals.awaitingPayout > 0) {
-    badges.push(`<span class="badge badge-warn">Ждёт выплаты: ${card.totals.awaitingPayout}</span>`);
+    badges.push(`<span class="chip chip-warn">ждёт выплаты: ${card.totals.awaitingPayout}</span>`);
   }
   if (!card.known) {
-    badges.push('<span class="badge badge-muted">Нет профиля</span>');
+    badges.push('<span class="chip chip-muted">нет профиля</span>');
   }
+  if (!badges.length) {
+    badges.push('<span class="chip chip-ok">без отметок</span>');
+  }
+
+  const initial = (card.fullName || card.label).replace(/^@/, "").charAt(0).toUpperCase() || "?";
+
+  const identity = `<div class="profile">
+    <div class="avatar">${escapeHtml(initial)}</div>
+    <div class="profile-main">
+      <div class="profile-name">${escapeHtml(card.label)}</div>
+      <div class="profile-meta">
+        <span class="mono">ID ${escapeHtml(card.userId)}</span>
+        ${card.fullName ? `<span class="dim">${escapeHtml(card.fullName)}</span>` : ""}
+      </div>
+      <div class="chips" style="margin-top:7px">${badges.join("")}</div>
+    </div>
+    <div class="profile-side">
+      ${
+        card.wallets.length
+          ? card.wallets
+              .map(
+                (wallet) =>
+                  `<div class="wallet"><span class="mono">${escapeHtml(wallet.address)}</span><span class="chip chip-muted">${escapeHtml(wallet.source)}</span></div>`,
+              )
+              .join("")
+          : '<div class="dim">Кошелёк не указан</div>'
+      }
+    </div>
+  </div>`;
 
   const drawRows = card.draws
     .map((draw) => {
       const outcome = draw.outcome
-        ? `<span class="badge outcome-${escapeHtml(draw.outcome.tone)}">${escapeHtml(draw.outcome.label)}</span>`
-        : '<span class="badge badge-muted">Участвовал</span>';
-      const details = draw.outcome
+        ? `<span class="chip outcome-${escapeHtml(draw.outcome.tone)}">${escapeHtml(draw.outcome.label)}</span>`
+        : '<span class="chip chip-muted">участвовал</span>';
+      const detail = draw.outcome
         ? [
             draw.outcome.payoutPrize ? `к выплате ${escapeHtml(draw.outcome.payoutPrize)}` : "",
             draw.outcome.paidAt ? `выплачено ${escapeHtml(formatCardDate(draw.outcome.paidAt, tz))}` : "",
-            draw.outcome.reason ? `причина: ${escapeHtml(draw.outcome.reason)}` : "",
+            draw.outcome.reason ? escapeHtml(draw.outcome.reason) : "",
           ]
             .filter(Boolean)
             .join(" · ")
         : "";
       return `<tr>
-        <td class="nowrap">${escapeHtml(formatCardDate(draw.at, tz))}</td>
-        <td>${escapeHtml(draw.prize)}<div class="mono">${escapeHtml(draw.id)}</div></td>
+        <td class="nowrap dim">${escapeHtml(formatCardDate(draw.at, tz))}</td>
+        <td class="strong">${escapeHtml(draw.prize)}<div class="mono">${escapeHtml(draw.id)}</div></td>
         <td>${escapeHtml(draw.projectName)}</td>
-        <td>${outcome}${details ? `<div class="hint" style="margin:4px 0 0">${details}</div>` : ""}</td>
+        <td>${outcome}${detail ? `<div class="dim" style="margin-top:3px;font-size:11.5px">${detail}</div>` : ""}</td>
         <td class="mono">${draw.outcome?.wallet ? escapeHtml(draw.outcome.wallet) : "—"}</td>
       </tr>`;
     })
@@ -875,11 +890,12 @@ function renderUserCardPage(deps, card) {
   const projectRows = card.projects
     .map(
       (project) => `<tr>
-        <td>${escapeHtml(project.projectName)}</td>
+        <td class="strong">${escapeHtml(project.projectName)}</td>
+        <td class="dim">${project.ownerId ? escapeHtml(labelForUser(String(project.ownerId), allProfiles)) : "—"}</td>
         <td>${renderRefStatusBadge(project.refStatus)}</td>
         <td>${escapeHtml(project.nickname || project.accountId || "—")}</td>
         <td class="mono">${escapeHtml(project.wallet || "—")}</td>
-        <td class="nowrap">${escapeHtml(formatCardDate(project.updatedAt, tz))}</td>
+        <td class="nowrap dim">${escapeHtml(formatCardDate(project.updatedAt, tz))}</td>
       </tr>`,
     )
     .join("");
@@ -887,13 +903,10 @@ function renderUserCardPage(deps, card) {
   const fraudItems = card.fraud
     .map((detail) => {
       const linked = (detail.linkedUserIds || [])
-        .map(
-          (id) =>
-            `<a class="user-link" href="/admin/users/${encodeURIComponent(id)}">${escapeHtml(id)}</a>`,
-        )
+        .map((id) => `<a class="link" href="/admin/users/${encodeURIComponent(id)}">${escapeHtml(id)}</a>`)
         .join(", ");
-      return `<li><b>${escapeHtml(detail.label)}</b> — ${escapeHtml(detail.drawTitle || detail.drawId || "")}${
-        linked ? `<br><span class="hint">связан с: ${linked}</span>` : ""
+      return `<li><span class="chip chip-danger">${escapeHtml(detail.label)}</span> <span class="dim">${escapeHtml(detail.drawTitle || detail.drawId || "")}</span>${
+        linked ? `<div class="dim" style="margin-top:2px">связан с: ${linked}</div>` : ""
       }</li>`;
     })
     .join("");
@@ -901,261 +914,97 @@ function renderUserCardPage(deps, card) {
   const supportRows = card.supportChats
     .map(
       (chat) => `<tr>
-        <td><a class="user-link" href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.botLabel)}</a></td>
-        <td>${chat.sessionClosed ? '<span class="badge badge-muted">завершён</span>' : '<span class="badge badge-ok">активен</span>'}</td>
-        <td>${chat.messageCount}</td>
-        <td class="nowrap">${escapeHtml(formatCardDate(chat.lastMessageAt, tz))}</td>
-        <td class="preview-cell">${escapeHtml(chat.preview || "")}</td>
+        <td><a class="link" href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.botLabel)}</a></td>
+        <td>${chat.sessionClosed ? '<span class="chip chip-muted">завершён</span>' : '<span class="chip chip-ok">активен</span>'}</td>
+        <td class="num">${chat.messageCount}</td>
+        <td class="nowrap dim">${escapeHtml(formatCardDate(chat.lastMessageAt, tz))}</td>
+        <td class="ellip dim">${escapeHtml(chat.preview || "")}</td>
       </tr>`,
     )
     .join("");
 
-  const walletItems = card.wallets
-    .map(
-      (wallet) =>
-        `<li class="mono">${escapeHtml(wallet.address)} <span class="hint">(${escapeHtml(wallet.source)})</span></li>`,
-    )
-    .join("");
+  const tableCard = (title, subtitle, head, rows, emptyText) =>
+    UI.card({
+      title,
+      subtitle,
+      flush: true,
+      body: rows
+        ? `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`
+        : UI.blank(emptyText),
+    });
 
-  return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(card.label)} — Admin</title>
-  <style>
-    ${getAdminBaseStyles()}
-    .preview-cell { max-width: 320px; color: #cbd5e1; }
-  </style>
-</head>
-<body>
-  ${renderAdminTop(card.label, "users")}
-  <main class="wrap wrap-wide">
-    <p><a class="btn btn-ghost" href="/admin/users">← Все юзеры</a></p>
-
-    <section class="panel">
-      <div class="card-head">
-        <div class="card-title">
-          <h2>${escapeHtml(card.label)}</h2>
-          <div class="hint mono">ID ${escapeHtml(card.userId)}${card.fullName ? ` · ${escapeHtml(card.fullName)}` : ""}</div>
-        </div>
-        <div class="card-badges">${badges.join("") || '<span class="badge badge-ok">Чисто</span>'}</div>
-      </div>
-    </section>
-
-    <div class="grid">
-      <div class="stat"><span>Участий</span><b>${card.totals.participations}</b></div>
-      <div class="stat"><span>Побед</span><b>${card.totals.wins}</b></div>
-      <div class="stat"><span>Выиграно</span><b>${escapeHtml(money(card.totals.winningsRub, card.totals.winningsUsd))}</b></div>
-      <div class="stat"><span>Выплачено</span><b>${escapeHtml(money(card.totals.paidRub, card.totals.paidUsd))}</b></div>
-      <div class="stat"><span>Ждёт выплаты</span><b>${card.totals.awaitingPayout}</b></div>
+  const body = `
+    ${UI.card({ body: identity })}
+    <div class="kpis kpis-4" style="margin-top:12px">
+      ${UI.kpi({ label: "Участий", value: card.totals.participations })}
+      ${UI.kpi({ label: "Побед", value: card.totals.wins })}
+      ${UI.kpi({ label: "Выиграно", value: money(card.totals.winningsRub, card.totals.winningsUsd) })}
+      ${UI.kpi({ label: "Выплачено", value: money(card.totals.paidRub, card.totals.paidUsd), note: card.totals.awaitingPayout ? `ждёт выплаты: ${card.totals.awaitingPayout}` : "" })}
     </div>
 
-    <section class="panel">
-      <h2>Кошельки</h2>
-      ${walletItems ? `<ul class="fraud-details">${walletItems}</ul>` : '<p class="empty">Кошелёк не указан.</p>'}
-    </section>
+    ${tableCard(
+      "Проекты",
+      `${card.projects.length} привязок`,
+      "<th>Проект</th><th>Организатор</th><th>Статус</th><th>Ник / ID аккаунта</th><th>Кошелёк</th><th>Обновлён</th>",
+      projectRows,
+      "Нет привязок к проектам",
+    )}
 
-    <section class="panel">
-      <h2>Проекты</h2>
-      ${
-        projectRows
-          ? `<table><thead><tr><th>Проект</th><th>Статус</th><th>Ник / ID</th><th>Кошелёк</th><th>Обновлён</th></tr></thead><tbody>${projectRows}</tbody></table>`
-          : '<p class="empty">Нет привязок к проектам.</p>'
+    <div style="height:12px"></div>
+    ${tableCard(
+      "Розыгрыши",
+      `${card.draws.length} записей, новые сверху`,
+      "<th>Дата</th><th>Приз</th><th>Проект</th><th>Итог</th><th>Кошелёк выплаты</th>",
+      drawRows,
+      "Не участвовал ни в одном розыгрыше",
+    )}
+
+    <div class="grid grid-2" style="margin-top:12px">
+      ${UI.card({
+        title: "Антифрод",
+        body: fraudItems ? `<ul class="fraud-details">${fraudItems}</ul>` : '<div class="dim">Отметок нет.</div>',
+      })}
+      ${UI.card({
+        title: "Поддержка",
+        flush: true,
+        body: supportRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Бот</th><th>Статус</th><th class="num">Сообщ.</th><th>Последнее</th><th>Превью</th></tr></thead><tbody>${supportRows}</tbody></table></div>`
+          : UI.blank("Обращений не было"),
+      })}
+    </div>`;
+
+  return UI.renderShell({
+    title: card.label,
+    subtitle: `${card.totals.participations} участий · ${card.totals.wins} побед`,
+    pageTitle: card.label,
+    active: "users",
+    tools: `<a class="btn" href="/admin/users">← К списку</a>`,
+    body,
+    styles: `
+      .profile { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+      .avatar {
+        width: 46px; height: 46px; border-radius: 12px; flex: none;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--accent-soft); color: #b9d2ff; font-size: 19px; font-weight: 650;
       }
-    </section>
-
-    <section class="panel">
-      <h2>Розыгрыши (${card.draws.length})</h2>
-      ${
-        drawRows
-          ? `<div class="users-table-wrap"><table><thead><tr><th>Дата</th><th>Приз</th><th>Проект</th><th>Итог</th><th>Кошелёк выплаты</th></tr></thead><tbody>${drawRows}</tbody></table></div>`
-          : '<p class="empty">Не участвовал ни в одном розыгрыше.</p>'
-      }
-    </section>
-
-    <section class="panel">
-      <h2>Антифрод</h2>
-      ${fraudItems ? `<ul class="fraud-details">${fraudItems}</ul>` : '<p class="empty">Отметок нет.</p>'}
-    </section>
-
-    <section class="panel">
-      <h2>Поддержка</h2>
-      ${
-        supportRows
-          ? `<table><thead><tr><th>Бот</th><th>Статус</th><th>Сообщ.</th><th>Последнее</th><th>Превью</th></tr></thead><tbody>${supportRows}</tbody></table>`
-          : '<p class="empty">Обращений в поддержку не было.</p>'
-      }
-    </section>
-  </main>
-</body>
-</html>`;
+      .profile-main { flex: 1; min-width: 220px; }
+      .profile-name { font-size: 17px; font-weight: 650; }
+      .profile-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px; font-size: 12px; }
+      .profile-side { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
+      .wallet { display: flex; align-items: center; gap: 7px; }
+      .fraud-details { margin: 0; padding-left: 16px; }
+      .fraud-details li { margin-bottom: 7px; }
+    `,
+  });
 }
 
 function renderAdminNotFound(message) {
-  return `<!doctype html>
-<html lang="ru">
-<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Admin</title>
-<style>${getAdminBaseStyles()}</style></head>
-<body>
-  ${renderAdminTop("Admin", "users")}
-  <main class="wrap"><section class="panel"><p class="empty">${escapeHtml(message)}</p>
-  <p><a class="btn btn-ghost" href="/admin/users">← Все юзеры</a></p></section></main>
-</body>
-</html>`;
-}
-
-function renderAdminNav(active = "stats") {
-  const links = ADMIN_NAV_ITEMS.map((item) => {
-    const cls = item.id === active ? "btn btn-ghost btn-nav-active" : "btn btn-ghost";
-    return `<a class="${cls}" href="${item.href}">${escapeHtml(item.label)}</a>`;
-  }).join("");
-  return `<nav class="admin-nav">${links}</nav>`;
-}
-
-function renderAdminTop(title, active = "stats") {
-  return `<header class="top">
-    <h1>${escapeHtml(title)}</h1>
-    <div class="top-actions">
-      ${renderAdminNav(active)}
-      <form method="post" action="/admin/logout" class="logout"><button type="submit" class="btn btn-ghost">Выйти</button></form>
-    </div>
-  </header>`;
-}
-
-function getAdminBaseStyles() {
-  return `
-    /* Dense dark, desktop first: this panel is read at night, on a big screen,
-       and the job is to scan a lot of rows quickly rather than to look roomy. */
-    :root {
-      --bg: #0b0f17;
-      --panel: #131926;
-      --panel-2: #0f1523;
-      --line: #212b3d;
-      --line-soft: #1a2233;
-      --text: #e6edf7;
-      --muted: #8b98ad;
-      --accent: #4f8cff;
-      --ok-bg: #10331f; --ok-fg: #7ee2a8;
-      --warn-bg: #3a2a10; --warn-fg: #f0c975;
-      --danger-bg: #3a1618; --danger-fg: #ff9ea4;
-      --muted-bg: #1c2434; --muted-fg: #a9b6c9;
-    }
-    * { box-sizing: border-box; }
-    html { -webkit-text-size-adjust: 100%; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-variant-numeric: tabular-nums;
-    }
-    a { color: var(--accent); }
-
-    .top {
-      display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
-      padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
-      position: sticky; top: 0; z-index: 20;
-    }
-    .top h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: .2px; }
-    .top-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-    .admin-nav { display: flex; gap: 4px; }
-    .logout { margin: 0; }
-
-    .wrap { padding: 14px 16px 40px; max-width: 1240px; margin: 0 auto; }
-    .wrap-wide { max-width: 1720px; }
-
-    .btn {
-      display: inline-block; text-decoration: none; cursor: pointer;
-      padding: 5px 10px; border-radius: 7px; font-size: 12.5px; line-height: 1.3;
-      border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-    }
-    .btn:hover { border-color: #33405a; }
-    .btn-primary { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 650; }
-    .btn-ghost { background: transparent; }
-    .btn-nav-active { background: #1d2739; border-color: #33405a; color: #fff; }
-    .btn-danger { background: var(--danger-bg); border-color: #5a2429; color: var(--danger-fg); }
-
-    select, input[type="search"], input[type="text"], input[type="password"], textarea {
-      padding: 5px 8px; border-radius: 7px; font-size: 12.5px; font-family: inherit;
-      border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-    }
-    select:focus, input:focus, textarea:focus { outline: none; border-color: var(--accent); }
-
-    /* Counters. The three headline numbers come first and are meant to be read
-       from across the room; everything after them is context. */
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
-    .grid-hero { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
-    .stat {
-      background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
-    }
-    .stat span { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-    .stat b { display: block; font-size: 20px; font-weight: 650; margin-top: 3px; letter-spacing: -.01em; }
-    .stat-hero b { font-size: 30px; }
-    .stat small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
-
-    .panel {
-      background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-      padding: 12px 14px; margin-bottom: 12px;
-    }
-    .panel h2 { margin: 0 0 10px; font-size: 12px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
-    .panel-flush { padding: 0; overflow: hidden; }
-    .panel-flush h2 { padding: 10px 14px 0; margin-bottom: 8px; }
-    .hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
-    .empty { color: var(--muted); font-size: 12.5px; padding: 14px; text-align: center; }
-
-    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    thead th {
-      position: sticky; top: 41px; z-index: 5;
-      background: var(--panel-2); color: var(--muted);
-      font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-      text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line);
-    }
-    tbody td { padding: 6px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
-    tbody tr:hover td { background: #161d2c; }
-    tbody tr:last-child td { border-bottom: none; }
-    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-
-    .badge {
-      display: inline-block; font-size: 10.5px; line-height: 1.6; padding: 1px 7px; border-radius: 999px;
-      background: var(--muted-bg); color: var(--muted-fg); white-space: nowrap;
-    }
-    .badge-ok { background: var(--ok-bg); color: var(--ok-fg); }
-    .badge-warn { background: var(--warn-bg); color: var(--warn-fg); }
-    .badge-muted { background: var(--muted-bg); color: var(--muted-fg); }
-    .badge-danger { background: var(--danger-bg); color: var(--danger-fg); }
-    .outcome-ok { background: var(--ok-bg); color: var(--ok-fg); }
-    .outcome-warn { background: var(--warn-bg); color: var(--warn-fg); }
-    .outcome-danger { background: var(--danger-bg); color: var(--danger-fg); }
-    .outcome-muted { background: var(--muted-bg); color: var(--muted-fg); }
-
-    .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
-    .filters label { display: block; }
-    .filters label > span { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
-
-    .pager { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 14px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line-soft); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--muted); }
-    .nowrap { white-space: nowrap; }
-    .users-table-wrap { overflow-x: auto; }
-    .users-table-wrap > table { min-width: 980px; }
-
-    .user-link { color: var(--accent); text-decoration: none; font-weight: 600; }
-    .user-link:hover { text-decoration: underline; }
-    .user-projects { display: flex; flex-wrap: wrap; gap: 3px; }
-    .project-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--muted-bg); color: var(--muted-fg); white-space: nowrap; }
-    .project-chip-ref { background: var(--ok-bg); color: var(--ok-fg); }
-    .project-chip-non-ref { background: var(--warn-bg); color: var(--warn-fg); }
-    .project-chip-more { background: transparent; border: 1px solid var(--line); color: var(--muted); }
-    .owner-line { margin-top: 3px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .fraud-badges { display: flex; flex-wrap: wrap; gap: 3px; }
-    .fraud-details { margin: 3px 0 0; padding-left: 15px; color: var(--muted); font-size: 11.5px; }
-    .fraud-details li { margin-bottom: 2px; }
-    .fraud-panel { display: flex; flex-direction: column; gap: 6px; max-width: 420px; }
-
-    .card-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
-    .card-title h2 { margin: 0; font-size: 18px; color: var(--text); text-transform: none; letter-spacing: 0; }
-    .card-badges { display: flex; flex-wrap: wrap; gap: 5px; }
-  `;
+  return UI.renderShell({
+    title: "Не найдено",
+    active: "users",
+    body: UI.card({ body: UI.blank(message, "Проверьте ссылку или вернитесь к списку.") }),
+    tools: `<a class="btn" href="/admin/users">← К пользователям</a>`,
+  });
 }
 
 function renderLoginPage(error = "") {
@@ -1164,80 +1013,126 @@ function renderLoginPage(error = "") {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Admin — вход</title>
+  <title>Вход — RollerBot Admin</title>
   <style>
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh; display: grid; place-items: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0f172a; color: #e2e8f0; padding: 24px;
-    }
-    .card {
-      width: 100%; max-width: 400px; background: #1e293b; border-radius: 16px;
-      padding: 28px; border: 1px solid #334155;
-    }
-    h1 { margin: 0 0 8px; font-size: 22px; }
-    p { margin: 0 0 20px; color: #94a3b8; font-size: 14px; }
-    label { display: block; font-size: 13px; margin-bottom: 6px; color: #cbd5e1; }
-    input {
-      width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #475569;
-      background: #0f172a; color: #f8fafc; margin-bottom: 14px; font-size: 15px;
-    }
-    button {
-      width: 100%; padding: 12px; border: 0; border-radius: 10px;
-      background: #3b82f6; color: #fff; font-weight: 700; font-size: 15px; cursor: pointer;
-    }
-    .err { background: #450a0a; color: #fecaca; padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; font-size: 14px; }
+    ${UI.baseStyles()}
+    body { display: grid; place-items: center; padding: 24px; }
+    .login { width: 100%; max-width: 340px; }
+    .login-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; justify-content: center; }
+    .login-brand .brand-mark { width: 26px; height: 26px; }
+    .login-brand span { font-size: 15px; font-weight: 650; }
+    .login form { display: flex; flex-direction: column; gap: 12px; }
+    .login input { padding: 9px 11px; font-size: 13.5px; }
+    .login .err { background: var(--danger-bg); color: var(--danger-fg); padding: 8px 11px; border-radius: 8px; font-size: 12.5px; }
+    .login .hint { color: var(--text-faint); font-size: 12px; text-align: center; margin: 0; }
   </style>
 </head>
 <body>
-  <form class="card" method="post" action="/admin/login">
-    <h1>RollerBot Admin</h1>
-    <p>Статистика и база розыгрышей</p>
-    ${error ? `<div class="err">${escapeHtml(error)}</div>` : ""}
-    <label>Логин</label>
-    <input name="login" autocomplete="username" required />
-    <label>Пароль</label>
-    <input name="password" type="password" autocomplete="current-password" required />
-    <button type="submit">Войти</button>
-  </form>
+  <div class="login">
+    <div class="login-brand"><div class="brand-mark"></div><span>RollerBot Admin</span></div>
+    <section class="card"><div class="card-body">
+      <form method="post" action="/admin/login">
+        ${error ? `<div class="err">${escapeHtml(error)}</div>` : ""}
+        <label class="field"><span>Логин</span><input name="login" autocomplete="username" required autofocus /></label>
+        <label class="field"><span>Пароль</span><input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit" class="btn btn-primary" style="justify-content:center">Войти</button>
+      </form>
+    </div></section>
+    <p class="hint" style="margin-top:12px">Статистика, пользователи и поддержка</p>
+  </div>
 </body>
 </html>`;
 }
 
 function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfiles, period) {
-  const ownerOptions = organizers
-    .map(
-      (o) =>
-        `<option value="${escapeHtml(o.id)}"${o.id === selectedOwner ? " selected" : ""}>${escapeHtml(o.label)}</option>`,
-    )
-    .join("");
+  const link = (overrides = {}) => {
+    const query = new URLSearchParams();
+    const owner = overrides.ownerId ?? selectedOwner;
+    const per = overrides.period ?? stats.period.id;
+    if (owner) query.set("ownerId", owner);
+    if (per && per !== "30") query.set("period", per);
+    const text = query.toString();
+    return text ? `/admin/dashboard?${text}` : "/admin/dashboard";
+  };
 
-  const periodTabs = stats.periods
-    .map((item) => {
-      const query = new URLSearchParams();
-      if (selectedOwner) query.set("ownerId", selectedOwner);
-      if (item.id !== "30") query.set("period", item.id);
-      const href = query.toString() ? `/admin/dashboard?${query}` : "/admin/dashboard";
-      const cls = item.id === stats.period.id ? "btn btn-ghost btn-nav-active" : "btn btn-ghost";
-      return `<a class="${cls}" href="${href}">${escapeHtml(item.label)}</a>`;
-    })
-    .join("");
+  const periodSeg = UI.segmented(
+    stats.periods.map((item) => ({
+      label: item.label,
+      href: link({ period: item.id }),
+      active: item.id === stats.period.id,
+    })),
+  );
+
+  const ownerSelect = `<form method="get" action="/admin/dashboard" class="field">
+    <input type="hidden" name="period" value="${escapeHtml(stats.period.id)}" />
+    <select name="ownerId" onchange="this.form.submit()">
+      <option value="">Все организаторы</option>
+      ${organizers
+        .map(
+          (o) =>
+            `<option value="${escapeHtml(o.id)}"${o.id === selectedOwner ? " selected" : ""}>${escapeHtml(o.label)}</option>`,
+        )
+        .join("")}
+    </select>
+  </form>`;
+
+  const share = stats.totals.users
+    ? Math.round((stats.totals.participants / stats.totals.users) * 100)
+    : 0;
+
+  const heroes = [
+    UI.kpi({
+      label: "Пользователей в боте",
+      value: stats.totals.users.toLocaleString("ru-RU"),
+      note: "всего известных боту",
+      lead: true,
+    }),
+    UI.kpi({
+      label: "Участников",
+      value: stats.totals.participants.toLocaleString("ru-RU"),
+      note: `хотя бы один розыгрыш · <b class="strong">${share}%</b> от всех`,
+      lead: true,
+      share,
+    }),
+    UI.kpi({
+      label: "Розыгрышей",
+      value: stats.totals.draws.toLocaleString("ru-RU"),
+      note: `активных ${stats.totals.active} · завершённых ${stats.totals.finished}`,
+      lead: true,
+    }),
+  ].join("");
+
+  const secondary = [
+    UI.kpi({ label: "Победителей", value: stats.totals.winners, note: "уникальных людей" }),
+    UI.kpi({ label: "Побед всего", value: stats.totals.wins, note: "с повторными" }),
+    UI.kpi({ label: "С кошельком", value: stats.totals.withWallet, note: "указан TRC-20" }),
+    UI.kpi({
+      label: "Вступлений",
+      value: stats.series.joins.reduce((sum, n) => sum + n, 0),
+      note: `за ${stats.period.label.toLowerCase()}`,
+    }),
+  ].join("");
+
+  const chart = (id, title, subtitle) =>
+    UI.card({
+      title,
+      subtitle,
+      body: `<div class="chart"><canvas id="${id}"></canvas></div>`,
+      tight: true,
+    });
 
   const brandRows = stats.breakdowns.brands
     .map(
       ([name, count]) =>
-        `<tr><td>${escapeHtml(name)}</td><td class="num">${count}</td></tr>`,
+        `<tr><td class="strong">${escapeHtml(name)}</td><td class="num">${count}</td></tr>`,
     )
     .join("");
 
   const orgRows = stats.organizerRows
     .map((row) => {
       const label = labelForUser(row.id, userProfiles);
-      const query = new URLSearchParams({ ownerId: row.id });
-      if (stats.period.id !== "30") query.set("period", stats.period.id);
       return `<tr>
-        <td><a class="user-link" href="/admin/dashboard?${query}">${escapeHtml(label)}</a></td>
+        <td><a class="link" href="${link({ ownerId: row.id })}">${escapeHtml(label)}</a></td>
         <td class="num">${row.draws}</td>
         <td class="num">${row.referrals}</td>
       </tr>`;
@@ -1254,190 +1149,112 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     draws: stats.series.draws,
     status: stats.breakdowns.status,
     prizeTypes: stats.breakdowns.prizeTypes,
-    brands: stats.breakdowns.brands.slice(0, 6),
     referrals: stats.breakdowns.referrals,
   });
 
-  const participantShare = stats.totals.users
-    ? Math.round((stats.totals.participants / stats.totals.users) * 100)
-    : 0;
+  const body = `
+    <div class="kpis kpis-3">${heroes}</div>
+    <div class="kpis kpis-4">${secondary}</div>
 
-  return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RollerBot — Admin</title>
-  <style>
-    ${getAdminBaseStyles()}
-    .charts-row { display: grid; gap: 10px; margin-bottom: 12px; }
-    .charts-2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
-    .charts-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-    .chart-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
-    .chart-card h3 { margin: 0 0 8px; font-size: 11px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
-    .chart-box { position: relative; height: 240px; }
-    .chart-box-sm { height: 190px; }
-    .period-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-  </style>
+    <div class="grid grid-2" style="margin-bottom:12px">
+      ${chart("usersChart", "Рост пользователей", "новые за день и общее число")}
+      ${chart("participantsChart", "Рост участников", "первое участие и общее число")}
+    </div>
+
+    <div class="grid grid-2" style="margin-bottom:12px">
+      ${chart("drawsChart", "Розыгрышей создано", "по дням")}
+      ${chart("joinsChart", "Вступлений в розыгрыши", "по дням, с повторными")}
+    </div>
+
+    <div class="grid grid-3" style="margin-bottom:12px">
+      ${chart("statusChart", "Статусы розыгрышей", "")}
+      ${chart("prizeChart", "Типы призов", "")}
+      ${chart("refChart", "Реф-статус", "")}
+    </div>
+
+    <div class="grid grid-2">
+      ${UI.card({
+        title: "Розыгрыши по брендам",
+        flush: true,
+        body: brandRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Бренд</th><th class="num">Розыгрышей</th></tr></thead><tbody>${brandRows}</tbody></table></div>`
+          : UI.blank("Нет розыгрышей"),
+      })}
+      ${UI.card({
+        title: "Организаторы",
+        flush: true,
+        body: orgRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Организатор</th><th class="num">Розыгрышей</th><th class="num">Рефералов</th></tr></thead><tbody>${orgRows}</tbody></table></div>`
+          : UI.blank("Нет организаторов"),
+      })}
+    </div>`;
+
+  const scripts = `
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-</head>
-<body>
-  ${renderAdminTop("Статистика", "stats")}
-  <main class="wrap wrap-wide">
-
-    <div class="toolbar">
-      <div class="period-tabs">${periodTabs}</div>
-      <form method="get" action="/admin/dashboard" class="filters">
-        <input type="hidden" name="period" value="${escapeHtml(stats.period.id)}" />
-        <label>
-          <span>Организатор</span>
-          <select name="ownerId" onchange="this.form.submit()">
-            <option value="">Все организаторы</option>
-            ${ownerOptions}
-          </select>
-        </label>
-      </form>
-    </div>
-
-    <div class="grid grid-hero">
-      <div class="stat stat-hero">
-        <span>Пользователей в боте</span><b>${stats.totals.users}</b>
-        <small>всего известных боту</small>
-      </div>
-      <div class="stat stat-hero">
-        <span>Участников</span><b>${stats.totals.participants}</b>
-        <small>хотя бы один розыгрыш · ${participantShare}% от всех</small>
-      </div>
-      <div class="stat stat-hero">
-        <span>Розыгрышей</span><b>${stats.totals.draws}</b>
-        <small>активных ${stats.totals.active} · завершённых ${stats.totals.finished}</small>
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="stat"><span>Победителей</span><b>${stats.totals.winners}</b><small>уникальных людей</small></div>
-      <div class="stat"><span>Побед всего</span><b>${stats.totals.wins}</b><small>с повторными</small></div>
-      <div class="stat"><span>С кошельком</span><b>${stats.totals.withWallet}</b><small>указан TRC-20</small></div>
-    </div>
-
-    <div class="charts-row charts-2">
-      <div class="chart-card">
-        <h3>Рост пользователей</h3>
-        <div class="chart-box"><canvas id="usersChart"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <h3>Рост участников</h3>
-        <div class="chart-box"><canvas id="participantsChart"></canvas></div>
-      </div>
-    </div>
-
-    <div class="charts-row charts-2">
-      <div class="chart-card">
-        <h3>Розыгрышей создано</h3>
-        <div class="chart-box"><canvas id="drawsChart"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <h3>Вступлений в розыгрыши</h3>
-        <div class="chart-box"><canvas id="joinsChart"></canvas></div>
-      </div>
-    </div>
-
-    <div class="charts-row charts-3">
-      <div class="chart-card">
-        <h3>Статусы розыгрышей</h3>
-        <div class="chart-box chart-box-sm"><canvas id="statusChart"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <h3>Типы призов</h3>
-        <div class="chart-box chart-box-sm"><canvas id="prizeChart"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <h3>Реф-статус пользователей</h3>
-        <div class="chart-box chart-box-sm"><canvas id="refChart"></canvas></div>
-      </div>
-    </div>
-
-    <div class="charts-row charts-2">
-      <div class="panel panel-flush">
-        <h2>Розыгрышей по брендам</h2>
-        <table>
-          <thead><tr><th>Бренд</th><th class="num">Розыгрышей</th></tr></thead>
-          <tbody>${brandRows || '<tr><td colspan="2"><p class="empty">Нет данных.</p></td></tr>'}</tbody>
-        </table>
-      </div>
-      <div class="panel panel-flush">
-        <h2>Организаторы</h2>
-        <table>
-          <thead><tr><th>Организатор</th><th class="num">Розыгрышей</th><th class="num">Рефералов</th></tr></thead>
-          <tbody>${orgRows || '<tr><td colspan="3"><p class="empty">Нет данных.</p></td></tr>'}</tbody>
-        </table>
-      </div>
-    </div>
-  </main>
-
   <script>
     const D = ${payload};
-    const GRID = "rgba(148,163,184,.12)";
-    const TICK = "#8b98ad";
-    Chart.defaults.color = TICK;
+    const GRID = "rgba(148,163,184,.10)";
+    Chart.defaults.color = "#6b7789";
     Chart.defaults.font.size = 11;
-    Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+    Chart.defaults.font.family = "ui-sans-serif, -apple-system, Segoe UI, Roboto, sans-serif";
+    Chart.defaults.plugins.tooltip.backgroundColor = "#161d2b";
+    Chart.defaults.plugins.tooltip.borderColor = "#1f2836";
+    Chart.defaults.plugins.tooltip.borderWidth = 1;
+    Chart.defaults.plugins.tooltip.padding = 9;
 
-    const lineOpts = (leftTitle, rightTitle) => ({
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: { legend: { labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true } } },
-      scales: {
-        x: { grid: { color: GRID }, ticks: { maxRotation: 0, autoSkipPadding: 16 } },
-        y: { position: "left", beginAtZero: true, grid: { color: GRID }, title: { display: true, text: leftTitle } },
-        y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: rightTitle } },
-      },
-    });
-
-    const growth = (canvasId, newData, totalData, newLabel, totalLabel) =>
-      new Chart(document.getElementById(canvasId), {
+    const growth = (id, bars, line, barLabel, lineLabel) =>
+      new Chart(document.getElementById(id), {
         data: {
           labels: D.labels,
           datasets: [
-            { type: "bar", label: newLabel, data: newData, yAxisID: "y",
-              backgroundColor: "rgba(79,140,255,.45)", borderColor: "#4f8cff", borderWidth: 1, borderRadius: 2 },
-            { type: "line", label: totalLabel, data: totalData, yAxisID: "y1",
-              borderColor: "#7ee2a8", backgroundColor: "rgba(126,226,168,.12)",
-              borderWidth: 2, pointRadius: 0, tension: .3, fill: true },
+            { type: "bar", label: barLabel, data: bars, yAxisID: "y",
+              backgroundColor: "rgba(79,140,255,.38)", hoverBackgroundColor: "rgba(79,140,255,.7)",
+              borderRadius: 3, borderSkipped: false, maxBarThickness: 22 },
+            { type: "line", label: lineLabel, data: line, yAxisID: "y1",
+              borderColor: "#6fdda0", backgroundColor: "rgba(111,221,160,.10)",
+              borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: .35, fill: true },
           ],
         },
-        options: lineOpts(newLabel, totalLabel),
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: { labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, padding: 14 } } },
+          scales: {
+            x: { grid: { display: false }, border: { color: "#1f2836" }, ticks: { maxRotation: 0, autoSkipPadding: 22 } },
+            y: { beginAtZero: true, grid: { color: GRID }, border: { display: false } },
+            y1: { position: "right", beginAtZero: true, grid: { display: false }, border: { display: false } },
+          },
+        },
       });
 
     growth("usersChart", D.newUsers, D.totalUsers, "Новые", "Всего");
     growth("participantsChart", D.newParticipants, D.totalParticipants, "Новые", "Всего");
 
-    const bars = (canvasId, data, label, color) =>
-      new Chart(document.getElementById(canvasId), {
+    const bars = (id, data, label, color) =>
+      new Chart(document.getElementById(id), {
         type: "bar",
-        data: { labels: D.labels, datasets: [{ label, data, backgroundColor: color, borderRadius: 2 }] },
+        data: { labels: D.labels, datasets: [{ label, data, backgroundColor: color, borderRadius: 3, borderSkipped: false, maxBarThickness: 22 }] },
         options: {
           responsive: true, maintainAspectRatio: false,
           plugins: { legend: { display: false } },
           scales: {
-            x: { grid: { color: GRID }, ticks: { maxRotation: 0, autoSkipPadding: 16 } },
-            y: { beginAtZero: true, grid: { color: GRID } },
+            x: { grid: { display: false }, border: { color: "#1f2836" }, ticks: { maxRotation: 0, autoSkipPadding: 22 } },
+            y: { beginAtZero: true, grid: { color: GRID }, border: { display: false } },
           },
         },
       });
 
-    bars("drawsChart", D.draws, "Розыгрышей", "rgba(240,201,117,.7)");
-    bars("joinsChart", D.joins, "Вступлений", "rgba(79,140,255,.6)");
+    bars("drawsChart", D.draws, "Розыгрышей", "rgba(237,195,111,.55)");
+    bars("joinsChart", D.joins, "Вступлений", "rgba(79,140,255,.45)");
 
-    const PIE = ["#4f8cff", "#7ee2a8", "#f0c975", "#ff9ea4", "#b48ef0", "#67d5e0"];
-    const donut = (canvasId, labels, values) =>
-      new Chart(document.getElementById(canvasId), {
+    const PIE = ["#4f8cff", "#6fdda0", "#edc36f", "#ff8f97", "#b48ef0", "#67d5e0"];
+    const donut = (id, labels, values) =>
+      new Chart(document.getElementById(id), {
         type: "doughnut",
-        data: { labels, datasets: [{ data: values, backgroundColor: PIE, borderColor: "#131926", borderWidth: 2 }] },
+        data: { labels, datasets: [{ data: values, backgroundColor: PIE, borderColor: "#111722", borderWidth: 3, hoverOffset: 4 }] },
         options: {
-          responsive: true, maintainAspectRatio: false, cutout: "58%",
-          plugins: { legend: { position: "bottom", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, padding: 10 } } },
+          responsive: true, maintainAspectRatio: false, cutout: "64%",
+          plugins: { legend: { position: "bottom", labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, padding: 12 } } },
         },
       });
 
@@ -1446,134 +1263,161 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     donut("prizeChart", D.prizeTypes.map(x => x[0]), D.prizeTypes.map(x => x[1]));
     donut("refChart", ["Рефы", "Не рефы", "Не определено"],
       [D.referrals.refs, D.referrals.nonRefs, D.referrals.unknown]);
-  </script>
-</body>
-</html>`;
+  </script>`;
+
+  return UI.renderShell({
+    title: "Статистика",
+    subtitle: `${stats.period.label.toLowerCase()}${selectedOwner ? " · один организатор" : ""}`,
+    active: "stats",
+    tools: `${periodSeg}${ownerSelect}`,
+    body,
+    scripts,
+    styles: `
+      .chart { position: relative; height: 230px; }
+      .grid-3 .chart { height: 200px; }
+    `,
+  });
+}
+
+// Список и переписка на одном экране, как в почтовике: выбор диалога не уводит
+// со страницы, а открывает его рядом со списком.
+function supportHref(view, overrides = {}) {
+  const query = new URLSearchParams();
+  const tab = overrides.tab ?? view.activeTab;
+  const q = overrides.q ?? view.query;
+  const page = overrides.page ?? 1;
+  if (tab && tab !== "attention") query.set("tab", tab);
+  if (q) query.set("q", q);
+  if (page > 1) query.set("page", String(page));
+  const text = query.toString();
+  return text ? `?${text}` : "";
+}
+
+function renderSupportAside(view, selectedId = "") {
+  const counts = {
+    attention: view.summary.attention,
+    open: view.summary.open,
+    errors: view.summary.withErrors,
+    closed: view.summary.total - view.summary.open,
+    all: view.summary.total,
+  };
+
+  const tabs = UI.segmented(
+    view.tabs.map((tab) => ({
+      label: tab.label,
+      href: `/admin/support${supportHref(view, { tab: tab.id })}`,
+      active: tab.id === view.activeTab,
+      count: counts[tab.id] ?? 0,
+    })),
+  );
+
+  const items = view.rows
+    .map((chat) => {
+      const flags = chat.flags
+        .slice(0, 2)
+        .map((flag) => `<span class="chip chip-${flag.tone === "muted" ? "muted" : flag.tone}">${escapeHtml(flag.label)}</span>`)
+        .join("");
+      const active = String(chat.chatId) === String(selectedId);
+      return `<a class="conv${active ? " is-active" : ""}" href="/admin/support/${encodeURIComponent(chat.chatId)}${supportHref(view)}">
+        <div class="conv-top">
+          <span class="conv-name">${escapeHtml(chat.name || chat.label)}</span>
+          <span class="conv-time">${escapeHtml(formatMessageTime(chat.lastMessageAt, view.timezone))}</span>
+        </div>
+        <div class="conv-preview">${escapeHtml(chat.preview || "—")}</div>
+        <div class="conv-foot">
+          <span class="chips">${flags}</span>
+          <span class="dim">${chat.messageCount} сообщ.</span>
+        </div>
+      </a>`;
+    })
+    .join("");
+
+  const pager =
+    view.totalPages > 1
+      ? `<div class="foot-bar">
+          <span>${view.rows.length} из ${view.totalFiltered}</span>
+          <span class="foot-actions">
+            ${view.page > 1 ? `<a class="btn" href="/admin/support${supportHref(view, { page: view.page - 1 })}">←</a>` : ""}
+            <span class="dim">${view.page}/${view.totalPages}</span>
+            ${view.page < view.totalPages ? `<a class="btn" href="/admin/support${supportHref(view, { page: view.page + 1 })}">→</a>` : ""}
+          </span>
+        </div>`
+      : "";
+
+  return `<aside class="conv-list">
+    <div class="conv-head">
+      ${tabs}
+      <form method="get" action="/admin/support" class="conv-search">
+        <input type="hidden" name="tab" value="${escapeHtml(view.activeTab)}" />
+        <input type="search" name="q" value="${escapeHtml(view.query)}" placeholder="Поиск по переписке, имени, ID…" />
+      </form>
+    </div>
+    <div class="conv-scroll">${items || UI.blank("Ничего не найдено", "Смените вкладку или запрос.")}</div>
+    ${pager}
+  </aside>`;
+}
+
+function supportStyles() {
+  return `
+    .support { display: grid; grid-template-columns: 372px 1fr; min-height: calc(100vh - var(--head-h)); }
+    .conv-list { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; background: var(--rail); }
+    .conv-head { padding: 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+    /* In a 372px column the tabs wrapped onto three lines; let them scroll
+       sideways as one row instead. */
+    .conv-head { overflow: hidden; }
+    .conv-head .seg { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+    .conv-head .seg::-webkit-scrollbar { display: none; }
+    .conv-head .seg a { white-space: nowrap; flex: none; }
+    .conv-search input { width: 100%; }
+    .conv-scroll { overflow-y: auto; flex: 1; }
+    .conv { display: block; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
+    .conv:hover { background: var(--surface); }
+    .conv.is-active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+    .conv-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+    .conv-name { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .conv-time { font-size: 11px; color: var(--text-faint); flex: none; }
+    .conv-preview { font-size: 12px; color: var(--text-dim); margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .conv-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; }
+
+    .thread { display: flex; flex-direction: column; min-width: 0; }
+    .thread-head { padding: 12px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .thread-title { font-size: 14px; font-weight: 650; }
+    .thread-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+    .thread-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; }
+    .msg { max-width: 62%; padding: 8px 11px; border-radius: 12px; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .msg-meta { font-size: 10.5px; color: var(--text-faint); margin-top: 4px; }
+    .msg-user { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+    .msg-bot { align-self: flex-end; background: var(--accent-soft); border: 1px solid rgba(79,140,255,.25); border-bottom-right-radius: 4px; }
+    .msg-admin { align-self: flex-end; background: var(--ok-bg); border: 1px solid rgba(111,221,160,.25); border-bottom-right-radius: 4px; }
+    .msg-error { align-self: flex-end; background: var(--danger-bg); border: 1px solid rgba(255,143,151,.25); }
+    .msg-system { align-self: center; background: transparent; border: 1px dashed var(--line); color: var(--text-faint); font-size: 11.5px; }
+    .compose { border-top: 1px solid var(--line); padding: 12px 18px; display: flex; flex-direction: column; gap: 8px; }
+    .compose textarea { width: 100%; min-height: 74px; resize: vertical; }
+    .compose-row { display: flex; gap: 8px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+    .flash { padding: 8px 12px; border-radius: 8px; font-size: 12.5px; margin: 12px 18px 0; }
+    .flash-ok { background: var(--ok-bg); color: var(--ok-fg); }
+    .flash-error { background: var(--danger-bg); color: var(--danger-fg); }
+    @media (max-width: 1100px) { .support { grid-template-columns: 1fr; } .conv-list { border-right: none; border-bottom: 1px solid var(--line); max-height: 46vh; } }
+  `;
 }
 
 function renderSupportListPage(view, timezone) {
-  const params = (overrides = {}) => {
-    const query = new URLSearchParams();
-    const tab = overrides.tab ?? view.activeTab;
-    const q = overrides.q ?? view.query;
-    const page = overrides.page ?? 1;
-    if (tab && tab !== "attention") query.set("tab", tab);
-    if (q) query.set("q", q);
-    if (page > 1) query.set("page", String(page));
-    const text = query.toString();
-    return text ? `/admin/support?${text}` : "/admin/support";
-  };
-
-  const tabs = view.tabs
-    .map((tab) => {
-      const counts = {
-        attention: view.summary.attention,
-        open: view.summary.open,
-        errors: view.summary.withErrors,
-        closed: view.summary.total - view.summary.open,
-        all: view.summary.total,
-      };
-      const cls = tab.id === view.activeTab ? "btn btn-ghost btn-nav-active" : "btn btn-ghost";
-      return `<a class="${cls}" href="${params({ tab: tab.id })}">${escapeHtml(tab.label)} <span class="tab-count">${counts[tab.id] ?? 0}</span></a>`;
-    })
-    .join("");
-
-  const rows = view.rows
-    .map((chat) => {
-      const time = formatMessageTime(chat.lastMessageAt, timezone);
-      const flags = chat.flags.length
-        ? chat.flags
-            .map((flag) => `<span class="badge outcome-${escapeHtml(flag.tone)}">${escapeHtml(flag.label)}</span>`)
-            .join(" ")
-        : '<span class="badge badge-ok">Норм</span>';
-      return `<tr>
-        <td>
-          <a href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.name || chat.label)}</a>
-          <div class="mono"><a class="user-link" href="/admin/users/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.chatId)}</a></div>
-        </td>
-        <td class="nowrap">${escapeHtml(chat.botLabel || "—")}</td>
-        <td><div class="fraud-badges">${flags}</div></td>
-        <td class="preview-cell">${escapeHtml(chat.preview || "")}</td>
-        <td>${chat.messageCount}</td>
-        <td class="nowrap">${escapeHtml(time)}</td>
-      </tr>`;
-    })
-    .join("");
-
-  const prevHref = view.page > 1 ? params({ page: view.page - 1 }) : "";
-  const nextHref = view.page < view.totalPages ? params({ page: view.page + 1 }) : "";
-
-  return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Поддержка — Admin</title>
-  <style>
-    ${getAdminBaseStyles()}
-    .support-table a { color: #93c5fd; text-decoration: none; }
-    .support-table a:hover { text-decoration: underline; }
-    .preview-cell { color: #cbd5e1; }
-    .tab-count { opacity: 0.65; font-size: 12px; }
-    /* Inside a horizontally scrolling wrapper: below this width the columns
-       crushed into each other instead of letting the table scroll. */
-    .support-table { table-layout: fixed; min-width: 900px; }
-    .support-table th:nth-child(1), .support-table td:nth-child(1) { width: 20%; }
-    .support-table th:nth-child(2), .support-table td:nth-child(2) { width: 9%; }
-    .support-table th:nth-child(3), .support-table td:nth-child(3) { width: 20%; }
-    .support-table th:nth-child(4), .support-table td:nth-child(4) { width: 33%; }
-    .support-table th:nth-child(5), .support-table td:nth-child(5) { width: 7%; }
-    .support-table th:nth-child(6), .support-table td:nth-child(6) { width: 11%; }
-    .support-table td { overflow-wrap: anywhere; }
-    .support-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
-    .support-search { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-    .support-search input[type="search"] { flex: 1; min-width: 220px; }
-  </style>
-</head>
-<body>
-  ${renderAdminTop("Поддержка", "support")}
-  <main class="wrap wrap-wide">
-    <div class="grid">
-      <div class="stat"><span>Всего диалогов</span><b>${view.summary.total}</b></div>
-      <div class="stat"><span>Требуют внимания</span><b>${view.summary.attention}</b></div>
-      <div class="stat"><span>Живых</span><b>${view.summary.open}</b></div>
-      <div class="stat"><span>Со сбоями AI</span><b>${view.summary.withErrors}</b></div>
-    </div>
-
-    <section class="panel">
-      <div class="support-tabs">${tabs}</div>
-      <form class="support-search" method="get" action="/admin/support">
-        <input type="hidden" name="tab" value="${escapeHtml(view.activeTab)}" />
-        <input type="search" name="q" value="${escapeHtml(view.query)}" placeholder="Поиск по тексту переписки, имени или ID…" />
-        <button class="btn btn-primary" type="submit">Найти</button>
-        ${view.query ? `<a class="btn btn-ghost" href="${params({ q: "" })}">Сбросить</a>` : ""}
-      </form>
-
-      <div class="users-table-wrap">
-        <table class="support-table">
-          <thead>
-            <tr>
-              <th>Пользователь</th>
-              <th>Бот</th>
-              <th>Метки</th>
-              <th>Последнее сообщение</th>
-              <th>Сообщ.</th>
-              <th>Время</th>
-            </tr>
-          </thead>
-          <tbody>${rows || `<tr><td colspan="6"><p class="empty">Ничего не найдено.</p></td></tr>`}</tbody>
-        </table>
-      </div>
-
-      <div class="pager">
-        <span>Показано ${view.rows.length} из ${view.totalFiltered} · страница ${view.page} из ${view.totalPages}</span>
-        ${prevHref ? `<a class="btn btn-ghost" href="${prevHref}">← Назад</a>` : ""}
-        ${nextHref ? `<a class="btn btn-ghost" href="${nextHref}">Вперёд →</a>` : ""}
-      </div>
+  view.timezone = timezone;
+  const body = `<div class="support">
+    ${renderSupportAside(view)}
+    <section class="thread">
+      ${UI.blank("Выберите диалог", "Слева список: сверху те, где бот не справился.")}
     </section>
-  </main>
-</body>
-</html>`;
+  </div>`;
+
+  return UI.renderShell({
+    title: "Поддержка",
+    subtitle: `${view.summary.attention} требуют внимания · ${view.summary.open} живых · ${view.summary.total} всего`,
+    active: "support",
+    body,
+    flush: true,
+    styles: supportStyles(),
+  });
 }
 
 function roleLabel(role, kind) {
@@ -1589,116 +1433,80 @@ function roleLabel(role, kind) {
   return "Бот";
 }
 
-function renderSupportChatPage(chatId, state, timezone, options = {}) {
+function renderSupportChatPage(view, chatId, state, timezone, options = {}) {
+  view.timezone = timezone;
   const transcript = getChatTranscript(state);
-  const label = formatSupportChatUser(state, chatId);
-  const agentName = state.agentName || "—";
+  const name = formatSupportChatName(state, chatId);
   const sessionClosed = Boolean(state.sessionClosed);
-  const status = sessionClosed ? "завершён — пользователю нужен /start" : "активен";
-  const flash = options.flash || "";
-  const flashHtml = flash
-    ? `<div class="flash ${flash.type === "error" ? "flash-error" : "flash-ok"}">${escapeHtml(flash.text)}</div>`
-    : "";
+  const flash = options.flash;
 
   const messages = transcript
     .map((msg) => {
-      let role = msg.role === "user" ? "user" : msg.role === "system" ? "system" : "assistant";
-      if (msg.kind === "admin") {
-        role = "admin";
-      }
-      const css =
-        role === "user"
-          ? "chat-msg-user"
-          : role === "admin"
-            ? "chat-msg-admin"
-            : role === "system"
-              ? "chat-msg-system"
-              : "chat-msg-assistant";
-      const meta = `${roleLabel(msg.role, msg.kind)} · ${formatMessageTime(msg.at, timezone)}`;
-      return `<div class="chat-msg ${css}">${escapeHtml(msg.content)}<span class="chat-msg-meta">${escapeHtml(meta)}</span></div>`;
+      const role =
+        msg.role === "user"
+          ? "user"
+          : msg.kind === "admin"
+            ? "admin"
+            : msg.kind === "error"
+              ? "error"
+              : msg.role === "system"
+                ? "system"
+                : "bot";
+      const time = formatMessageTime(msg.at, timezone);
+      return `<div class="msg msg-${role}">${escapeHtml(msg.content || "")}<div class="msg-meta">${escapeHtml(roleLabel(msg.role, msg.kind))} · ${escapeHtml(time)}</div></div>`;
     })
     .join("");
 
-  return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(label)} — Поддержка</title>
-  <style>
-    ${getAdminBaseStyles()}
-    .wrap { max-width: 900px; }
-    .chat-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; font-size: 13px; color: #94a3b8; }
-    .chat-close-bar { margin: 0 0 12px; }
-    .chat-close-bar .btn-danger { width: 100%; padding: 12px 16px; font-size: 15px; font-weight: 600; }
-    .chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 70vh; overflow: auto; padding: 12px; background: #0f172a; border-radius: 12px; border: 1px solid #334155; }
-    .chat-msg { max-width: 85%; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
-    .chat-msg-user { align-self: flex-end; background: #1d4ed8; color: #eff6ff; border-bottom-right-radius: 4px; }
-    .chat-msg-assistant { align-self: flex-start; background: #334155; color: #f1f5f9; border-bottom-left-radius: 4px; }
-    .chat-msg-admin { align-self: flex-start; background: #14532d; color: #dcfce7; border-bottom-left-radius: 4px; border: 1px solid #22c55e; }
-    .chat-msg-system { align-self: center; background: #422006; color: #fde68a; font-size: 12px; max-width: 95%; text-align: center; }
-    .chat-msg-meta { display: block; margin-top: 6px; font-size: 11px; opacity: 0.75; }
-    .chat-compose { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
-    .chat-compose textarea {
-      width: 100%; min-height: 88px; padding: 12px 14px; border-radius: 10px;
-      border: 1px solid #475569; background: #0f172a; color: #f8fafc; font-size: 14px;
-      font-family: inherit; resize: vertical;
-    }
-    .chat-compose-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .btn-primary { background: #3b82f6; border-color: #3b82f6; color: #fff; cursor: pointer; }
-    .btn-danger { background: #7f1d1d; border-color: #b91c1c; color: #fecaca; cursor: pointer; }
-    .flash { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
-    .flash-ok { background: #14532d; color: #bbf7d0; }
-    .flash-error { background: #450a0a; color: #fecaca; }
-    .compose-hint { font-size: 12px; color: #94a3b8; margin: 0; }
-  </style>
-</head>
-<body>
-  ${renderAdminTop("Диалог", "support")}
-  <main class="wrap">
-    <p>
-      <a class="btn btn-ghost" href="/admin/support">← Все диалоги</a>
-      <a class="btn btn-ghost" href="/admin/users/${encodeURIComponent(chatId)}">Карточка пользователя →</a>
-    </p>
-    <section class="panel">
-      <h2 style="margin:0 0 8px">${escapeHtml(label)}</h2>
-      ${options.storeLabel ? `<p class="hint">Бот: ${escapeHtml(options.storeLabel)}</p>` : ""}
-      ${
-        sessionClosed
-          ? ""
-          : `<form method="post" action="/admin/support/${encodeURIComponent(chatId)}/close" class="chat-close-bar" onsubmit="return confirm('Завершить диалог? Пользователю уйдёт сообщение с /start.');">
-        <button type="submit" class="btn btn-danger">Завершить диалог</button>
-      </form>`
-      }
-      <div class="chat-meta">
-        <span>Оператор: <b>${escapeHtml(agentName)}</b></span>
-        <span>Статус: <b>${escapeHtml(status)}</b></span>
-        <span>Chat ID: <b>${escapeHtml(chatId)}</b></span>
-      </div>
-      ${flashHtml}
-      <div class="chat-log" id="chatLog">${messages || '<div class="chat-msg chat-msg-system">Сообщений пока нет</div>'}</div>
-      ${
-        options.canReply === false
-          ? `<p class="compose-hint">Диалог второго бота поддержки — доступен только для чтения.</p>`
-          : sessionClosed
-          ? `<p class="compose-hint">Диалог завершён. Пользователь получил сообщение с просьбой нажать /start для нового оператора.</p>`
-          : `<form class="chat-compose" method="post" action="/admin/support/${encodeURIComponent(chatId)}/reply">
-        <label class="compose-hint" for="replyText">Сообщение уйдёт пользователю в Telegram от support-бота. AI-бот продолжает отвечать как обычно.</label>
-        <textarea id="replyText" name="text" required placeholder="Напишите ответ…"></textarea>
-        <div class="chat-compose-actions">
-          <button type="submit" class="btn btn-primary">Отправить</button>
-          <button type="submit" formaction="/admin/support/${encodeURIComponent(chatId)}/close" formmethod="post" class="btn btn-danger" formnovalidate onclick="return confirm('Завершить диалог? Пользователю уйдёт сообщение с /start.');">Завершить диалог</button>
+  const compose =
+    options.canReply === false
+      ? `<div class="compose"><div class="dim">Диалог второго бота поддержки — только просмотр.</div></div>`
+      : sessionClosed
+        ? `<div class="compose"><div class="dim">Диалог завершён. Пользователь получил сообщение с просьбой нажать /start.</div></div>`
+        : `<form class="compose" method="post" action="/admin/support/${encodeURIComponent(chatId)}/reply">
+            <textarea name="text" required placeholder="Ответ уйдёт пользователю в Telegram от support-бота…"></textarea>
+            <div class="compose-row">
+              <span class="dim">AI-бот продолжает отвечать как обычно.</span>
+              <span class="foot-actions">
+                <button type="submit" class="btn btn-primary">Отправить</button>
+                <button type="submit" class="btn btn-danger" formaction="/admin/support/${encodeURIComponent(chatId)}/close" formmethod="post" formnovalidate onclick="return confirm('Завершить диалог? Пользователю уйдёт сообщение с /start.');">Завершить</button>
+              </span>
+            </div>
+          </form>`;
+
+  const body = `<div class="support">
+    ${renderSupportAside(view, chatId)}
+    <section class="thread">
+      <div class="thread-head">
+        <div>
+          <div class="thread-title">${escapeHtml(name)}</div>
+          <div class="thread-meta">
+            <span class="mono">ID ${escapeHtml(chatId)}</span>
+            <span>${options.storeLabel ? escapeHtml(options.storeLabel) : "—"}</span>
+            <span>${sessionClosed ? "завершён" : "активен"}</span>
+            <span>${transcript.length} сообщений</span>
+          </div>
         </div>
-      </form>`
-      }
+        <a class="btn" href="/admin/users/${encodeURIComponent(chatId)}">Карточка пользователя →</a>
+      </div>
+      ${flash ? `<div class="flash ${flash.type === "error" ? "flash-error" : "flash-ok"}">${escapeHtml(flash.text)}</div>` : ""}
+      <div class="thread-body" id="threadBody">${messages || UI.blank("Переписка пуста")}</div>
+      ${compose}
     </section>
-  </main>
-  <script>
-    const log = document.getElementById("chatLog");
-    if (log) log.scrollTop = log.scrollHeight;
-  </script>
-</body>
-</html>`;
+  </div>`;
+
+  return UI.renderShell({
+    title: "Поддержка",
+    subtitle: name,
+    pageTitle: name,
+    active: "support",
+    body,
+    flush: true,
+    styles: supportStyles(),
+    scripts: `<script>
+      const t = document.getElementById("threadBody");
+      if (t) { t.scrollTop = t.scrollHeight; }
+    </script>`,
+  });
 }
 
 function registerAdminDashboard(app, deps) {
@@ -1901,7 +1709,8 @@ function registerAdminDashboard(app, deps) {
     }
   });
 
-  app.get("/admin/support", requireAuth, (req, res) => {
+  // Both pages draw the same list, so both build it the same way.
+  function buildSupportViewFromRequest(req) {
     // Both bots, not just the first one.
     const chats = SUPPORT_STORES.flatMap((store) => {
       const raw = readSupportChatsFor(store.key);
@@ -1912,25 +1721,28 @@ function registerAdminDashboard(app, deps) {
       }));
     });
 
-    const view = buildSupportView(chats, {
+    return buildSupportView(chats, {
       tab: String(req.query.tab || "attention"),
       query: String(req.query.q || ""),
       page: Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1),
     });
-    res.type("html").send(renderSupportListPage(view, deps.timezone));
+  }
+
+  app.get("/admin/support", requireAuth, (req, res) => {
+    res.type("html").send(renderSupportListPage(buildSupportViewFromRequest(req), deps.timezone));
   });
 
-  function renderSupportChatView(res, chatId, flash) {
+  function renderSupportChatView(res, chatId, flash, req = { query: {} }) {
     // The second support bot writes to its own store, and the panel used to look
     // only in the first one, so those conversations 404'd.
     const found = findSupportChatAnywhere(chatId);
     const state = found?.state;
     if (!state) {
-      res.status(404).type("html").send(`<!doctype html><html lang="ru"><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:24px"><p>Диалог не найден.</p><p><a href="/admin/support" style="color:#93c5fd">← К списку</a></p></body></html>`);
+      res.status(404).type("html").send(renderAdminNotFound("Диалог не найден."));
       return false;
     }
     res.type("html").send(
-      renderSupportChatPage(chatId, state, deps.timezone, {
+      renderSupportChatPage(buildSupportViewFromRequest(req), chatId, state, deps.timezone, {
         flash,
         storeLabel: found.store.label,
         canReply: found.store.canReply,
@@ -1947,21 +1759,21 @@ function registerAdminDashboard(app, deps) {
         : req.query.closed === "1"
             ? { type: "ok", text: "Диалог завершён. Пользователю отправлено сообщение с /start." }
             : null;
-    renderSupportChatView(res, chatId, flash);
+    renderSupportChatView(res, chatId, flash, req);
   });
 
   app.post("/admin/support/:chatId/reply", requireAuth, async (req, res) => {
     const chatId = String(req.params.chatId || "").trim();
     const text = String(req.body?.text || "").trim();
     if (!text) {
-      renderSupportChatView(res, chatId, { type: "error", text: "Введите текст сообщения." });
+      renderSupportChatView(res, chatId, { type: "error", text: "Введите текст сообщения." }, req);
       return;
     }
     if (!deps.supportBotToken) {
       renderSupportChatView(res, chatId, {
         type: "error",
         text: "SUPPORT_BOT_TOKEN не задан в .env — отправка в Telegram недоступна.",
-      });
+      }, req);
       return;
     }
 
@@ -1980,7 +1792,7 @@ function registerAdminDashboard(app, deps) {
       renderSupportChatView(res, chatId, {
         type: "error",
         text: `Не удалось отправить: ${error.message}`,
-      });
+      }, req);
     }
   });
 
@@ -1990,7 +1802,7 @@ function registerAdminDashboard(app, deps) {
       renderSupportChatView(res, chatId, {
         type: "error",
         text: "SUPPORT_BOT_TOKEN не задан в .env — завершение диалога недоступно.",
-      });
+      }, req);
       return;
     }
 
@@ -2004,7 +1816,7 @@ function registerAdminDashboard(app, deps) {
           error.code === "not_found"
             ? "Диалог не найден."
             : `Не удалось завершить: ${error.message}`,
-      });
+      }, req);
     }
   });
 }
