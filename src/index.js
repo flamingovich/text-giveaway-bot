@@ -22,6 +22,13 @@ const {
 const { applyNoLinkPreview } = require("./telegram-no-preview");
 const { createSubscriptionCache } = require("./subscription-cache");
 const { resolveFileLink, getFileLinkCacheStats } = require("./file-link-cache");
+const {
+  isIgnorableTelegramEditError,
+  isPermanentTelegramEditError,
+  isMissingTelegramMessageError,
+  isWrongTelegramMessageKindError,
+  pickReportableEditError,
+} = require("./telegram-edit-errors");
 const { applyTelegramApiTimeout } = require("./telegram-timeout");
 const { tryRecordDrawReferral, computeJoinWinChance } = require("./join-referrals");
 const {
@@ -933,6 +940,13 @@ function getDrawParticipantCount(draw) {
 // just to be told the content was already identical - which is where the
 // "message is not modified" noise in the error log came from. Remembering what
 // we last pushed lets an unchanged post be skipped without asking Telegram.
+function rememberDrawPostFingerprint(draw) {
+  const fingerprint = getDrawPostFingerprint(draw);
+  if (fingerprint) {
+    draw.postSyncFingerprint = fingerprint;
+  }
+}
+
 function getDrawPostFingerprint(draw) {
   try {
     const includeWinners = draw.status === DRAW_STATUS.FINISHED;
@@ -3499,46 +3513,6 @@ function recordDrawCreate(userId, fingerprint) {
   lastDrawCreateByUser.set(Number(userId), { fingerprint, at: Date.now() });
 }
 
-function isIgnorableTelegramEditError(error) {
-  const message = String(error?.message || error || "");
-  return (
-    message.includes("message is not modified") ||
-    message.includes("Too Many Requests") ||
-    message.includes("telegram_edit_timeout")
-  );
-}
-
-// Some edit failures will never succeed no matter how often they are repeated:
-// the post was deleted, it is too old to edit, or the code is editing a photo
-// caption as if it were text. Retrying those every thirty seconds burns the
-// Telegram quota that the posts which CAN be edited then get 429'd on - one
-// draw alone produced 1 328 of these lines.
-function isPermanentTelegramEditError(error) {
-  const message = String(error?.message || error || "");
-  return (
-    message.includes("message to edit not found") ||
-    message.includes("message can't be edited") ||
-    message.includes("there is no text in the message to edit") ||
-    message.includes("MESSAGE_ID_INVALID") ||
-    message.includes("chat not found") ||
-    message.includes("bot was blocked")
-  );
-}
-
-function isMissingTelegramMessageError(error) {
-  const message = String(error?.message || error || "");
-  return message.includes("message to edit not found") || message.includes("message identifier is not specified");
-}
-
-function isWrongTelegramMessageKindError(error) {
-  const message = String(error?.message || error || "");
-  return (
-    message.includes("there is no caption") ||
-    message.includes("there is no text in the message") ||
-    message.includes("message can't be edited")
-  );
-}
-
 const TELEGRAM_EDIT_TIMEOUT_MS = Number(process.env.TELEGRAM_EDIT_TIMEOUT_MS || 8000);
 
 async function withTelegramEditTimeout(task, ms = TELEGRAM_EDIT_TIMEOUT_MS) {
@@ -3617,6 +3591,11 @@ async function editDrawPostAsText(draw, includeWinners, keyboard) {
 
 function markDrawPostAfterSuccessfulEdit(draw, includeWinners) {
   markDrawPostParticipantCount(draw);
+  // The startup sync skips a post whose fingerprint matches what we last sent.
+  // Without refreshing it here that record went stale the moment a join changed
+  // the counter, so the next boot edited every post again only to be told the
+  // content already matched.
+  rememberDrawPostFingerprint(draw);
   if (!includeWinners && draw.status === DRAW_STATUS.ACTIVE) {
     markDrawCountdownCache(draw, getDrawCountdownDisplayLabel(draw));
   }
@@ -3639,14 +3618,19 @@ async function updateDrawPost(draw, includeWinners) {
     ? [editDrawPostAsCaption, editDrawPostAsText]
     : [editDrawPostAsText, editDrawPostAsCaption];
 
-  let lastError = null;
+  // Only one of the two attempts can ever be right for a given message, so the
+  // other one's complaint is expected noise. Both are kept and weighed together
+  // at the end: a passing failure on the right method must not be reported as
+  // the wrong method's "this post has no text", which reads as final and
+  // freezes the post for the rest of the draw.
+  const errors = [];
   for (let index = 0; index < attempts.length; index += 1) {
     try {
       await attempts[index](draw, includeWinners, keyboard);
       markDrawPostAfterSuccessfulEdit(draw, includeWinners);
       return;
     } catch (error) {
-      lastError = error;
+      errors.push(error);
       if (String(error?.message || "").includes("message is not modified")) {
         markDrawPostAfterSuccessfulEdit(draw, includeWinners);
         return;
@@ -3659,13 +3643,14 @@ async function updateDrawPost(draw, includeWinners) {
         String(error?.message || "").includes("Too Many Requests") ||
         String(error?.message || "").includes("telegram_edit_timeout");
       if (!tryOtherKind || index === attempts.length - 1) {
-        throw error;
+        throw pickReportableEditError(errors) || error;
       }
     }
   }
 
-  if (lastError) {
-    throw lastError;
+  const reportable = pickReportableEditError(errors);
+  if (reportable) {
+    throw reportable;
   }
 }
 
@@ -4486,6 +4471,7 @@ async function refreshDrawPostKeyboard(draw) {
     bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup),
   );
   markDrawPostParticipantCount(draw, count);
+  rememberDrawPostFingerprint(draw);
 }
 
 async function syncActiveDrawCountdownPosts(data) {
