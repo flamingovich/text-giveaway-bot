@@ -193,6 +193,42 @@ function buildDashboardStats(deps, { ownerFilter = "", period = "30" } = {}) {
     return total;
   };
 
+  // The series is trimmed to the window, so it cannot answer "compared with
+  // before". Deltas are measured against the equally long window immediately
+  // preceding this one, over the full history.
+  function sumBetween(byDay, fromDay, toDay) {
+    let total = 0;
+    for (const [day, count] of byDay.entries()) {
+      if (day && day >= fromDay && day < toDay) {
+        total += count;
+      }
+    }
+    return total;
+  }
+
+  function deltaFor(byDay) {
+    if (!firstLabel || !resolved.days) {
+      return null;
+    }
+    const windowStart = DateTime.fromISO(firstLabel, { zone: timezone });
+    if (!windowStart.isValid) {
+      return null;
+    }
+    const previousStart = windowStart.minus({ days: resolved.days }).toFormat("yyyy-MM-dd");
+    const current = sumBetween(byDay, firstLabel, "9999-99-99");
+    const previous = sumBetween(byDay, previousStart, firstLabel);
+    if (previous <= 0) {
+      return null;
+    }
+    const change = Math.round(((current - previous) / previous) * 100);
+    return {
+      current,
+      previous,
+      percent: change,
+      direction: change > 0 ? "up" : change < 0 ? "down" : "flat",
+    };
+  }
+
   // --- breakdowns ----------------------------------------------------------
   const statusCounts = { draft: 0, scheduled: 0, active: 0, finished: 0 };
   const byBrand = new Map();
@@ -233,6 +269,12 @@ function buildDashboardStats(deps, { ownerFilter = "", period = "30" } = {}) {
       withWallet,
       active: statusCounts.active || 0,
       finished: statusCounts.finished || 0,
+    },
+    deltas: {
+      users: deltaFor(newUsersByDay),
+      participants: deltaFor(newParticipantsByDay),
+      draws: deltaFor(drawsByDay),
+      joins: deltaFor(joinsByDay),
     },
     series: {
       labels,

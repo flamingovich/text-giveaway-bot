@@ -185,3 +185,40 @@ test("the growth line ends on the headline number, not below it", () => {
     "a curve that ends below the counter contradicts it",
   );
 });
+
+test("a delta compares the window with the one before it", () => {
+  const now = require("luxon").DateTime.now().setZone(TZ);
+  const inWindow = now.minus({ days: 2 }).toISO();
+  const beforeWindow = now.minus({ days: 40 }).toISO();
+
+  const stats = buildDashboardStats(
+    deps({
+      profiles: {
+        users: {
+          a: { meta: { updatedAt: inWindow } },
+          b: { meta: { updatedAt: inWindow } },
+          c: { meta: { updatedAt: beforeWindow } },
+        },
+      },
+    }),
+    { period: "30" },
+  );
+
+  assert.equal(stats.deltas.users.current, 2);
+  assert.equal(stats.deltas.users.previous, 1);
+  assert.equal(stats.deltas.users.percent, 100);
+  assert.equal(stats.deltas.users.direction, "up");
+});
+
+test("no earlier window means no delta rather than a made up one", () => {
+  const stats = buildDashboardStats(
+    deps({
+      profiles: {
+        users: { a: { meta: { updatedAt: require("luxon").DateTime.now().setZone(TZ).toISO() } } },
+      },
+    }),
+    { period: "30" },
+  );
+
+  assert.equal(stats.deltas.users, null);
+});

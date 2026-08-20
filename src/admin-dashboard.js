@@ -12,6 +12,7 @@ const { buildSupportView } = require("./admin-support-view");
 const { resolveProjectId, resolveUserProjects } = require("./project-identity");
 const { buildDashboardStats } = require("./admin-dashboard-stats");
 const UI = require("./admin-ui");
+const F = require("./admin-format");
 const {
   readSupportChats,
   updateSupportChat,
@@ -211,11 +212,12 @@ function missingProject(projectId) {
   return { id: projectId, name: "Проект удалён", ownerId: null, missing: true };
 }
 
-function emptyProjectRow(userId, userLabel, userName = userLabel) {
+function emptyProjectRow(userId, userLabel, userName = userLabel, identity = null) {
   return {
     userId,
     userLabel,
     userName,
+    identity: identity || F.identityOf(userId, {}),
     projectId: "",
     projectName: "Без проекта",
     brandKey: "",
@@ -248,7 +250,14 @@ function buildAdminUserProjectRows(deps) {
     // the whole row, hiding 288 users on production. Keep the person and mark
     // the project instead.
     if (projectEntries.length === 0) {
-      rows.push(emptyProjectRow(userId, userLabel, displayNameForUser(userId, profiles)));
+      rows.push(
+        emptyProjectRow(
+          userId,
+          userLabel,
+          displayNameForUser(userId, profiles),
+          F.identityOf(userId, userNode.meta || {}),
+        ),
+      );
     }
 
     for (const [projectId, projectData] of projectEntries) {
@@ -268,15 +277,16 @@ function buildAdminUserProjectRows(deps) {
         userId,
         userLabel,
         userName: displayNameForUser(userId, profiles),
+        identity: F.identityOf(userId, profiles.users?.[String(userId)]?.meta || {}),
         projectId,
         projectName: project.name,
         brandKey: normalizeProjectBrandName(project.name),
         refStatus,
         referralOwnerId: referralOwnerId ? String(referralOwnerId) : "",
-        referralOwnerLabel: referralOwnerId ? labelForUser(String(referralOwnerId), profiles) : "—",
+        referralOwnerLabel: referralOwnerId ? displayNameForUser(String(referralOwnerId), profiles) : "—",
         projectOwnerId: project.ownerId != null ? String(project.ownerId) : "",
         projectOwnerLabel:
-          project.ownerId != null ? labelForUser(String(project.ownerId), profiles) : "—",
+          project.ownerId != null ? displayNameForUser(String(project.ownerId), profiles) : "—",
         hasWallet: Boolean(projectData.trc20Address),
       });
     }
@@ -322,7 +332,12 @@ function addActivityOnlyRows(deps, projectRows, activityIndex) {
     // Mega giveaways have no project of their own.
     if (!projectId) {
       projectRows.push(
-        emptyProjectRow(userId, labelForUser(userId, profiles), displayNameForUser(userId, profiles)),
+        emptyProjectRow(
+          userId,
+          labelForUser(userId, profiles),
+          displayNameForUser(userId, profiles),
+          F.identityOf(userId, profiles.users?.[String(userId)]?.meta || {}),
+        ),
       );
       continue;
     }
@@ -331,6 +346,7 @@ function addActivityOnlyRows(deps, projectRows, activityIndex) {
       userId,
       userLabel: labelForUser(userId, profiles),
       userName: displayNameForUser(userId, profiles),
+      identity: F.identityOf(userId, profiles.users?.[String(userId)]?.meta || {}),
       projectId,
       projectName: project.name,
       brandKey: normalizeProjectBrandName(project.name),
@@ -363,6 +379,7 @@ function buildAdminUserRows(deps, activityIndex, prebuiltProjectRows = null) {
         userId: row.userId,
         userLabel: row.userLabel,
         userName: row.userName || row.userLabel,
+        identity: row.identity,
         projects: [],
         participations: 0,
         wins: 0,
@@ -416,6 +433,7 @@ function buildAdminUserRows(deps, activityIndex, prebuiltProjectRows = null) {
       userId: row.userId,
       userLabel: row.userLabel,
       userName: row.userName,
+      identity: row.identity,
       projects: row.projects,
       participations: row.participations,
       wins: row.wins,
@@ -603,7 +621,7 @@ function renderUserProjectsCell(projects) {
     ),
   ];
   const ownerLine = owners.length
-    ? `<div class="dim ellip" style="margin-top:3px;font-size:11.5px" title="${escapeHtml(owners.join(", "))}">реф: ${escapeHtml(owners[0])}${owners.length > 1 ? ` +${owners.length - 1}` : ""}</div>`
+    ? `<div class="dim ellip" style="margin-top:3px;font-size:11.5px" title="${escapeHtml(owners.join(", "))}">привёл: ${escapeHtml(owners[0])}${owners.length > 1 ? ` и ещё ${owners.length - 1}` : ""}</div>`
     : "";
 
   if (!chips && !orphanChip) {
@@ -738,10 +756,7 @@ function renderUsersPage(deps, viewModel) {
   const tableRows = rows
     .map(
       (row) => `<tr>
-        <td>
-          <a class="link" href="/admin/users/${encodeURIComponent(row.userId)}">${escapeHtml(row.userName || row.userLabel)}</a>
-          <div class="mono">${escapeHtml(row.userId)}</div>
-        </td>
+        <td>${UI.person(row.identity, { href: `/admin/users/${encodeURIComponent(row.userId)}` })}</td>
         <td>${renderUserProjectsCell(row.projects)}</td>
         <td>${renderAntiFraudCell(row)}</td>
         <td>${row.hasWallet ? '<span class="chip chip-ok">есть</span>' : '<span class="chip chip-muted">нет</span>'}</td>
@@ -837,15 +852,15 @@ function renderUserCardPage(deps, card) {
     badges.push('<span class="chip chip-ok">без отметок</span>');
   }
 
-  const initial = (card.fullName || card.label).replace(/^@/, "").charAt(0).toUpperCase() || "?";
+  const who = F.identityOf(card.userId, card.meta || {});
 
   const identity = `<div class="profile">
-    <div class="avatar">${escapeHtml(initial)}</div>
+    ${UI.avatar(who, true)}
     <div class="profile-main">
-      <div class="profile-name">${escapeHtml(card.label)}</div>
+      <div class="profile-name">${escapeHtml(who.title)}</div>
       <div class="profile-meta">
-        <span class="mono">ID ${escapeHtml(card.userId)}</span>
-        ${card.fullName ? `<span class="dim">${escapeHtml(card.fullName)}</span>` : ""}
+        ${who.handle ? `<span>${escapeHtml(who.handle)}</span>` : ""}
+        <button class="idcopy" type="button" data-id="${escapeHtml(card.userId)}" title="Скопировать Telegram ID">ID</button>
       </div>
       <div class="chips" style="margin-top:7px">${badges.join("")}</div>
     </div>
@@ -871,16 +886,16 @@ function renderUserCardPage(deps, card) {
       const detail = draw.outcome
         ? [
             draw.outcome.payoutPrize ? `к выплате ${escapeHtml(draw.outcome.payoutPrize)}` : "",
-            draw.outcome.paidAt ? `выплачено ${escapeHtml(formatCardDate(draw.outcome.paidAt, tz))}` : "",
+            draw.outcome.paidAt ? `выплачено ${escapeHtml(F.formatRelative(draw.outcome.paidAt, tz))}` : "",
             draw.outcome.reason ? escapeHtml(draw.outcome.reason) : "",
           ]
             .filter(Boolean)
             .join(" · ")
         : "";
       return `<tr>
-        <td class="nowrap dim">${escapeHtml(formatCardDate(draw.at, tz))}</td>
-        <td class="strong">${escapeHtml(draw.prize)}<div class="mono">${escapeHtml(draw.id)}</div></td>
-        <td>${escapeHtml(draw.projectName)}</td>
+        <td class="nowrap dim" title="${escapeHtml(F.formatDateTime(draw.at, tz))}">${escapeHtml(F.formatRelative(draw.at, tz))}</td>
+        <td class="strong">${escapeHtml(draw.prize)}</td>
+        <td>${draw.projectName === "Без проекта" ? '<span class="dim">—</span>' : escapeHtml(draw.projectName)}</td>
         <td>${outcome}${detail ? `<div class="dim" style="margin-top:3px;font-size:11.5px">${detail}</div>` : ""}</td>
         <td class="mono">${draw.outcome?.wallet ? escapeHtml(draw.outcome.wallet) : "—"}</td>
       </tr>`;
@@ -891,11 +906,11 @@ function renderUserCardPage(deps, card) {
     .map(
       (project) => `<tr>
         <td class="strong">${escapeHtml(project.projectName)}</td>
-        <td class="dim">${project.ownerId ? escapeHtml(labelForUser(String(project.ownerId), allProfiles)) : "—"}</td>
+        <td class="dim">${project.ownerId ? escapeHtml(displayNameForUser(String(project.ownerId), allProfiles)) : "—"}</td>
         <td>${renderRefStatusBadge(project.refStatus)}</td>
         <td>${escapeHtml(project.nickname || project.accountId || "—")}</td>
         <td class="mono">${escapeHtml(project.wallet || "—")}</td>
-        <td class="nowrap dim">${escapeHtml(formatCardDate(project.updatedAt, tz))}</td>
+        <td class="nowrap dim">${escapeHtml(F.formatRelative(project.updatedAt, tz))}</td>
       </tr>`,
     )
     .join("");
@@ -917,7 +932,7 @@ function renderUserCardPage(deps, card) {
         <td><a class="link" href="/admin/support/${encodeURIComponent(chat.chatId)}">${escapeHtml(chat.botLabel)}</a></td>
         <td>${chat.sessionClosed ? '<span class="chip chip-muted">завершён</span>' : '<span class="chip chip-ok">активен</span>'}</td>
         <td class="num">${chat.messageCount}</td>
-        <td class="nowrap dim">${escapeHtml(formatCardDate(chat.lastMessageAt, tz))}</td>
+        <td class="nowrap dim">${escapeHtml(F.formatRelative(chat.lastMessageAt, tz))}</td>
         <td class="ellip dim">${escapeHtml(chat.preview || "")}</td>
       </tr>`,
     )
@@ -974,19 +989,21 @@ function renderUserCardPage(deps, card) {
     </div>`;
 
   return UI.renderShell({
-    title: card.label,
-    subtitle: `${card.totals.participations} участий · ${card.totals.wins} побед`,
-    pageTitle: card.label,
+    title: who.title,
+    subtitle: `${card.totals.participations} ${F.plural(card.totals.participations, "участие", "участия", "участий")} · ${card.totals.wins} ${F.plural(card.totals.wins, "победа", "победы", "побед")}`,
+    pageTitle: who.title,
     active: "users",
     tools: `<a class="btn" href="/admin/users">← К списку</a>`,
     body,
     styles: `
       .profile { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
-      .avatar {
-        width: 46px; height: 46px; border-radius: 12px; flex: none;
-        display: flex; align-items: center; justify-content: center;
-        background: var(--accent-soft); color: #b9d2ff; font-size: 19px; font-weight: 650;
+      /* The Telegram id is needed maybe once a week, to paste somewhere. It is
+         a button you can copy, not a number printed under every name. */
+      .idcopy {
+        background: transparent; border: 1px solid var(--line); color: var(--text-faint);
+        border-radius: 6px; padding: 0 6px; font: inherit; font-size: 11px; cursor: pointer;
       }
+      .idcopy:hover { color: var(--text); border-color: #2c3950; }
       .profile-main { flex: 1; min-width: 220px; }
       .profile-name { font-size: 17px; font-weight: 650; }
       .profile-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px; font-size: 12px; }
@@ -995,6 +1012,20 @@ function renderUserCardPage(deps, card) {
       .fraud-details { margin: 0; padding-left: 16px; }
       .fraud-details li { margin-bottom: 7px; }
     `,
+    scripts: `<script>
+      document.querySelectorAll(".idcopy").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const was = btn.textContent;
+          try {
+            await navigator.clipboard.writeText(btn.dataset.id);
+            btn.textContent = "скопирован";
+          } catch {
+            btn.textContent = btn.dataset.id;
+          }
+          setTimeout(() => { btn.textContent = was; }, 1400);
+        });
+      });
+    </script>`,
   });
 }
 
@@ -1063,7 +1094,11 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     })),
   );
 
-  const ownerSelect = `<form method="get" action="/admin/dashboard" class="field">
+  const ownerName = selectedOwner
+    ? (organizers.find((o) => o.id === selectedOwner)?.label || selectedOwner)
+    : "";
+
+  const ownerSelect = `<form method="get" action="/admin/dashboard">
     <input type="hidden" name="period" value="${escapeHtml(stats.period.id)}" />
     <select name="ownerId" onchange="this.form.submit()">
       <option value="">Все организаторы</option>
@@ -1076,116 +1111,153 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
     </select>
   </form>`;
 
+  // Growth inside the window, compared with the window before it. A number with
+  // nothing to compare against is just a number.
+  const sumTail = (arr, n) => arr.slice(-n).reduce((a, b) => a + b, 0);
+  const sumPrev = (arr, n) => arr.slice(-2 * n, -n).reduce((a, b) => a + b, 0);
+  const span = Math.max(1, Math.min(stats.series.labels.length, stats.period.days || stats.series.labels.length));
+
+  const metrics = [
+    {
+      id: "users",
+      label: "Пользователи",
+      total: stats.totals.users,
+      series: stats.series.newUsers,
+      cumulative: stats.series.totalUsers,
+      note: "всего знакомы боту",
+    },
+    {
+      id: "participants",
+      label: "Участники",
+      total: stats.totals.participants,
+      series: stats.series.newParticipants,
+      cumulative: stats.series.totalParticipants,
+      note: "хотя бы один розыгрыш",
+    },
+    {
+      id: "draws",
+      label: "Розыгрыши",
+      total: stats.totals.draws,
+      series: stats.series.draws,
+      cumulative: null,
+      note: "создано за всё время",
+    },
+    {
+      id: "joins",
+      label: "Вступления",
+      total: stats.series.joins.reduce((a, b) => a + b, 0),
+      series: stats.series.joins,
+      cumulative: null,
+      note: `за ${stats.period.label.toLowerCase()}`,
+    },
+  ].map((metric) => {
+    const measured = stats.deltas?.[metric.id] || null;
+    return {
+      ...metric,
+      current: measured ? measured.current : sumTail(metric.series, span),
+      delta: measured ? { percent: measured.percent, direction: measured.direction } : null,
+    };
+  });
+
+  const lead = metrics[0];
+  const tiles = metrics
+    .map(
+      (metric, index) => `<button class="tile${index === 0 ? " is-active" : ""}" data-metric="${metric.id}" type="button">
+        <span class="tile-label">${escapeHtml(metric.label)}</span>
+        <span class="tile-value">${F.formatCount(metric.total)}</span>
+        <span class="tile-note">${escapeHtml(metric.note)}</span>
+      </button>`,
+    )
+    .join("");
+
   const share = stats.totals.users
     ? Math.round((stats.totals.participants / stats.totals.users) * 100)
     : 0;
 
-  const heroes = [
-    UI.kpi({
-      label: "Пользователей в боте",
-      value: stats.totals.users.toLocaleString("ru-RU"),
-      note: "всего известных боту",
-      lead: true,
-    }),
-    UI.kpi({
-      label: "Участников",
-      value: stats.totals.participants.toLocaleString("ru-RU"),
-      note: `хотя бы один розыгрыш · <b class="strong">${share}%</b> от всех`,
-      lead: true,
-      share,
-    }),
-    UI.kpi({
-      label: "Розыгрышей",
-      value: stats.totals.draws.toLocaleString("ru-RU"),
-      note: `активных ${stats.totals.active} · завершённых ${stats.totals.finished}`,
-      lead: true,
-    }),
-  ].join("");
+  const statusBars = UI.bars(
+    [
+      { label: "Завершённые", value: stats.breakdowns.status.finished || 0, color: "#6fdda0" },
+      { label: "Активные", value: stats.breakdowns.status.active || 0, color: "#4f8cff" },
+      { label: "Запланированные", value: stats.breakdowns.status.scheduled || 0, color: "#edc36f" },
+    ].filter((item) => item.value > 0),
+  );
 
-  const secondary = [
-    UI.kpi({ label: "Победителей", value: stats.totals.winners, note: "уникальных людей" }),
-    UI.kpi({ label: "Побед всего", value: stats.totals.wins, note: "с повторными" }),
-    UI.kpi({ label: "С кошельком", value: stats.totals.withWallet, note: "указан TRC-20" }),
-    UI.kpi({
-      label: "Вступлений",
-      value: stats.series.joins.reduce((sum, n) => sum + n, 0),
-      note: `за ${stats.period.label.toLowerCase()}`,
-    }),
-  ].join("");
+  const brandBars = UI.bars(
+    stats.breakdowns.brands.slice(0, 6).map(([label, value]) => ({ label, value })),
+  );
 
-  const chart = (id, title, subtitle) =>
-    UI.card({
-      title,
-      subtitle,
-      body: `<div class="chart"><canvas id="${id}"></canvas></div>`,
-      tight: true,
-    });
+  const refTotal =
+    stats.breakdowns.referrals.refs +
+    stats.breakdowns.referrals.nonRefs +
+    stats.breakdowns.referrals.unknown;
+  const refBars = UI.bars([
+    { label: "Рефералы", value: stats.breakdowns.referrals.refs, color: "#6fdda0" },
+    { label: "Не рефералы", value: stats.breakdowns.referrals.nonRefs, color: "#edc36f" },
+    { label: "Не проходили проверку", value: stats.breakdowns.referrals.unknown, color: "#2c3950" },
+  ].map((item) => ({
+    ...item,
+    display: refTotal ? `${F.formatCount(item.value)} · ${Math.round((item.value / refTotal) * 100)}%` : item.value,
+  })));
 
-  const brandRows = stats.breakdowns.brands
-    .map(
-      ([name, count]) =>
-        `<tr><td class="strong">${escapeHtml(name)}</td><td class="num">${count}</td></tr>`,
-    )
-    .join("");
-
-  const orgRows = stats.organizerRows
+  const organizerRows = stats.organizerRows
     .map((row) => {
-      const label = labelForUser(row.id, userProfiles);
+      const identity = F.identityOf(row.id, userProfiles.users?.[String(row.id)]?.meta || {});
       return `<tr>
-        <td><a class="link" href="${link({ ownerId: row.id })}">${escapeHtml(label)}</a></td>
-        <td class="num">${row.draws}</td>
-        <td class="num">${row.referrals}</td>
+        <td>${UI.person(identity, { href: link({ ownerId: row.id }) })}</td>
+        <td class="num strong">${F.formatCount(row.draws)}</td>
+        <td class="num">${F.formatCount(row.referrals)}</td>
       </tr>`;
     })
     .join("");
 
   const payload = JSON.stringify({
-    labels: stats.series.labels.map((day) => day.slice(5)),
-    newUsers: stats.series.newUsers,
-    totalUsers: stats.series.totalUsers,
-    newParticipants: stats.series.newParticipants,
-    totalParticipants: stats.series.totalParticipants,
-    joins: stats.series.joins,
-    draws: stats.series.draws,
-    status: stats.breakdowns.status,
-    prizeTypes: stats.breakdowns.prizeTypes,
-    referrals: stats.breakdowns.referrals,
+    labels: stats.series.labels.map((day) => {
+      const [, m, d] = day.split("-");
+      return `${d}.${m}`;
+    }),
+    metrics: Object.fromEntries(
+      metrics.map((metric) => [
+        metric.id,
+        { label: metric.label, bars: metric.series, line: metric.cumulative },
+      ]),
+    ),
   });
 
   const body = `
-    <div class="kpis kpis-3">${heroes}</div>
-    <div class="kpis kpis-4">${secondary}</div>
+    ${UI.card({
+      body: `
+        <div class="hero">
+          <div class="hero-metric">
+            <div class="kpi-label">${escapeHtml(lead.label)} · ${escapeHtml(stats.period.label.toLowerCase())}</div>
+            <div class="metric-row" style="margin-top:6px">
+              <span class="metric-value" id="heroValue">${F.formatCount(lead.current)}</span>
+              <span id="heroDelta">${UI.delta(lead.delta)}</span>
+            </div>
+            <div class="kpi-note" id="heroNote">новых за период · всего ${F.formatCount(lead.total)}</div>
+          </div>
+          <div class="tiles">${tiles}</div>
+        </div>
+        <div class="chart"><canvas id="mainChart"></canvas></div>`,
+    })}
 
-    <div class="grid grid-2" style="margin-bottom:12px">
-      ${chart("usersChart", "Рост пользователей", "новые за день и общее число")}
-      ${chart("participantsChart", "Рост участников", "первое участие и общее число")}
-    </div>
-
-    <div class="grid grid-2" style="margin-bottom:12px">
-      ${chart("drawsChart", "Розыгрышей создано", "по дням")}
-      ${chart("joinsChart", "Вступлений в розыгрыши", "по дням, с повторными")}
-    </div>
-
-    <div class="grid grid-3" style="margin-bottom:12px">
-      ${chart("statusChart", "Статусы розыгрышей", "")}
-      ${chart("prizeChart", "Типы призов", "")}
-      ${chart("refChart", "Реф-статус", "")}
-    </div>
-
-    <div class="grid grid-2">
+    <div class="grid grid-3" style="margin-top:12px">
       ${UI.card({
-        title: "Розыгрыши по брендам",
-        flush: true,
-        body: brandRows
-          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Бренд</th><th class="num">Розыгрышей</th></tr></thead><tbody>${brandRows}</tbody></table></div>`
-          : UI.blank("Нет розыгрышей"),
+        title: "Кто эти люди",
+        subtitle: `${share}% участвовали хотя бы раз`,
+        body: refBars,
       })}
+      ${UI.card({ title: "Розыгрыши", subtitle: "по статусу", body: statusBars })}
+      ${UI.card({ title: "Бренды", subtitle: "розыгрышей проведено", body: brandBars })}
+    </div>
+
+    <div style="margin-top:12px">
       ${UI.card({
         title: "Организаторы",
+        subtitle: "нажмите, чтобы отфильтровать всю страницу",
         flush: true,
-        body: orgRows
-          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Организатор</th><th class="num">Розыгрышей</th><th class="num">Рефералов</th></tr></thead><tbody>${orgRows}</tbody></table></div>`
-          : UI.blank("Нет организаторов"),
+        body: organizerRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Организатор</th><th class="num">Розыгрышей</th><th class="num">Рефералов</th></tr></thead><tbody>${organizerRows}</tbody></table></div>`
+          : UI.blank("Пока никто не проводил розыгрыши"),
       })}
     </div>`;
 
@@ -1193,94 +1265,112 @@ function renderDashboardPage(deps, stats, organizers, selectedOwner, userProfile
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script>
     const D = ${payload};
-    const GRID = "rgba(148,163,184,.10)";
+    const META = ${JSON.stringify(
+      Object.fromEntries(
+        metrics.map((m) => [
+          m.id,
+          { value: F.formatCount(m.current), delta: UI.delta(m.delta), total: F.formatCount(m.total) },
+        ]),
+      ),
+    )};
     Chart.defaults.color = "#6b7789";
     Chart.defaults.font.size = 11;
     Chart.defaults.font.family = "ui-sans-serif, -apple-system, Segoe UI, Roboto, sans-serif";
     Chart.defaults.plugins.tooltip.backgroundColor = "#161d2b";
     Chart.defaults.plugins.tooltip.borderColor = "#1f2836";
     Chart.defaults.plugins.tooltip.borderWidth = 1;
-    Chart.defaults.plugins.tooltip.padding = 9;
+    Chart.defaults.plugins.tooltip.padding = 10;
+    Chart.defaults.plugins.tooltip.displayColors = false;
 
-    const growth = (id, bars, line, barLabel, lineLabel) =>
-      new Chart(document.getElementById(id), {
-        data: {
-          labels: D.labels,
-          datasets: [
-            { type: "bar", label: barLabel, data: bars, yAxisID: "y",
-              backgroundColor: "rgba(79,140,255,.38)", hoverBackgroundColor: "rgba(79,140,255,.7)",
-              borderRadius: 3, borderSkipped: false, maxBarThickness: 22 },
-            { type: "line", label: lineLabel, data: line, yAxisID: "y1",
-              borderColor: "#6fdda0", backgroundColor: "rgba(111,221,160,.10)",
-              borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: .35, fill: true },
-          ],
+    const ctx = document.getElementById("mainChart");
+    const gradient = ctx.getContext("2d").createLinearGradient(0, 0, 0, 260);
+    gradient.addColorStop(0, "rgba(79,140,255,.34)");
+    gradient.addColorStop(1, "rgba(79,140,255,0)");
+
+    function datasetsFor(id) {
+      const m = D.metrics[id];
+      const sets = [{
+        type: "line", label: m.label, data: m.bars, yAxisID: "y",
+        borderColor: "#4f8cff", backgroundColor: gradient, borderWidth: 2,
+        pointRadius: 0, pointHoverRadius: 4, tension: .35, fill: true,
+      }];
+      if (m.line) {
+        sets.push({
+          type: "line", label: "Всего", data: m.line, yAxisID: "y1",
+          borderColor: "#6fdda0", borderWidth: 1.5, borderDash: [4, 4],
+          pointRadius: 0, pointHoverRadius: 4, tension: .35, fill: false,
+        });
+      }
+      return sets;
+    }
+
+    const chart = new Chart(ctx, {
+      data: { labels: D.labels, datasets: datasetsFor("users") },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { display: false }, border: { color: "#1f2836" }, ticks: { maxRotation: 0, autoSkipPadding: 24 } },
+          y: { beginAtZero: true, grid: { color: "rgba(148,163,184,.08)" }, border: { display: false } },
+          y1: { position: "right", beginAtZero: true, grid: { display: false }, border: { display: false }, ticks: { color: "#43506a" } },
         },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          interaction: { mode: "index", intersect: false },
-          plugins: { legend: { labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, padding: 14 } } },
-          scales: {
-            x: { grid: { display: false }, border: { color: "#1f2836" }, ticks: { maxRotation: 0, autoSkipPadding: 22 } },
-            y: { beginAtZero: true, grid: { color: GRID }, border: { display: false } },
-            y1: { position: "right", beginAtZero: true, grid: { display: false }, border: { display: false } },
-          },
-        },
+      },
+    });
+
+    document.querySelectorAll(".tile").forEach((tile) => {
+      tile.addEventListener("click", () => {
+        document.querySelectorAll(".tile").forEach((t) => t.classList.remove("is-active"));
+        tile.classList.add("is-active");
+        const id = tile.dataset.metric;
+        chart.data.datasets = datasetsFor(id);
+        chart.options.scales.y1.display = Boolean(D.metrics[id].line);
+        chart.update();
+        document.getElementById("heroValue").textContent = META[id].value;
+        document.getElementById("heroDelta").innerHTML = META[id].delta;
+        document.getElementById("heroNote").textContent =
+          (D.metrics[id].line ? "новых за период · всего " : "за период · всего ") + META[id].total;
+        document.querySelector(".kpi-label").textContent =
+          D.metrics[id].label + " · ${escapeHtml(stats.period.label.toLowerCase())}";
       });
-
-    growth("usersChart", D.newUsers, D.totalUsers, "Новые", "Всего");
-    growth("participantsChart", D.newParticipants, D.totalParticipants, "Новые", "Всего");
-
-    const bars = (id, data, label, color) =>
-      new Chart(document.getElementById(id), {
-        type: "bar",
-        data: { labels: D.labels, datasets: [{ label, data, backgroundColor: color, borderRadius: 3, borderSkipped: false, maxBarThickness: 22 }] },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { grid: { display: false }, border: { color: "#1f2836" }, ticks: { maxRotation: 0, autoSkipPadding: 22 } },
-            y: { beginAtZero: true, grid: { color: GRID }, border: { display: false } },
-          },
-        },
-      });
-
-    bars("drawsChart", D.draws, "Розыгрышей", "rgba(237,195,111,.55)");
-    bars("joinsChart", D.joins, "Вступлений", "rgba(79,140,255,.45)");
-
-    const PIE = ["#4f8cff", "#6fdda0", "#edc36f", "#ff8f97", "#b48ef0", "#67d5e0"];
-    const donut = (id, labels, values) =>
-      new Chart(document.getElementById(id), {
-        type: "doughnut",
-        data: { labels, datasets: [{ data: values, backgroundColor: PIE, borderColor: "#111722", borderWidth: 3, hoverOffset: 4 }] },
-        options: {
-          responsive: true, maintainAspectRatio: false, cutout: "64%",
-          plugins: { legend: { position: "bottom", labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, padding: 12 } } },
-        },
-      });
-
-    donut("statusChart", ["Активные", "Завершённые", "Запланированные", "Черновики"],
-      [D.status.active || 0, D.status.finished || 0, D.status.scheduled || 0, D.status.draft || 0]);
-    donut("prizeChart", D.prizeTypes.map(x => x[0]), D.prizeTypes.map(x => x[1]));
-    donut("refChart", ["Рефы", "Не рефы", "Не определено"],
-      [D.referrals.refs, D.referrals.nonRefs, D.referrals.unknown]);
+    });
   </script>`;
 
   return UI.renderShell({
     title: "Статистика",
-    subtitle: `${stats.period.label.toLowerCase()}${selectedOwner ? " · один организатор" : ""}`,
+    subtitle: ownerName ? `организатор: ${ownerName}` : "все организаторы",
     active: "stats",
     tools: `${periodSeg}${ownerSelect}`,
     body,
     scripts,
     styles: `
-      .chart { position: relative; height: 230px; }
-      .grid-3 .chart { height: 200px; }
+      .hero { display: flex; gap: 22px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; margin-bottom: 6px; }
+      .hero-metric { min-width: 210px; }
+      .tiles { display: flex; gap: 8px; flex-wrap: wrap; }
+      .tile {
+        display: flex; flex-direction: column; gap: 2px; align-items: flex-start; cursor: pointer;
+        padding: 9px 13px; border-radius: 10px; min-width: 128px; text-align: left;
+        background: var(--surface-2); border: 1px solid var(--line); color: var(--text-dim); font: inherit;
+      }
+      .tile:hover { border-color: #2c3950; }
+      .tile.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+      .tile-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); }
+      .tile.is-active .tile-label { color: #a9c6ff; }
+      .tile-value { font-size: 18px; font-weight: 650; color: var(--text); }
+      .tile-note { font-size: 11px; color: var(--text-faint); }
+      .chart { position: relative; height: 262px; margin-top: 10px; }
     `,
   });
 }
 
-// Список и переписка на одном экране, как в почтовике: выбор диалога не уводит
-// со страницы, а открывает его рядом со списком.
+function formatCardDate(iso, timezone) {
+  if (!iso) {
+    return "—";
+  }
+  const dt = DateTime.fromISO(iso, { zone: timezone });
+  return dt.isValid ? dt.toFormat("dd.MM.yyyy HH:mm") : String(iso).slice(0, 16);
+}
+
 function supportHref(view, overrides = {}) {
   const query = new URLSearchParams();
   const tab = overrides.tab ?? view.activeTab;
@@ -1318,15 +1408,21 @@ function renderSupportAside(view, selectedId = "") {
         .map((flag) => `<span class="chip chip-${flag.tone === "muted" ? "muted" : flag.tone}">${escapeHtml(flag.label)}</span>`)
         .join("");
       const active = String(chat.chatId) === String(selectedId);
+      const who = F.identityOf(chat.chatId, view.metaById?.[String(chat.chatId)] || {});
       return `<a class="conv${active ? " is-active" : ""}" href="/admin/support/${encodeURIComponent(chat.chatId)}${supportHref(view)}">
-        <div class="conv-top">
-          <span class="conv-name">${escapeHtml(chat.name || chat.label)}</span>
-          <span class="conv-time">${escapeHtml(formatMessageTime(chat.lastMessageAt, view.timezone))}</span>
-        </div>
-        <div class="conv-preview">${escapeHtml(chat.preview || "—")}</div>
-        <div class="conv-foot">
-          <span class="chips">${flags}</span>
-          <span class="dim">${chat.messageCount} сообщ.</span>
+        <div class="conv-row">
+          ${UI.avatar(who)}
+          <div class="conv-body">
+            <div class="conv-top">
+              <span class="conv-name">${escapeHtml(chat.name || who.title)}</span>
+              <span class="conv-time">${escapeHtml(F.formatRelative(chat.lastMessageAt, view.timezone))}</span>
+            </div>
+            <div class="conv-preview">${escapeHtml(chat.preview || "—")}</div>
+            <div class="conv-foot">
+              <span class="chips">${flags}</span>
+              <span class="dim">${chat.messageCount}</span>
+            </div>
+          </div>
         </div>
       </a>`;
     })
@@ -1373,6 +1469,8 @@ function supportStyles() {
     .conv { display: block; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
     .conv:hover { background: var(--surface); }
     .conv.is-active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+    .conv-row { display: flex; gap: 9px; align-items: flex-start; }
+    .conv-body { min-width: 0; flex: 1; }
     .conv-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
     .conv-name { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .conv-time { font-size: 11px; color: var(--text-faint); flex: none; }
@@ -1439,6 +1537,14 @@ function renderSupportChatPage(view, chatId, state, timezone, options = {}) {
   const name = formatSupportChatName(state, chatId);
   const sessionClosed = Boolean(state.sessionClosed);
   const flash = options.flash;
+  const who = F.identityOf(chatId, options.meta || {});
+  const threadMeta = [
+    options.storeLabel || "",
+    sessionClosed ? "диалог завершён" : "диалог активен",
+    `${transcript.length} ${F.plural(transcript.length, "сообщение", "сообщения", "сообщений")}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const messages = transcript
     .map((msg) => {
@@ -1452,7 +1558,7 @@ function renderSupportChatPage(view, chatId, state, timezone, options = {}) {
               : msg.role === "system"
                 ? "system"
                 : "bot";
-      const time = formatMessageTime(msg.at, timezone);
+      const time = F.formatRelative(msg.at, timezone);
       return `<div class="msg msg-${role}">${escapeHtml(msg.content || "")}<div class="msg-meta">${escapeHtml(roleLabel(msg.role, msg.kind))} · ${escapeHtml(time)}</div></div>`;
     })
     .join("");
@@ -1477,16 +1583,8 @@ function renderSupportChatPage(view, chatId, state, timezone, options = {}) {
     ${renderSupportAside(view, chatId)}
     <section class="thread">
       <div class="thread-head">
-        <div>
-          <div class="thread-title">${escapeHtml(name)}</div>
-          <div class="thread-meta">
-            <span class="mono">ID ${escapeHtml(chatId)}</span>
-            <span>${options.storeLabel ? escapeHtml(options.storeLabel) : "—"}</span>
-            <span>${sessionClosed ? "завершён" : "активен"}</span>
-            <span>${transcript.length} сообщений</span>
-          </div>
-        </div>
-        <a class="btn" href="/admin/users/${encodeURIComponent(chatId)}">Карточка пользователя →</a>
+        ${UI.person(who, { href: `/admin/users/${encodeURIComponent(chatId)}`, sub: threadMeta })}
+        <a class="btn" href="/admin/users/${encodeURIComponent(chatId)}">Профиль →</a>
       </div>
       ${flash ? `<div class="flash ${flash.type === "error" ? "flash-error" : "flash-ok"}">${escapeHtml(flash.text)}</div>` : ""}
       <div class="thread-body" id="threadBody">${messages || UI.blank("Переписка пуста")}</div>
@@ -1655,6 +1753,23 @@ function registerAdminDashboard(app, deps) {
     );
   });
 
+  // Faces come from Telegram. The organiser panel had its own avatar route
+  // behind its own auth, so the admin panel had none and showed ids instead.
+  app.get("/admin/avatar/:userId", requireAuth, async (req, res) => {
+    const userId = String(req.params.userId || "").trim();
+    const fileId = deps.readUserProjectProfiles()?.users?.[userId]?.meta?.avatarFileId;
+    if (!fileId || !deps.resolveAvatarUrl) {
+      res.status(404).end();
+      return;
+    }
+    try {
+      const url = await deps.resolveAvatarUrl(fileId);
+      res.set("Cache-Control", "private, max-age=900").redirect(String(url));
+    } catch {
+      res.status(404).end();
+    }
+  });
+
   app.get("/admin/users/:userId", requireAuth, (req, res) => {
     const userId = String(req.params.userId || "").trim();
     if (!/^\d+$/.test(userId)) {
@@ -1721,11 +1836,18 @@ function registerAdminDashboard(app, deps) {
       }));
     });
 
-    return buildSupportView(chats, {
+    const view = buildSupportView(chats, {
       tab: String(req.query.tab || "attention"),
       query: String(req.query.q || ""),
       page: Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1),
     });
+
+    // Faces for the list come from the same profiles the rest of the panel uses.
+    const users = deps.readUserProjectProfiles()?.users || {};
+    view.metaById = Object.fromEntries(
+      view.rows.map((chat) => [String(chat.chatId), users[String(chat.chatId)]?.meta || {}]),
+    );
+    return view;
   }
 
   app.get("/admin/support", requireAuth, (req, res) => {
@@ -1746,6 +1868,7 @@ function registerAdminDashboard(app, deps) {
         flash,
         storeLabel: found.store.label,
         canReply: found.store.canReply,
+        meta: deps.readUserProjectProfiles()?.users?.[String(chatId)]?.meta || {},
       }),
     );
     return true;

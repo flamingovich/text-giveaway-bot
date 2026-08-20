@@ -202,6 +202,38 @@ function baseStyles() {
     .outcome-danger { background: var(--danger-bg); color: var(--danger-fg); border-color: transparent; }
     .outcome-muted { background: var(--surface-2); color: var(--text-faint); }
 
+    /* A person is a face and a name. Printing a Telegram id under every row is
+       what made the tables look like a database export. */
+    .person { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .ava {
+      width: 30px; height: 30px; border-radius: 50%; flex: none; object-fit: cover;
+      background: var(--surface-2); display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 650; color: #a8bde0; letter-spacing: .02em;
+      border: 1px solid var(--line);
+    }
+    .ava-lg { width: 52px; height: 52px; font-size: 18px; border-radius: 16px; }
+    .person-text { min-width: 0; }
+    .person-name { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .person-sub { font-size: 11.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    a.person:hover .person-name { color: var(--accent); }
+
+    .metric { display: flex; flex-direction: column; gap: 3px; }
+    .metric-value { font-size: 40px; font-weight: 660; letter-spacing: -.03em; line-height: 1.05; }
+    .metric-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    .delta { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
+    .delta-up { background: var(--ok-bg); color: var(--ok-fg); }
+    .delta-down { background: var(--danger-bg); color: var(--danger-fg); }
+    .delta-flat { background: var(--surface-2); color: var(--text-faint); }
+
+    /* Horizontal bars read better than a donut for four categories, and they
+       carry their own labels and numbers. */
+    .bars { display: flex; flex-direction: column; gap: 9px; }
+    .bar-row { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; align-items: center; }
+    .bar-name { font-size: 12.5px; }
+    .bar-val { font-size: 12.5px; font-weight: 600; }
+    .bar-track { grid-column: 1 / -1; height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+    .bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+
     .link { color: var(--accent); font-weight: 550; }
     .link:hover { text-decoration: underline; }
 
@@ -283,6 +315,43 @@ function renderShell({
 </html>`;
 }
 
+function avatar(identity, large = false) {
+  const cls = `ava${large ? " ava-lg" : ""}`;
+  if (identity.avatarUrl) {
+    return `<img class="${cls}" src="${identity.avatarUrl}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'${cls}',textContent:'${escapeHtml(identity.initials)}'}))" />`;
+  }
+  return `<div class="${cls}">${escapeHtml(identity.initials)}</div>`;
+}
+
+function person(identity, { href = "", sub = "" } = {}) {
+  const inner = `${avatar(identity)}<div class="person-text">
+    <div class="person-name">${escapeHtml(identity.title)}</div>
+    ${sub || identity.handle ? `<div class="person-sub">${escapeHtml(sub || identity.handle)}</div>` : ""}
+  </div>`;
+  return href ? `<a class="person" href="${href}">${inner}</a>` : `<div class="person">${inner}</div>`;
+}
+
+function delta(value) {
+  if (!value) {
+    return "";
+  }
+  const sign = value.direction === "up" ? "↑" : value.direction === "down" ? "↓" : "→";
+  return `<span class="delta delta-${value.direction}">${sign} ${Math.abs(value.percent)}%</span>`;
+}
+
+function bars(items) {
+  const max = Math.max(1, ...items.map((item) => item.value));
+  return `<div class="bars">${items
+    .map(
+      (item) => `<div class="bar-row">
+        <span class="bar-name">${escapeHtml(item.label)}</span>
+        <span class="bar-val">${escapeHtml(String(item.display ?? item.value))}</span>
+        <span class="bar-track"><i class="bar-fill" style="width:${Math.round((item.value / max) * 100)}%${item.color ? `;background:${item.color}` : ""}"></i></span>
+      </div>`,
+    )
+    .join("")}</div>`;
+}
+
 function kpi({ label, value, note = "", lead = false, share = null }) {
   const bar =
     share === null
@@ -326,6 +395,10 @@ module.exports = {
   baseStyles,
   renderShell,
   kpi,
+  avatar,
+  person,
+  delta,
+  bars,
   card,
   blank,
   segmented,
