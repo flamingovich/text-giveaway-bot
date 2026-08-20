@@ -937,8 +937,16 @@ function getDrawPostFingerprint(draw) {
     const markup = includeWinners
       ? getFinishedKeyboard(draw).reply_markup
       : getKeyboardMarkup(draw.id, getDrawParticipantCount(draw));
-    const text = isMegaDraw(draw) ? "" : buildDrawMessage(draw, { includeWinners });
-    return crypto.createHash("sha1").update(JSON.stringify([text, markup])).digest("hex");
+    // Only the keyboard, deliberately. The caption carries a countdown that
+    // ticks on its own while the post keeps a throttled, coarser label, so
+    // hashing the caption made the fingerprint stricter than reality: it
+    // differed on every boot and we edited only to be told nothing changed.
+    // Keeping the caption current is the scheduled updater's job; this sync
+    // exists to repair the button, and the button is what it watches.
+    return crypto
+      .createHash("sha1")
+      .update(JSON.stringify([draw.status, draw.messageType || "", markup]))
+      .digest("hex");
   } catch {
     // A fingerprint we failed to compute must never be read as "nothing to do".
     return null;
@@ -5783,6 +5791,7 @@ function writeSchedulerHeartbeat() {
           total: calls.total,
           perMinute: calls.perMinute,
           top: calls.methods.slice(0, 6).map((row) => `${row.method}:${row.count}`),
+          subscriptionCache: calls.subscriptionCache,
         },
       }),
       "utf8",
