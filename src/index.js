@@ -5567,19 +5567,66 @@ async function schedulerTick() {
   }
 }
 
+let lastSchedulerTickAt = 0;
+let schedulerTickCount = 0;
+let schedulerGuardTimer = null;
+
+function runSchedulerTickOnce() {
+  lastSchedulerTickAt = Date.now();
+  schedulerTickCount += 1;
+  // A silent scheduler is indistinguishable from a busy one from the outside,
+  // and that cost two draws a twenty minute delay before anyone noticed. Say
+  // the count out loud on a slow cadence so a stopped scheduler is obvious.
+  if (schedulerTickCount % 10 === 1) {
+    console.log(`[scheduler] тик #${schedulerTickCount}`);
+  }
+  schedulerTick().catch((error) => {
+    console.error("[scheduler]", error.message);
+  });
+}
+
+// The interval stopped delivering twice in one night while the process stayed
+// healthy and kept serving joins, and nothing in the logs explained it. Until
+// that is understood, watch the clock from a second timer and rebuild the
+// scheduler when ticks stop arriving, so a stall costs one minute rather than
+// however long it takes a person to notice.
+function startSchedulerGuard() {
+  if (schedulerGuardTimer) {
+    return;
+  }
+  const staleAfterMs = Math.max(90000, CHECK_INTERVAL_MS * 3);
+  schedulerGuardTimer = setInterval(() => {
+    const silentMs = Date.now() - lastSchedulerTickAt;
+    if (silentMs < staleAfterMs) {
+      return;
+    }
+    console.error(
+      `[scheduler] тиков нет ${Math.round(silentMs / 1000)}с (последний #${schedulerTickCount}) — пересоздаю таймер`,
+    );
+    if (schedulerTimer) {
+      clearInterval(schedulerTimer);
+      schedulerTimer = null;
+    }
+    // A pass that never returned would keep the lock forever and block every
+    // rebuilt timer too, so clear it along with the timer.
+    lifecycleJobRunning = false;
+    lifecycleJobStartedAt = 0;
+    backgroundJobRunning = false;
+    backgroundJobStartedAt = 0;
+    schedulerTimer = setInterval(runSchedulerTickOnce, CHECK_INTERVAL_MS);
+    runSchedulerTickOnce();
+  }, 30000);
+  schedulerGuardTimer.unref?.();
+}
+
 function startScheduler() {
   if (schedulerTimer || WEB_ONLY || process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
     return;
   }
   console.log(`[boot] сборка ${process.env.JOIN_PAGE_BUILD || "?"} · winner-notify-v2`);
-  schedulerTimer = setInterval(() => {
-    schedulerTick().catch((error) => {
-      console.error("[scheduler]", error.message);
-    });
-  }, CHECK_INTERVAL_MS);
-  schedulerTick().catch((error) => {
-    console.error("[scheduler]", error.message);
-  });
+  schedulerTimer = setInterval(runSchedulerTickOnce, CHECK_INTERVAL_MS);
+  runSchedulerTickOnce();
+  startSchedulerGuard();
   console.log(`[boot] scheduler started (${CHECK_INTERVAL_MS}ms)`);
 }
 
