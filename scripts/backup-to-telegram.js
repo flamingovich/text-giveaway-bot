@@ -133,7 +133,7 @@ async function main() {
     }
 
     const caption = [
-      `Копия базы RollerBot — ${stamp.replace(/-/g, ":").replace(/^(\d{4}):(\d{2}):(\d{2})/, "$3.$2.$1")}`,
+      `Копия базы RollerBot — ${stamp.replace(/^(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})$/, "$3.$2.$1 $4:$5")}`,
       `${contents}`,
       `${Math.round(rawSize / 1024)} КБ → ${Math.round(size / 1024)} КБ, зашифровано`,
       "Расшифровать: openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in ФАЙЛ -out db.gz -pass pass:ПАРОЛЬ",
