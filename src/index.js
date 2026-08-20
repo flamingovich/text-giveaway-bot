@@ -4668,6 +4668,7 @@ async function syncActiveDrawKeyboards() {
   let updated = 0;
   let failed = 0;
   let skipped = 0;
+  let confirmed = 0;
   let dirty = false;
   const draws = [...(data.draws || [])].sort(
     (left, right) => Number(isMegaDraw(left)) - Number(isMegaDraw(right)),
@@ -4714,6 +4715,7 @@ async function syncActiveDrawKeyboards() {
               draw.postSyncFingerprint = fingerprint;
               dirty = true;
             }
+            confirmed += 1;
             console.log(`[sync] ${draw.id}: пост уже актуален`);
           } else {
             console.warn(`[sync] пропуск ${draw.id}: ${error.message}`);
@@ -4736,9 +4738,10 @@ async function syncActiveDrawKeyboards() {
   }
 
   console.log(
-    `[sync] клавиатуры постов: обновлено ${updated}, без изменений ${skipped}, ошибок ${failed}`,
+    `[sync] клавиатуры постов: обновлено ${updated}, пропущено без запроса ${skipped}, ` +
+      `подтверждено Telegram ${confirmed}, ошибок ${failed}`,
   );
-  return { updated, skipped, failed };
+  return { updated, skipped, confirmed, failed };
 }
 
 function getUserProjectProfile(userId, projectId) {
