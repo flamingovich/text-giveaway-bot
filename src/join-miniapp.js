@@ -943,9 +943,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     let pendingJoinStep = null;
     let writeAccessGranted = false;
     let openedBotForNotify = false;
+    let serverSaysUnreachable = false;
 
     function hasWriteAccess() {
       if (PAGE_MODE === "preview") return true;
+      // The server can see that no chat exists even when the flag below says
+      // messaging is allowed, and it is the one that has to deliver the news.
+      if (serverSaysUnreachable) return false;
       if (writeAccessGranted) return true;
       try {
         return window.Telegram?.WebApp?.initDataUnsafe?.user?.allows_write_to_pm === true;
@@ -1074,10 +1078,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       // Opening the bot is not the same as pressing Start in it. Treating the
       // one as the other is how people ended up in draws the bot could never
       // write to - and, when they won, lost the prize for being unreachable.
-      if (!openedBotForNotify) return;
+      if (!openedBotForNotify && !serverSaysUnreachable) return;
       notifyCheckInFlight = true;
       try {
         if (await botCanMessageMe()) {
+          serverSaysUnreachable = false;
           continueAfterWriteAccess();
         } else {
           showNotifyError("Откройте бота и нажмите «Начать» — иначе он не сможет написать вам о победе.");
@@ -2083,6 +2088,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     function handleStep(step, payload) {
+      if (payload && payload.needsWriteAccess === true) {
+        serverSaysUnreachable = true;
+      }
       if (PAGE_MODE !== "preview" && step !== "notify" && !hasWriteAccess()) {
         pendingJoinStep = { step, payload: payload || {} };
         showNotifyStep();
@@ -2338,7 +2346,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       try {
         const granted = await requestTelegramWriteAccess();
         if (granted) {
-          continueAfterWriteAccess();
+          // Permission granted is not the same as a chat that exists, so when
+          // the server has already said otherwise, let it confirm.
+          if (!serverSaysUnreachable || (await botCanMessageMe())) {
+            serverSaysUnreachable = false;
+            continueAfterWriteAccess();
+            return;
+          }
+          showNotifyError("Чат с ботом ещё не создан — откройте бота и нажмите «Начать».");
           return;
         }
         showNotifyError("Нужно разрешить сообщения — иначе бот не напишет о победе.");
@@ -3172,6 +3187,23 @@ function registerJoinMiniApp(app, deps) {
 
   app.post("/api/join/:drawId/session", requireJoinUser, async (req, res) => {
     const started = Date.now();
+    // The client reports allows_write_to_pm, and that flag can say yes while no
+    // chat with the bot exists at all: one person joined twelve draws that way
+    // and could never have been told they had won any of them. Only the server
+    // can settle it, so its verdict rides along on whatever step comes back.
+    if (typeof canMessageUser === "function") {
+      try {
+        if (!(await canMessageUser(req.telegramUser.id))) {
+          const sendJson = res.json.bind(res);
+          res.json = (body) => sendJson({ ...(body || {}), needsWriteAccess: true });
+          console.log(
+            `[join] личка закрыта, участие придержано: user=${req.telegramUser.id} draw=${req.params.drawId}`,
+          );
+        }
+      } catch (error) {
+        console.warn(`[join] проверка лички ${req.telegramUser.id}: ${error.message}`);
+      }
+    }
     try {
       const drawId = req.params.drawId;
       const userId = req.telegramUser.id;

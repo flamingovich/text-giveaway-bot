@@ -105,6 +105,11 @@ async function refreshRubUsdtRate(force = false) {
   }
 
   refreshPromise = (async () => {
+    // Several sources exist precisely so one of them can have a bad minute. A
+    // source that failed while the next one answered is not a problem anyone
+    // needs to read about, and logging each attempt made a working rate look
+    // broken; only a round where every source failed is worth saying out loud.
+    const failures = [];
     for (const provider of RATE_PROVIDERS) {
       try {
         const rate = await provider.fetch();
@@ -113,17 +118,22 @@ async function refreshRubUsdtRate(force = false) {
           lastFetchedAt = Date.now();
           return rate;
         }
+        failures.push(`${provider.name}: пустой ответ`);
       } catch (error) {
-        console.warn(`Курс USD/RUB (${provider.name}): ${error.message}`);
+        failures.push(`${provider.name}: ${error.message}`);
       }
     }
 
     if (lastFetchedAt > 0) {
-      console.warn("Не удалось обновить курс USD/RUB, используем последний успешный.");
+      console.warn(
+        `Курс USD/RUB не обновлён, оставляю последний успешный (${cachedRate}). Источники: ${failures.join("; ")}`,
+      );
       return cachedRate;
     }
 
-    console.warn(`Не удалось получить курс USD/RUB, используем резерв ${DEFAULT_RUB_PER_USDT}.`);
+    console.warn(
+      `Курс USD/RUB не получен ни от одного источника, беру резерв ${DEFAULT_RUB_PER_USDT}. Источники: ${failures.join("; ")}`,
+    );
     cachedRate = DEFAULT_RUB_PER_USDT;
     return cachedRate;
   })().finally(() => {
