@@ -1100,7 +1100,11 @@ function renderSystemPage(state) {
     ${UI.card({
       title: "Запросы к Telegram",
       subtitle: state.telegramCalls
-        ? `${state.telegramCalls.total} с запуска · ${state.telegramCalls.perMinute} в минуту`
+        ? `${state.telegramCalls.total} с запуска · ${state.telegramCalls.perMinute} в минуту${
+            state.telegramCalls.subscriptionCache && state.telegramCalls.subscriptionCache.hits > 0
+              ? ` · кэш подписок сэкономил ${state.telegramCalls.subscriptionCache.savedShare}%`
+              : ""
+          }`
         : "счётчик недоступен",
       flush: true,
       body: state.telegramCalls && state.telegramCalls.methods.length

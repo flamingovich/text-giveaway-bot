@@ -20,6 +20,7 @@ const {
   convertRubToUsdt,
 } = require("./rub-usdt-rate");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
+const { createSubscriptionCache } = require("./subscription-cache");
 const { applyTelegramApiTimeout } = require("./telegram-timeout");
 const { tryRecordDrawReferral, computeJoinWinChance } = require("./join-referrals");
 const {
@@ -169,6 +170,7 @@ function getTelegramCallStats() {
         perMinute: Number((count / elapsedMinutes).toFixed(2)),
       }))
       .sort((left, right) => right.count - left.count),
+    subscriptionCache: getSubscriptionCacheStats(),
   };
 }
 
@@ -924,6 +926,25 @@ function getDrawParticipantCount(draw) {
   return (draw.participantIds || []).length;
 }
 
+// The startup sync exists to repair posts whose button URL changed. It used to
+// rewrite every active post unconditionally, spending two API calls per draw
+// just to be told the content was already identical - which is where the
+// "message is not modified" noise in the error log came from. Remembering what
+// we last pushed lets an unchanged post be skipped without asking Telegram.
+function getDrawPostFingerprint(draw) {
+  try {
+    const includeWinners = draw.status === DRAW_STATUS.FINISHED;
+    const markup = includeWinners
+      ? getFinishedKeyboard(draw).reply_markup
+      : getKeyboardMarkup(draw.id, getDrawParticipantCount(draw));
+    const text = isMegaDraw(draw) ? "" : buildDrawMessage(draw, { includeWinners });
+    return crypto.createHash("sha1").update(JSON.stringify([text, markup])).digest("hex");
+  } catch {
+    // A fingerprint we failed to compute must never be read as "nothing to do".
+    return null;
+  }
+}
+
 function markDrawPostParticipantCount(draw, count = getDrawParticipantCount(draw)) {
   draw.postParticipantCount = count;
 }
@@ -1123,6 +1144,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// getChatMember is by far the most-called Telegram method here: during a single
+// join the same question gets asked three or four times - opening the app,
+// pressing "I subscribed", reopening it - and the answer is identical every
+// time. The cache lives in its own module because the rule that keeps it safe
+// (never remember a "not subscribed") is easy to break by accident.
+const subscriptionCache = createSubscriptionCache({ ttlMs: 3 * 60 * 1000, maxEntries: 5000 });
+
+function getSubscriptionCacheStats() {
+  return subscriptionCache.stats();
+}
+
 function isSubscribedStatus(status) {
   return status === "member" || status === "administrator" || status === "creator";
 }
@@ -1143,16 +1175,28 @@ async function checkChannelSubscriptionWithRetry(draw, userId, options = {}) {
     };
   }
 
+  // Payout decisions must never run on a remembered answer - the whole point of
+  // that check is to catch someone who unsubscribed right after winning - so
+  // those callers pass fresh: true and always go to Telegram.
+  if (options.fresh !== true) {
+    const cached = subscriptionCache.read(channelId, userId);
+    if (cached) {
+      return { ...cached, fromCache: true };
+    }
+  }
+
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const member = await bot.telegram.getChatMember(channelId, userId);
-      return {
+      const result = {
         ok: true,
         subscribed: isSubscribedStatus(member?.status),
         status: String(member?.status || "unknown"),
         checkedAt: new Date().toISOString(),
       };
+      subscriptionCache.write(channelId, userId, result);
+      return result;
     } catch (error) {
       lastError = error;
       if (attempt < maxAttempts) {
@@ -3925,6 +3969,7 @@ async function withWinnerNotifyDeadline(task, ms = WINNER_NOTIFY_DEADLINE_MS) {
 async function notifyWinnerOnFinish(draw, winnerId) {
   await enrichUserAvatar(winnerId);
   const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, winnerId, {
+    fresh: true,
     maxAttempts: 3,
   });
 
@@ -4245,6 +4290,7 @@ async function processWinnerChannelSubscriptions(data, options = {}) {
       }
 
       const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
+        fresh: true,
         maxAttempts: 2,
       });
       const checkedAt = new Date().toISOString();
@@ -4621,6 +4667,8 @@ async function syncActiveDrawKeyboards() {
   const data = readData();
   let updated = 0;
   let failed = 0;
+  let skipped = 0;
+  let dirty = false;
   const draws = [...(data.draws || [])].sort(
     (left, right) => Number(isMegaDraw(left)) - Number(isMegaDraw(right)),
   );
@@ -4638,16 +4686,38 @@ async function syncActiveDrawKeyboards() {
       continue;
     }
 
+    overlayLiveDrawProgress(draw);
+    const fingerprint = getDrawPostFingerprint(draw);
+    if (fingerprint && draw.postSyncFingerprint === fingerprint) {
+      skipped += 1;
+      continue;
+    }
+
     let ok = false;
     for (let attempt = 1; attempt <= 3 && !ok; attempt += 1) {
       try {
         await forceRefreshDrawPost(draw);
         console.log(`[sync] кнопка «Участвовать» ${draw.id}: ${participateUrl}`);
+        if (fingerprint) {
+          draw.postSyncFingerprint = fingerprint;
+          dirty = true;
+        }
         updated += 1;
         ok = true;
       } catch (error) {
         if (isIgnorableTelegramEditError(error)) {
-          console.warn(`[sync] пропуск ${draw.id}: ${error.message}`);
+          if (String(error?.message || "").includes("message is not modified")) {
+            // Telegram just confirmed the post already carries this exact
+            // content, so record it and stop asking on every boot. This is not
+            // an error and does not belong in the error log.
+            if (fingerprint) {
+              draw.postSyncFingerprint = fingerprint;
+              dirty = true;
+            }
+            console.log(`[sync] ${draw.id}: пост уже актуален`);
+          } else {
+            console.warn(`[sync] пропуск ${draw.id}: ${error.message}`);
+          }
           break;
         }
         if (attempt === 3) {
@@ -4661,12 +4731,14 @@ async function syncActiveDrawKeyboards() {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  if (updated > 0) {
+  if (updated > 0 || dirty) {
     writeDataPreservingLiveWinners(data);
   }
 
-  console.log(`[sync] клавиатуры постов: обновлено ${updated}, ошибок ${failed}`);
-  return { updated, failed };
+  console.log(
+    `[sync] клавиатуры постов: обновлено ${updated}, без изменений ${skipped}, ошибок ${failed}`,
+  );
+  return { updated, skipped, failed };
 }
 
 function getUserProjectProfile(userId, projectId) {
@@ -11685,6 +11757,7 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
 
   try {
     const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
+      fresh: true,
       maxAttempts: 3,
     });
     if (!subscriptionCheck.ok && isWinnerAccountUnavailableError(subscriptionCheck.error)) {
@@ -11759,6 +11832,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
   }
 
   const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
+    fresh: true,
     maxAttempts: 3,
   });
   if (subscriptionCheck.ok) {
@@ -11855,6 +11929,7 @@ panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrga
   }
 
   const subscriptionCheck = await checkChannelSubscriptionWithRetry(draw, userId, {
+    fresh: true,
     maxAttempts: 3,
   });
   if (subscriptionCheck.ok) {

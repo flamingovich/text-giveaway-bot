@@ -296,6 +296,12 @@ function buildPlainReport(state) {
           .map((row) => `${row.method} ${row.count}`)
           .join(", "),
     );
+    const cache = state.telegramCalls.subscriptionCache;
+    if (cache && cache.hits + cache.misses > 0) {
+      lines.push(
+        `Кэш подписок: сэкономлено ${cache.savedShare}% проверок (${cache.hits} из ${cache.hits + cache.misses}), в памяти ${cache.entries}`,
+      );
+    }
   }
   lines.push("");
   lines.push(`Ошибки в логе (${state.logs.errors.total} строк в хвосте):`);
