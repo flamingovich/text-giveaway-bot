@@ -115,13 +115,24 @@ function fingerprintLine(line) {
 
 // Grouped counts answer "is this happening a lot"; the raw tail answers "what
 // exactly did it say". Both are needed, neither on its own.
+const DATED_LINE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/;
+
 function summariseLog(text, { limit = 40 } = {}) {
-  const lines = text
+  const all = text
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     // Stack trace continuation lines say nothing without their first line.
     .filter((line) => !/^at\s/.test(line));
+
+  // The log file keeps everything ever written, including thousands of lines
+  // from before pm2 was told to stamp them. Counting those alongside today's
+  // makes a quiet system look like a burning one - a fixed bug still shows up
+  // hundreds of times because its old lines never go anywhere. Once anything
+  // in the tail carries a date, only dated lines are counted.
+  const dated = all.filter((line) => DATED_LINE.test(line));
+  const lines = dated.length > 0 ? dated : all;
+  const undatedCount = dated.length > 0 ? all.length - dated.length : 0;
 
   const groups = new Map();
   for (const line of lines) {
@@ -143,6 +154,7 @@ function summariseLog(text, { limit = 40 } = {}) {
 
   return {
     total: lines.length,
+    undatedCount,
     groups: [...groups.values()].sort((a, b) => b.count - a.count),
     kinds: [...kinds.values()]
       .sort((a, b) => b.count - a.count)
@@ -334,7 +346,12 @@ function buildPlainReport(state) {
     }
   }
   lines.push("");
-  lines.push(`Ошибки в логе (${state.logs.errors.total} строк в хвосте):`);
+  lines.push(
+    `Ошибки в логе: ${state.logs.errors.total} строк` +
+      (state.logs.errors.undatedCount
+        ? ` (плюс ${state.logs.errors.undatedCount} старых, до включения отметок времени — не учтены)`
+        : ""),
+  );
   lines.push("  что повторяется чаще всего:");
   for (const kind of state.logs.errors.kinds || []) {
     lines.push(`    ${String(kind.count).padStart(5)} × ${kind.sample.slice(0, 150)}`);

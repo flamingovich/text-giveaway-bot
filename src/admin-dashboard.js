@@ -1133,7 +1133,9 @@ function renderSystemPage(state) {
     <div class="grid grid-2" style="margin-top:12px">
       ${UI.card({
         title: "Ошибки в логе",
-        subtitle: `${state.logs.errors.total} строк в хвосте`,
+        subtitle:
+          `${state.logs.errors.total} строк` +
+          (state.logs.errors.undatedCount ? ` · ${state.logs.errors.undatedCount} старых не учтены` : ""),
         flush: true,
         body: groupRows
           ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="num">Раз</th><th>Что повторяется</th></tr></thead><tbody>${groupRows}</tbody></table></div>`

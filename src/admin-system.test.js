@@ -100,3 +100,27 @@ test("draw ids do not split one problem into many", () => {
   assert.equal(summary.kinds[0].count, 2);
   assert.match(summary.kinds[0].sample, /draw_/, "the sample stays readable");
 });
+
+// The log file keeps every line ever written. A bug fixed this morning still
+// has hundreds of lines in it, and counting them makes a quiet system look
+// like a burning one.
+test("lines from before timestamps were switched on are left out of the count", () => {
+  const summary = summariseLog(
+    [
+      "[draw] пост больше не редактируется — счётчик замер",
+      "[draw] пост больше не редактируется — счётчик замер",
+      "[draw] пост больше не редактируется — счётчик замер",
+      "2026-08-20T18:51:19: [join] не удалось отправить в личку 5536963572: chat not found",
+    ].join("\n"),
+  );
+
+  assert.equal(summary.total, 1, "only what actually happened since");
+  assert.equal(summary.undatedCount, 3, "and the older ones are still owned up to");
+  assert.match(summary.kinds[0].sample, /chat not found/);
+});
+
+test("a log with no dates at all is still counted in full", () => {
+  const summary = summariseLog(["[boot] что-то пошло не так", "[boot] и ещё раз"].join("\n"));
+  assert.equal(summary.total, 2);
+  assert.equal(summary.undatedCount, 0);
+});
