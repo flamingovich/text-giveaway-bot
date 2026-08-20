@@ -9,6 +9,7 @@ const {
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { getReferralInviteCount } = require("./join-referrals");
+const { resolveFileLink } = require("./file-link-cache");
 
 const LEVEL_ICON = "🔥";
 const BACK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>`;
@@ -668,7 +669,8 @@ function registerParticipantProfile(app, deps) {
       return;
     }
     try {
-      const url = await bot.telegram.getFileLink(fileId);
+      const url = await resolveFileLink(bot.telegram, fileId);
+      res.set("Cache-Control", "private, max-age=1800");
       res.redirect(String(url));
     } catch {
       res.status(404).send("Unavailable");

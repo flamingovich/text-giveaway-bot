@@ -296,11 +296,15 @@ function buildPlainReport(state) {
           .map((row) => `${row.method} ${row.count}`)
           .join(", "),
     );
-    const cache = state.telegramCalls.subscriptionCache;
-    if (cache && cache.hits + cache.misses > 0) {
-      lines.push(
-        `Кэш подписок: сэкономлено ${cache.savedShare}% проверок (${cache.hits} из ${cache.hits + cache.misses}), в памяти ${cache.entries}`,
-      );
+    for (const [label, cache] of [
+      ["Кэш подписок", state.telegramCalls.subscriptionCache],
+      ["Кэш ссылок на аватарки", state.telegramCalls.fileLinkCache],
+    ]) {
+      if (cache && cache.hits + cache.misses > 0) {
+        lines.push(
+          `${label}: сэкономлено ${cache.savedShare}% запросов (${cache.hits} из ${cache.hits + cache.misses}), в памяти ${cache.entries}`,
+        );
+      }
     }
   }
   lines.push("");

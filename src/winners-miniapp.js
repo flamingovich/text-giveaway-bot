@@ -12,6 +12,7 @@ const {
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
+const { resolveFileLink } = require("./file-link-cache");
 
 const GIFT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M20 12v10H4V12"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>`;
 const TROPHY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10"/><path d="M17 4v3a5 5 0 0 1-10 0V4"/><path d="M5 5H3v1a3 3 0 0 0 3 3"/><path d="M19 5h2v1a3 3 0 0 1-3 3"/></svg>`;
@@ -458,7 +459,8 @@ function registerWinnersMiniApp(app, deps) {
       return;
     }
     try {
-      const url = await bot.telegram.getFileLink(fileId);
+      const url = await resolveFileLink(bot.telegram, fileId);
+      res.set("Cache-Control", "private, max-age=1800");
       res.redirect(String(url));
     } catch {
       res.status(404).send("Avatar unavailable");

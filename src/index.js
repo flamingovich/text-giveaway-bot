@@ -21,6 +21,7 @@ const {
 } = require("./rub-usdt-rate");
 const { applyNoLinkPreview } = require("./telegram-no-preview");
 const { createSubscriptionCache } = require("./subscription-cache");
+const { resolveFileLink, getFileLinkCacheStats } = require("./file-link-cache");
 const { applyTelegramApiTimeout } = require("./telegram-timeout");
 const { tryRecordDrawReferral, computeJoinWinChance } = require("./join-referrals");
 const {
@@ -171,6 +172,7 @@ function getTelegramCallStats() {
       }))
       .sort((left, right) => right.count - left.count),
     subscriptionCache: getSubscriptionCacheStats(),
+    fileLinkCache: getFileLinkCacheStats(),
   };
 }
 
@@ -5792,6 +5794,7 @@ function writeSchedulerHeartbeat() {
           perMinute: calls.perMinute,
           top: calls.methods.slice(0, 6).map((row) => `${row.method}:${row.count}`),
           subscriptionCache: calls.subscriptionCache,
+          fileLinkCache: calls.fileLinkCache,
         },
       }),
       "utf8",
@@ -11166,7 +11169,8 @@ panelRouter.get("/avatar/:userId", webAuth.requireAuth, requireOrganizer, async 
   }
 
   try {
-    const url = await bot.telegram.getFileLink(fileId);
+    const url = await resolveFileLink(bot.telegram, fileId);
+    res.set("Cache-Control", "private, max-age=1800");
     res.redirect(String(url));
   } catch (error) {
     res.status(404).send("Avatar unavailable");
@@ -11205,7 +11209,8 @@ panelRouter.get("/channel-photo/:channelId", webAuth.requireAuth, requireOrganiz
   }
 
   try {
-    const url = await bot.telegram.getFileLink(fileId);
+    const url = await resolveFileLink(bot.telegram, fileId);
+    res.set("Cache-Control", "private, max-age=1800");
     res.redirect(String(url));
   } catch {
     res.status(404).end();
@@ -11974,7 +11979,7 @@ registerAdminDashboard(app, {
   readProjects,
   readKnownChannels,
   readDelegatedAdmins,
-  resolveAvatarUrl: (fileId) => bot.telegram.getFileLink(fileId),
+  resolveAvatarUrl: (fileId) => resolveFileLink(bot.telegram, fileId),
   botUsername: BOT_USERNAME,
   getTelegramCallStats,
   getUserProfileBundle,
