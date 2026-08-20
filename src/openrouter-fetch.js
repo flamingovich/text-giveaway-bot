@@ -1,5 +1,13 @@
 const { ProxyAgent, fetch: undiciFetch } = require("undici");
 
+// Measured on production: the proxy hangs on roughly four requests in ten and
+// answers the rest in half a second. With a single 90 second attempt and no
+// retry, each hang surfaced to the user as "Что-то подвисло" - 330 of them
+// across half of all support conversations. OpenRouter answers this server
+// directly in under two seconds, so a hung proxy attempt is worth abandoning
+// early and repeating without it.
+const ATTEMPT_TIMEOUT_MS = Number(process.env.OPENROUTER_ATTEMPT_TIMEOUT_MS || 15000);
+
 let cachedProxyUrl = null;
 let cachedDispatcher = undefined;
 
@@ -40,12 +48,42 @@ function getOpenRouterProxyDispatcher() {
   return cachedDispatcher;
 }
 
-async function openRouterFetch(url, options = {}) {
-  const dispatcher = getOpenRouterProxyDispatcher();
-  if (dispatcher) {
-    return undiciFetch(url, { ...options, dispatcher });
+// Caps one attempt without discarding the deadline the caller set.
+function attemptSignal(callerSignal) {
+  const timeout = AbortSignal.timeout(ATTEMPT_TIMEOUT_MS);
+  if (!callerSignal) {
+    return timeout;
   }
-  return fetch(url, options);
+  return typeof AbortSignal.any === "function"
+    ? AbortSignal.any([callerSignal, timeout])
+    : callerSignal;
+}
+
+async function openRouterFetch(url, options = {}, impl = {}) {
+  const proxyFetch = impl.proxyFetch || undiciFetch;
+  const directFetch = impl.directFetch || fetch;
+  const dispatcher = impl.dispatcher !== undefined ? impl.dispatcher : getOpenRouterProxyDispatcher();
+
+  if (!dispatcher) {
+    return directFetch(url, { ...options, signal: attemptSignal(options.signal) });
+  }
+
+  try {
+    return await proxyFetch(url, {
+      ...options,
+      dispatcher,
+      signal: attemptSignal(options.signal),
+    });
+  } catch (error) {
+    // The caller giving up is not a proxy failure, and repeating would ignore it.
+    if (options.signal?.aborted) {
+      throw error;
+    }
+    console.warn(
+      `[openrouter] прокси не ответил (${error?.message || error}) — повторяю напрямую`,
+    );
+    return directFetch(url, { ...options, signal: attemptSignal(options.signal) });
+  }
 }
 
 function extractOpenRouterError(data, response) {
@@ -65,4 +103,5 @@ module.exports = {
   openRouterFetch,
   extractOpenRouterError,
   normalizeOpenRouterProxyUrl,
+  ATTEMPT_TIMEOUT_MS,
 };
