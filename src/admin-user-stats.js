@@ -1,4 +1,5 @@
 const { collectAllDraws } = require("./admin-draw-source");
+const { resolveProjectId } = require("./project-identity");
 
 function emptyActivityEntry() {
   return {
@@ -165,7 +166,9 @@ function buildUserProjectActivityIndex(deps, userProfiles, formatUserLabel) {
     // Mega giveaways carry no projectId, and skipping them dropped their
     // participants and winners from every per-user number - including the
     // largest prize on production. Bucket them under an empty project instead.
-    const projectId = draw.projectId || "";
+    // Legacy ids resolve to the brand they became, so a person's Pokerdom
+    // history is one line rather than two half-empty ones.
+    const projectId = resolveProjectId(draw.projectId);
 
     const signals = collectDrawParticipantSignals(draw, userProfiles);
     const drawSeen = new Map();

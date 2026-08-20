@@ -9,6 +9,7 @@ const {
 const { collectAllDraws } = require("./admin-draw-source");
 const { buildUserCard } = require("./admin-user-card");
 const { buildSupportView } = require("./admin-support-view");
+const { resolveProjectId, resolveUserProjects } = require("./project-identity");
 const {
   readSupportChats,
   updateSupportChat,
@@ -394,7 +395,10 @@ function buildAdminUserProjectRows(deps) {
     const userId = userKey;
     const userLabel = labelForUser(userId, profiles);
 
-    const projectEntries = Object.entries(userNode.projects || {});
+    // Bindings left pointing at pre-brand project ids are folded onto the brand
+    // they became, so nothing reads as "Проект удалён" for a project that was
+    // only moved.
+    const projectEntries = Object.entries(resolveUserProjects(userNode.projects));
 
     // A project that was deleted or renamed by the brand migration used to drop
     // the whole row, hiding 288 users on production. Keep the person and mark
@@ -478,7 +482,7 @@ function addActivityOnlyRows(deps, projectRows, activityIndex) {
       );
       continue;
     }
-    const project = projectById.get(projectId) || missingProject(projectId);
+    const project = projectById.get(resolveProjectId(projectId)) || missingProject(projectId);
     projectRows.push({
       userId,
       userLabel: labelForUser(userId, profiles),

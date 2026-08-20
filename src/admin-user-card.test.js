@@ -100,9 +100,51 @@ test("collects wallets from the profile and from payouts", () => {
   assert.deepEqual(card.wallets.map((wallet) => wallet.address).sort(), ["TPayout", "TProfile"]);
 });
 
-test("names a deleted project instead of hiding the draw", () => {
+test("an unknown project is called a former one, not a deleted one", () => {
   const card = buildUserCard(deps([{ id: "d1", projectId: "gone", participantIds: [7] }]), 7);
-  assert.match(card.draws[0].projectName, /удал/i);
+  assert.equal(card.draws[0].projectName, "Прежний проект");
+});
+
+test("a pre-brand Pokerdom draw shows as Pokerdom, not as deleted", () => {
+  const card = buildUserCard(
+    deps(
+      [{ id: "d1", projectId: "project_1780118192579_6053", participantIds: [7] }],
+      [],
+      { users: {} },
+      [{ id: "brand_pokerdom_7946967720", name: "Pokerdom", ownerId: 7946967720 }],
+    ),
+    7,
+  );
+
+  assert.equal(card.draws[0].projectName, "Pokerdom");
+  assert.equal(card.draws[0].projectId, "brand_pokerdom_7946967720");
+});
+
+test("the old and the new Pokerdom binding become one line on the card", () => {
+  const card = buildUserCard(
+    deps(
+      [],
+      [],
+      {
+        users: {
+          7: {
+            projects: {
+              project_1780118192579_6053: { trc20Address: "TOld", referralVerified: true },
+              brand_pokerdom_7946967720: { projectAccountId: "#42" },
+            },
+          },
+        },
+      },
+      [{ id: "brand_pokerdom_7946967720", name: "Pokerdom", ownerId: 7946967720 }],
+    ),
+    7,
+  );
+
+  assert.equal(card.projects.length, 1);
+  assert.equal(card.projects[0].projectName, "Pokerdom");
+  assert.equal(card.projects[0].refStatus, "ref");
+  assert.equal(card.projects[0].wallet, "TOld");
+  assert.equal(card.projects[0].accountId, "#42");
 });
 
 test("mega giveaways without a project are labelled, not dropped", () => {

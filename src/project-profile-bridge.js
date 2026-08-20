@@ -605,6 +605,7 @@ function migratePokerdomLegacyProfiles(options = {}) {
 }
 
 module.exports = {
+  LEGACY_POKERDOM_PROJECT_OWNERS,
   normalizeProjectBrandName,
   getDrawOwnerId,
   listUserBrandProjectEntries,

@@ -3,6 +3,7 @@
 // multi-account check meant reading the database by hand.
 
 const { collectAllDraws, asArray } = require("./admin-draw-source");
+const { resolveProjectId, resolveUserProjects } = require("./project-identity");
 
 const WINNER_OUTCOMES = {
   confirmed: { label: "Подтвердил", tone: "ok" },
@@ -63,7 +64,7 @@ function buildUserCard(deps, userId, options = {}) {
     if (!projectId) {
       return "Без проекта";
     }
-    return projectById.get(projectId)?.name || `Проект удалён (${projectId})`;
+    return projectById.get(resolveProjectId(projectId))?.name || "Прежний проект";
   };
 
   const draws = [];
@@ -119,7 +120,7 @@ function buildUserCard(deps, userId, options = {}) {
       id: draw.id,
       prize: draw.prize || "—",
       prizeType: draw.prizeType || "",
-      projectId: draw.projectId || "",
+      projectId: resolveProjectId(draw.projectId),
       projectName: projectName(draw.projectId),
       status: draw.status,
       at: drawTimestamp(draw),
@@ -143,7 +144,7 @@ function buildUserCard(deps, userId, options = {}) {
 
   draws.sort((left, right) => String(right.at).localeCompare(String(left.at)));
 
-  const projects = Object.entries(userNode?.projects || {}).map(([projectId, projectData]) => ({
+  const projects = Object.entries(resolveUserProjects(userNode?.projects)).map(([projectId, projectData]) => ({
     projectId,
     projectName: projectName(projectId),
     refStatus: projectData.referralVerified
