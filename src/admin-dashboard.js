@@ -1098,6 +1098,24 @@ function renderSystemPage(state) {
 
     <div style="height:12px"></div>
     ${UI.card({
+      title: "Запросы к Telegram",
+      subtitle: state.telegramCalls
+        ? `${state.telegramCalls.total} с запуска · ${state.telegramCalls.perMinute} в минуту`
+        : "счётчик недоступен",
+      flush: true,
+      body: state.telegramCalls && state.telegramCalls.methods.length
+        ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Метод</th><th class="num">Всего</th><th class="num">В минуту</th></tr></thead><tbody>${state.telegramCalls.methods
+            .slice(0, 12)
+            .map(
+              (row) =>
+                `<tr><td class="mono">${escapeHtml(row.method)}</td><td class="num strong">${row.count}</td><td class="num">${row.perMinute}</td></tr>`,
+            )
+            .join("")}</tbody></table></div>`
+        : UI.blank("Вызовов пока не было"),
+    })}
+
+    <div style="height:12px"></div>
+    ${UI.card({
       title: "Розыгрыши, которые встали",
       subtitle: `активных ${state.draws.active} · завершённых без уведомления ${state.draws.finishedWithoutNotify}`,
       flush: true,
@@ -1901,6 +1919,7 @@ function registerAdminDashboard(app, deps) {
         buildId: process.env.JOIN_PAGE_BUILD,
         botUsername: deps.botUsername,
         schedulerIntervalMs: Number(process.env.CHECK_INTERVAL_MS || 30000),
+        telegramCalls: deps.getTelegramCallStats ? deps.getTelegramCallStats() : null,
       });
       res.type("html").send(renderSystemPage(state));
     } catch (error) {

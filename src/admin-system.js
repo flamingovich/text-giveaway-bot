@@ -218,7 +218,7 @@ function readBackupState() {
   }
 }
 
-function collectSystemState({ timezone, buildId, botUsername, schedulerIntervalMs }) {
+function collectSystemState({ timezone, buildId, botUsername, schedulerIntervalMs, telegramCalls = null }) {
   const heartbeat = readJson(HEARTBEAT_FILE);
   const heartbeatAge = fileAge(HEARTBEAT_FILE);
   const watchdog = readJson(WATCHDOG_STATE_FILE);
@@ -250,6 +250,7 @@ function collectSystemState({ timezone, buildId, botUsername, schedulerIntervalM
       botUsername: botUsername || "—",
       pid: process.pid,
     },
+    telegramCalls,
     draws: readDrawState(timezone),
     storage: readStorageState(),
     backups: readBackupState(),
@@ -287,6 +288,15 @@ function buildPlainReport(state) {
     `Бэкапы: ${state.backups.count} шт, свежий ${formatDuration(state.backups.ageMs)} назад`,
   );
   lines.push(`База: ${formatBytes(state.storage.dbSize)}`);
+  if (state.telegramCalls) {
+    lines.push(
+      `Запросы к Telegram: ${state.telegramCalls.total} с запуска, ${state.telegramCalls.perMinute}/мин — ` +
+        state.telegramCalls.methods
+          .slice(0, 5)
+          .map((row) => `${row.method} ${row.count}`)
+          .join(", "),
+    );
+  }
   lines.push("");
   lines.push(`Ошибки в логе (${state.logs.errors.total} строк в хвосте):`);
   for (const group of state.logs.errors.groups) {

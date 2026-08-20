@@ -144,6 +144,41 @@ if (ADMIN_IDS.length === 0 || ADMIN_IDS.every((id) => id === 123456789)) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
+
+// Every telegram call goes through callApi, so counting there answers "how much
+// are we actually asking of Telegram" without touching a hundred call sites.
+// Without it the only signal was 429s, which arrive after the damage.
+const telegramCallStats = { since: Date.now(), total: 0, byMethod: new Map() };
+
+function recordTelegramCall(method) {
+  telegramCallStats.total += 1;
+  const key = String(method || "unknown");
+  telegramCallStats.byMethod.set(key, (telegramCallStats.byMethod.get(key) || 0) + 1);
+}
+
+function getTelegramCallStats() {
+  const elapsedMinutes = Math.max(1 / 60, (Date.now() - telegramCallStats.since) / 60000);
+  return {
+    since: new Date(telegramCallStats.since).toISOString(),
+    total: telegramCallStats.total,
+    perMinute: Number((telegramCallStats.total / elapsedMinutes).toFixed(1)),
+    methods: [...telegramCallStats.byMethod.entries()]
+      .map(([method, count]) => ({
+        method,
+        count,
+        perMinute: Number((count / elapsedMinutes).toFixed(2)),
+      }))
+      .sort((left, right) => right.count - left.count),
+  };
+}
+
+{
+  const originalCallApi = bot.telegram.callApi.bind(bot.telegram);
+  bot.telegram.callApi = (method, payload, options) => {
+    recordTelegramCall(method);
+    return originalCallApi(method, payload, options);
+  };
+}
 applyTelegramApiTimeout(bot.telegram);
 applyNoLinkPreview(bot.telegram);
 const webAuth = createWebAuth({
@@ -3350,7 +3385,14 @@ async function tryLinkDrawFromForwardedPost(userId, forwardedChat, message) {
   return draw;
 }
 
-const DRAW_POST_UPDATE_DEBOUNCE_MS = Number(process.env.DRAW_POST_UPDATE_DEBOUNCE_MS || 8000);
+// A resetting debounce had two faults: during a steady stream of joins it kept
+// postponing the edit, and between bursts it fired every eight seconds for each
+// active draw at once - eleven live draws could ask Telegram to edit eighty
+// times a minute, which is where the 429s came from. This is a throttle
+// instead: the first join after a quiet spell updates the post straight away,
+// and everything after it rides along until the interval is up.
+const DRAW_POST_UPDATE_DEBOUNCE_MS = Number(process.env.DRAW_POST_UPDATE_DEBOUNCE_MS || 60000);
+const drawPostLastEditAt = new Map();
 /** @type {Map<string, { timer: NodeJS.Timeout, includeWinners: boolean }>} */
 const drawPostUpdateTimers = new Map();
 /** @type {Map<number, number>} */
@@ -3579,13 +3621,26 @@ function scheduleDrawPostUpdate(drawId, includeWinners = false) {
   }
 
   const prev = drawPostUpdateTimers.get(drawId);
-  if (prev?.timer) {
-    clearTimeout(prev.timer);
-  }
-
   const flushIncludeWinners = Boolean(prev?.includeWinners || includeWinners);
 
-  const timer = setTimeout(async () => {
+  // An edit is already queued for this draw: let this join ride along instead
+  // of pushing the queued one further away.
+  if (prev?.timer) {
+    prev.includeWinners = flushIncludeWinners;
+    return;
+  }
+
+  const lastEditAt = drawPostLastEditAt.get(drawId) || 0;
+  const sinceLastEdit = Date.now() - lastEditAt;
+  const delay = sinceLastEdit >= DRAW_POST_UPDATE_DEBOUNCE_MS
+    ? 0
+    : DRAW_POST_UPDATE_DEBOUNCE_MS - sinceLastEdit;
+
+  // Held in the map so a later call that arrives while this one waits can raise
+  // the flag and still be seen when the timer fires.
+  const entry = { timer: null, includeWinners: flushIncludeWinners };
+
+  entry.timer = setTimeout(async () => {
     drawPostUpdateTimers.delete(drawId);
     const data = readData();
     const draw = data.draws.find((item) => item.id === drawId);
@@ -3597,7 +3652,8 @@ function scheduleDrawPostUpdate(drawId, includeWinners = false) {
     if (draw.postUneditableAt) {
       return;
     }
-    const winners = flushIncludeWinners || draw.status === DRAW_STATUS.FINISHED;
+    const winners = entry.includeWinners || draw.status === DRAW_STATUS.FINISHED;
+    drawPostLastEditAt.set(drawId, Date.now());
     try {
       await updateDrawPost(draw, winners);
       markDrawPostParticipantCount(draw);
@@ -3615,12 +3671,9 @@ function scheduleDrawPostUpdate(drawId, includeWinners = false) {
         console.error(`Не удалось обновить пост ${drawId}:`, error.message);
       }
     }
-  }, DRAW_POST_UPDATE_DEBOUNCE_MS);
+  }, delay);
 
-  drawPostUpdateTimers.set(drawId, {
-    timer,
-    includeWinners: flushIncludeWinners,
-  });
+  drawPostUpdateTimers.set(drawId, entry);
 }
 
 function pickWinners(draw) {
@@ -3699,7 +3752,10 @@ async function finishDraw(draw, data = null) {
     writeDataPreservingLiveWinners(data);
   }
 
-  void ensureUserAvatars([...(draw.participantIds || []), ...(draw.winnerIds || [])], { limit: 100 });
+  // Winners are who the panel actually shows a face for; fetching a photo for
+  // every one of a hundred and forty participants after each finish was a
+  // hundred calls nobody looked at.
+  void ensureUserAvatars(draw.winnerIds || [], { limit: 10 });
   if (!alreadyFinished || Object.keys(draw.winnerNotifications || {}).length === 0) {
     await notifyWinnersOnFinish(draw);
     if (data) {
@@ -4700,8 +4756,25 @@ function getWinnerMentionHtml(userProfiles, winnerId) {
   return `<a href="tg://user?id=${winnerId}">${escapeHtml(fullName)}</a>`;
 }
 
-async function enrichUserAvatar(userId) {
+// Avatars are shown in the admin panel and nowhere else, so they do not need to
+// be fresh to the minute. Asking Telegram for one on every single join meant a
+// getUserProfilePhotos call per join for a picture that had not changed.
+const AVATAR_TTL_MS = Number(process.env.AVATAR_TTL_MS || 7 * 24 * 60 * 60 * 1000);
+
+function avatarIsFresh(userId) {
+  const meta = readUserProjectProfiles().users?.[String(userId)]?.meta;
+  if (!meta?.avatarUpdatedAt) {
+    return false;
+  }
+  const checkedAt = Date.parse(meta.avatarUpdatedAt);
+  return Number.isFinite(checkedAt) && Date.now() - checkedAt < AVATAR_TTL_MS;
+}
+
+async function enrichUserAvatar(userId, options = {}) {
   if (!userId || WEB_ONLY || !bot) {
+    return;
+  }
+  if (!options.force && avatarIsFresh(userId)) {
     return;
   }
 
@@ -11805,6 +11878,7 @@ registerAdminDashboard(app, {
   readDelegatedAdmins,
   resolveAvatarUrl: (fileId) => bot.telegram.getFileLink(fileId),
   botUsername: BOT_USERNAME,
+  getTelegramCallStats,
   getUserProfileBundle,
   getDrawParticipantMeta,
   collectDrawParticipantSignals,
