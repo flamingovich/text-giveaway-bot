@@ -28,14 +28,41 @@ async function fetchJson(url) {
   return response.json();
 }
 
-async function fetchFromCbr() {
-  const data = await fetchJson("https://www.cbr-xml-daily.ru/daily_json.js");
-  const usd = data?.Valute?.USD;
-  if (!usd) {
+// The bank publishes XML and writes its decimals with a comma. This was reading
+// a community mirror instead, which stopped answering at all - three probes,
+// three eight-second timeouts - and became the loudest line in the error log
+// while the providers behind it quietly did the job. The bank itself answers
+// in under half a second.
+function parseCbrUsdRate(xml) {
+  const block = String(xml || "").match(
+    /<Valute[^>]*>(?:(?!<\/Valute>)[\s\S])*?<CharCode>USD<\/CharCode>[\s\S]*?<\/Valute>/,
+  );
+  if (!block) {
     return null;
   }
-  const nominal = Number(usd.Nominal) || 1;
-  return normalizeRate(Number(usd.Value) / nominal);
+  const value = block[0].match(/<Value>([^<]+)<\/Value>/);
+  const nominal = block[0].match(/<Nominal>([^<]+)<\/Nominal>/);
+  if (!value) {
+    return null;
+  }
+  const rate = Number(String(value[1]).trim().replace(",", "."));
+  const per = Number(String(nominal?.[1] || "1").trim().replace(",", ".")) || 1;
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return null;
+  }
+  return rate / per;
+}
+
+async function fetchText(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.text();
+}
+
+async function fetchFromCbr() {
+  return normalizeRate(parseCbrUsdRate(await fetchText("https://www.cbr.ru/scripts/XML_daily.asp")));
 }
 
 async function fetchFromExchangeRateApi() {
@@ -48,10 +75,25 @@ async function fetchFromCurrencyApi() {
   return normalizeRate(data?.usd?.rub);
 }
 
+// Order matters: the first provider that answers wins, so the steady ones go
+// first. The CBR feed here is a community mirror, not the bank itself, and it
+// was timing out often enough to be the loudest line in the error log while
+// the providers behind it quietly did the job. It stays as a last resort
+// because it is the rate people actually quote.
+// Priced in RUB per USDT, which is literally what this module is for.
+async function fetchFromCoinGecko() {
+  const data = await fetchJson("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=rub");
+  return normalizeRate(data?.tether?.rub);
+}
+
+// The bank stays first: it is the rate people quote, and switching the leader
+// would quietly change what winners are paid. The rest are there so a bad
+// minute at one source is invisible rather than an error in the log.
 const RATE_PROVIDERS = [
   { name: "ЦБ РФ", fetch: fetchFromCbr },
   { name: "ExchangeRate-API", fetch: fetchFromExchangeRateApi },
   { name: "Currency-API", fetch: fetchFromCurrencyApi },
+  { name: "CoinGecko", fetch: fetchFromCoinGecko },
 ];
 
 async function refreshRubUsdtRate(force = false) {
@@ -121,6 +163,7 @@ function startRubUsdtRateRefresh() {
 }
 
 module.exports = {
+  parseCbrUsdRate,
   refreshRubUsdtRate,
   startRubUsdtRateRefresh,
   getRubPerUsdtRate,

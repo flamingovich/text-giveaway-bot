@@ -68,3 +68,35 @@ test("the pasteable report leads with whether the scheduler is alive", () => {
   assert.match(report, /завершённых без уведомления 2/);
   assert.match(report, /Бэкапы: 3 шт/);
 });
+
+// A section total next to one sample line reads as though that line happened
+// that many times. It did not, and that made a quiet log look like a fire.
+test("the summary counts the repeating thing, not the section it belongs to", () => {
+  const summary = summariseLog(
+    [
+      "[countdown] дайджест @chan: 400: Bad Request: message to edit not found",
+      "[countdown] дайджест @chan: 400: Bad Request: message to edit not found",
+      "[countdown] дайджест @chan: 400: Bad Request: message to edit not found",
+      "[join] не удалось отправить в личку 111111111: 403",
+      "[join] не удалось отправить в личку 222222222: 403",
+    ].join("\n"),
+  );
+
+  const top = summary.kinds[0];
+  assert.equal(top.count, 3);
+  assert.match(top.sample, /дайджест/);
+
+  const join = summary.kinds.find((kind) => /личку/.test(kind.sample));
+  assert.equal(join.count, 2, "two people, one problem");
+});
+
+test("draw ids do not split one problem into many", () => {
+  const summary = summariseLog(
+    [
+      "[sync] пропуск draw_1787181919981_672: 429: Too Many Requests",
+      "[sync] пропуск draw_1787183675779_4384: 429: Too Many Requests",
+    ].join("\n"),
+  );
+  assert.equal(summary.kinds[0].count, 2);
+  assert.match(summary.kinds[0].sample, /draw_/, "the sample stays readable");
+});

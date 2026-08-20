@@ -100,6 +100,19 @@ function classify(line) {
   return { key: "other", label: "Прочее" };
 }
 
+// Two lines that differ only by a draw id or a user id are the same problem
+// happening twice, and counting them separately hides it. Stripping the varying
+// parts turns a wall of noise into "this exact thing, N times".
+function fingerprintLine(line) {
+  return String(line)
+    .replace(/\b\d{2}:\d{2}:\d{2}\b/g, "")
+    .replace(/draw_[A-Za-z0-9_]+/g, "<розыгрыш>")
+    .replace(/\b\d{6,}\b/g, "<id>")
+    .replace(/\b\d+\b/g, "N")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // Grouped counts answer "is this happening a lot"; the raw tail answers "what
 // exactly did it say". Both are needed, neither on its own.
 function summariseLog(text, { limit = 40 } = {}) {
@@ -119,9 +132,22 @@ function summariseLog(text, { limit = 40 } = {}) {
     groups.set(kind.key, entry);
   }
 
+  // What is actually repeating, regardless of which category it belongs to.
+  const kinds = new Map();
+  for (const line of lines) {
+    const key = fingerprintLine(line);
+    const entry = kinds.get(key) || { count: 0, sample: line };
+    entry.count += 1;
+    kinds.set(key, entry);
+  }
+
   return {
     total: lines.length,
     groups: [...groups.values()].sort((a, b) => b.count - a.count),
+    kinds: [...kinds.values()]
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10)
+      .map((entry) => ({ count: entry.count, sample: scrub(entry.sample) })),
     tail: lines.slice(-limit).map(scrub),
   };
 }
@@ -309,8 +335,13 @@ function buildPlainReport(state) {
   }
   lines.push("");
   lines.push(`Ошибки в логе (${state.logs.errors.total} строк в хвосте):`);
+  lines.push("  что повторяется чаще всего:");
+  for (const kind of state.logs.errors.kinds || []) {
+    lines.push(`    ${String(kind.count).padStart(5)} × ${kind.sample.slice(0, 150)}`);
+  }
+  lines.push("  по разделам:");
   for (const group of state.logs.errors.groups) {
-    lines.push(`  ${group.label}: ${group.count} — ${scrub(group.last).slice(0, 160)}`);
+    lines.push(`    ${group.label}: ${group.count}`);
   }
   lines.push("");
   lines.push("Последние строки лога:");

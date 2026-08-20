@@ -1045,12 +1045,14 @@ function renderSystemPage(state) {
     )
     .join("");
 
-  const groupRows = state.logs.errors.groups
+  // Counting by section answered "which area is noisy" but never "what is
+  // actually repeating", and a section total next to one sample line reads as
+  // though that line happened that many times. This counts the thing itself.
+  const groupRows = (state.logs.errors.kinds || [])
     .map(
-      (group) => `<tr>
-        <td class="strong nowrap">${escapeHtml(group.label)}</td>
-        <td class="num">${group.count}</td>
-        <td class="dim">${escapeHtml(SYS.scrub(group.last).slice(0, 180))}</td>
+      (kind) => `<tr>
+        <td class="num strong">${kind.count}</td>
+        <td class="dim">${escapeHtml(String(kind.sample).slice(0, 200))}</td>
       </tr>`,
     )
     .join("");
@@ -1134,7 +1136,7 @@ function renderSystemPage(state) {
         subtitle: `${state.logs.errors.total} строк в хвосте`,
         flush: true,
         body: groupRows
-          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Что</th><th class="num">Раз</th><th>Последняя</th></tr></thead><tbody>${groupRows}</tbody></table></div>`
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="num">Раз</th><th>Что повторяется</th></tr></thead><tbody>${groupRows}</tbody></table></div>`
           : UI.blank("Чисто", "В хвосте лога ошибок нет."),
       })}
       ${UI.card({
