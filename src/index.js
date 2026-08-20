@@ -11735,6 +11735,7 @@ registerAdminDashboard(app, {
   timezone: TIMEZONE,
   adminIds: ADMIN_IDS,
   readData,
+  readArchivedDraws,
   readUserProjectProfiles,
   readProjects,
   readKnownChannels,

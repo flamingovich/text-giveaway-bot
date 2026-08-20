@@ -1,7 +1,12 @@
 const crypto = require("crypto");
 const { DateTime } = require("luxon");
 const { inferReferralOwnerId, normalizeProjectBrandName } = require("./project-profile-bridge");
-const { buildUserProjectActivityIndex, getUserProjectActivity } = require("./admin-user-stats");
+const {
+  buildUserProjectActivityIndex,
+  getUserProjectActivity,
+  listActivityKeys,
+} = require("./admin-user-stats");
+const { collectAllDraws } = require("./admin-draw-source");
 const {
   readSupportChats,
   updateSupportChat,
@@ -165,6 +170,18 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+// One definition of "when did this person join", used by every series on the
+// chart. The old code bucketed the participants line by the draw's publish date
+// and the unique line by the join timestamp, so the two were not comparable.
+// 3% of joins predate participantMeta, hence the fallbacks.
+function participantJoinDay(draw, participantId, timezone) {
+  const meta = draw.participantMeta?.[String(participantId)];
+  return formatStatsDay(
+    meta?.updatedAt || draw.publishAt || draw.createdAt,
+    timezone,
+  );
+}
+
 function formatStatsDay(isoValue, timezone) {
   if (!isoValue) {
     return "";
@@ -177,15 +194,16 @@ function formatStatsDay(isoValue, timezone) {
 }
 
 function buildStats(deps, ownerFilter = "") {
-  const { readData, readUserProjectProfiles, readProjects, timezone } = deps;
-  const data = readData();
+  const { readUserProjectProfiles, readProjects, timezone } = deps;
   const profiles = readUserProjectProfiles() || { users: {} };
   const projects = readProjects() || { projects: [] };
 
-  let draws = asArray(data.draws);
-  if (ownerFilter) {
-    draws = draws.filter((draw) => String(draw.ownerId || "") === ownerFilter);
-  }
+  // Active + archive. Reading only the active document hid three quarters of
+  // the history here, so every total on this page was understated.
+  const allDraws = collectAllDraws(deps);
+  const draws = ownerFilter
+    ? allDraws.filter((draw) => String(draw.ownerId || "") === ownerFilter)
+    : allDraws;
 
   const statusCounts = { draft: 0, scheduled: 0, active: 0, finished: 0 };
   let totalWinners = 0;
@@ -208,7 +226,7 @@ function buildStats(deps, ownerFilter = "") {
   const dayMap = new Map();
   for (let i = 13; i >= 0; i -= 1) {
     const day = DateTime.now().setZone(timezone).minus({ days: i }).toFormat("yyyy-MM-dd");
-    dayMap.set(day, { draws: 0, participants: 0, uniqueJoins: new Set() });
+    dayMap.set(day, { draws: 0, joins: 0, uniqueJoins: new Set() });
   }
 
   for (const draw of draws) {
@@ -216,29 +234,24 @@ function buildStats(deps, ownerFilter = "") {
     if (dayMap.has(created)) {
       dayMap.get(created).draws += 1;
     }
-    const publish = formatStatsDay(draw.publishAt, timezone) || created;
-    if (dayMap.has(publish)) {
-      dayMap.get(publish).participants += asArray(draw.participantIds).length;
-    }
     for (const participantId of asArray(draw.participantIds)) {
-      const joinedAt = draw.participantMeta?.[String(participantId)]?.updatedAt;
-      const joinDay = formatStatsDay(joinedAt, timezone);
+      const joinDay = participantJoinDay(draw, participantId, timezone);
       if (joinDay && dayMap.has(joinDay)) {
         dayMap.get(joinDay).uniqueJoins.add(String(participantId));
+        dayMap.get(joinDay).joins += 1;
       }
     }
   }
 
   const chartLabels = [...dayMap.keys()];
   const chartDraws = chartLabels.map((k) => dayMap.get(k).draws);
-  const chartParticipants = chartLabels.map((k) => dayMap.get(k).participants);
+  const chartParticipants = chartLabels.map((k) => dayMap.get(k).joins);
   const chartUniqueJoins = chartLabels.map((k) => dayMap.get(k).uniqueJoins.size);
 
   const participantFirstJoinDay = new Map();
   for (const draw of draws) {
     for (const participantId of asArray(draw.participantIds)) {
-      const joinedAt = draw.participantMeta?.[String(participantId)]?.updatedAt;
-      const joinDay = formatStatsDay(joinedAt, timezone);
+      const joinDay = participantJoinDay(draw, participantId, timezone);
       if (!joinDay) {
         continue;
       }
@@ -273,7 +286,9 @@ function buildStats(deps, ownerFilter = "") {
     }));
 
   const topOrganizers = new Map();
-  for (const draw of asArray(data.draws)) {
+  // Used to iterate every draw regardless of the selected organizer, so the
+  // table contradicted the rest of the page whenever a filter was applied.
+  for (const draw of draws) {
     const key = String(draw.ownerId || "unknown");
     const row = topOrganizers.get(key) || { draws: 0, referrals: 0 };
     row.draws += 1;
@@ -330,6 +345,26 @@ function collectBrandOptions(projectsList) {
     .sort((a, b) => a.label.localeCompare(b.label, "ru"));
 }
 
+function missingProject(projectId) {
+  return { id: projectId, name: `Проект удалён (${projectId})`, ownerId: null, missing: true };
+}
+
+function emptyProjectRow(userId, userLabel) {
+  return {
+    userId,
+    userLabel,
+    projectId: "",
+    projectName: "Без проекта",
+    brandKey: "",
+    refStatus: "unknown",
+    referralOwnerId: "",
+    referralOwnerLabel: "—",
+    projectOwnerId: "",
+    projectOwnerLabel: "—",
+    hasWallet: false,
+  };
+}
+
 function buildAdminUserProjectRows(deps) {
   const { readUserProjectProfiles, readProjects, readData } = deps;
   const profiles = readUserProjectProfiles();
@@ -341,11 +376,17 @@ function buildAdminUserProjectRows(deps) {
     const userId = userKey;
     const userLabel = labelForUser(userId, profiles);
 
-    for (const [projectId, projectData] of Object.entries(userNode.projects || {})) {
-      const project = projectById.get(projectId);
-      if (!project) {
-        continue;
-      }
+    const projectEntries = Object.entries(userNode.projects || {});
+
+    // A project that was deleted or renamed by the brand migration used to drop
+    // the whole row, hiding 288 users on production. Keep the person and mark
+    // the project instead.
+    if (projectEntries.length === 0) {
+      rows.push(emptyProjectRow(userId, userLabel));
+    }
+
+    for (const [projectId, projectData] of projectEntries) {
+      const project = projectById.get(projectId) || missingProject(projectId);
 
       const isRef = Boolean(projectData.referralVerified);
       const isNonRef = Boolean(projectData.selfReportedNonReferral);
@@ -396,8 +437,52 @@ function formatMoneyTotalsLocal(rub, usd, deps) {
   return parts.length ? parts.join(" · ") : "—";
 }
 
-function buildAdminUserRows(deps, activityIndex) {
-  const projectRows = buildAdminUserProjectRows(deps);
+// Profiles alone do not describe who took part: a person can be a participant
+// or even a winner of a draw whose project they have no profile entry for
+// (39 wins on production). Cover every key the activity index actually holds.
+function addActivityOnlyRows(deps, projectRows, activityIndex) {
+  const known = new Set(projectRows.map((row) => `${row.userId}:${row.projectId}`));
+  const profiles = deps.readUserProjectProfiles();
+  const projectById = new Map(
+    (deps.readProjects().projects || []).map((project) => [project.id, project]),
+  );
+
+  for (const { userId, projectId } of listActivityKeys(activityIndex)) {
+    if (known.has(`${userId}:${projectId}`)) {
+      continue;
+    }
+    known.add(`${userId}:${projectId}`);
+    // Mega giveaways have no project of their own.
+    if (!projectId) {
+      projectRows.push(emptyProjectRow(userId, labelForUser(userId, profiles)));
+      continue;
+    }
+    const project = projectById.get(projectId) || missingProject(projectId);
+    projectRows.push({
+      userId,
+      userLabel: labelForUser(userId, profiles),
+      projectId,
+      projectName: project.name,
+      brandKey: normalizeProjectBrandName(project.name),
+      refStatus: "unknown",
+      referralOwnerId: "",
+      referralOwnerLabel: "—",
+      projectOwnerId: project.ownerId != null ? String(project.ownerId) : "",
+      projectOwnerLabel:
+        project.ownerId != null ? labelForUser(String(project.ownerId), profiles) : "—",
+      hasWallet: false,
+    });
+  }
+
+  return projectRows;
+}
+
+function buildAdminUserRows(deps, activityIndex, prebuiltProjectRows = null) {
+  const projectRows = addActivityOnlyRows(
+    deps,
+    prebuiltProjectRows || buildAdminUserProjectRows(deps),
+    activityIndex,
+  );
   const byUser = new Map();
 
   for (const row of projectRows) {
@@ -1433,9 +1518,12 @@ function registerAdminDashboard(app, deps) {
     const activityIndex = buildUserProjectActivityIndex(deps, profiles, (userId) =>
       labelForUser(userId, profiles),
     );
+    // Built once and handed on: this walks every user profile, and the page used
+    // to walk them twice.
     const projectRows = buildAdminUserProjectRows(deps);
+    const bindingRows = projectRows.filter((row) => row.projectId);
     const allRows = sortAdminUserRows(
-      buildAdminUserRows(deps, activityIndex),
+      buildAdminUserRows(deps, activityIndex, projectRows),
       filters.sort,
       filters.dir,
     );
@@ -1447,9 +1535,9 @@ function registerAdminDashboard(app, deps) {
 
     const stats = {
       usersTotal: Object.keys(profiles.users || {}).length,
-      bindingsTotal: projectRows.length,
-      refsTotal: projectRows.filter((row) => row.refStatus === "ref").length,
-      nonRefsTotal: projectRows.filter((row) => row.refStatus === "non-ref").length,
+      bindingsTotal: bindingRows.length,
+      refsTotal: bindingRows.filter((row) => row.refStatus === "ref").length,
+      nonRefsTotal: bindingRows.filter((row) => row.refStatus === "non-ref").length,
     };
 
     res.type("html").send(

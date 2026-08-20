@@ -1,3 +1,5 @@
+const { collectAllDraws } = require("./admin-draw-source");
+
 function emptyActivityEntry() {
   return {
     participations: 0,
@@ -138,7 +140,6 @@ function formatMoneyTotals(rub, usd, formatRubAmount, formatUsdAmount) {
 
 function buildUserProjectActivityIndex(deps, userProfiles, formatUserLabel) {
   const {
-    readData,
     getUserProfileBundle,
     getDrawParticipantMeta,
     collectDrawParticipantSignals,
@@ -148,7 +149,9 @@ function buildUserProjectActivityIndex(deps, userProfiles, formatUserLabel) {
   } = deps;
 
   const index = new Map();
-  const data = readData();
+  // Active draws only would drop everything archived after two weeks, which on
+  // production is most of the history: see admin-draw-source.js.
+  const draws = collectAllDraws(deps);
 
   function ensure(userId, projectId) {
     const key = activityKey(userId, projectId);
@@ -158,11 +161,11 @@ function buildUserProjectActivityIndex(deps, userProfiles, formatUserLabel) {
     return index.get(key);
   }
 
-  for (const draw of data.draws || []) {
-    const projectId = draw.projectId;
-    if (!projectId) {
-      continue;
-    }
+  for (const draw of draws) {
+    // Mega giveaways carry no projectId, and skipping them dropped their
+    // participants and winners from every per-user number - including the
+    // largest prize on production. Bucket them under an empty project instead.
+    const projectId = draw.projectId || "";
 
     const signals = collectDrawParticipantSignals(draw, userProfiles);
     const drawSeen = new Map();
@@ -294,6 +297,16 @@ function buildFraudDetailText(detail, formatUserLabel) {
   return detail.reason || detail.label;
 }
 
+// Rows used to be enumerated from user profiles alone, so activity recorded
+// against a project the user has no profile entry for was silently dropped -
+// 39 wins on production. Callers list the keys and cover them explicitly.
+function listActivityKeys(activityIndex) {
+  return [...activityIndex.keys()].map((key) => {
+    const separator = key.indexOf(":");
+    return { userId: key.slice(0, separator), projectId: key.slice(separator + 1) };
+  });
+}
+
 function getUserProjectActivity(activityIndex, userId, projectId) {
   const fallback = {
     participations: 0,
@@ -315,4 +328,5 @@ function getUserProjectActivity(activityIndex, userId, projectId) {
 module.exports = {
   buildUserProjectActivityIndex,
   getUserProjectActivity,
+  listActivityKeys,
 };

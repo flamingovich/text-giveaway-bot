@@ -13,7 +13,8 @@
     "migrate:sqlite": "node scripts/migrate-json-to-sqlite.js --apply",
     "migrate:sqlite:dry": "node scripts/migrate-json-to-sqlite.js",
     "backup:data": "bash scripts/backup-data.sh",
-    "recheck-payout-subscriptions": "RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK=1 SKIP_TELEGRAM_POLLING=true node src/index.js"
+    "recheck-payout-subscriptions": "RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK=1 SKIP_TELEGRAM_POLLING=true node src/index.js",
+    "test": "node --test src/*.test.js"
   },
   "keywords": [],
   "author": "",
