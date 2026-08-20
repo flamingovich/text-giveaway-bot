@@ -13,6 +13,7 @@ const { resolveProjectId, resolveUserProjects } = require("./project-identity");
 const { buildDashboardStats } = require("./admin-dashboard-stats");
 const UI = require("./admin-ui");
 const F = require("./admin-format");
+const SYS = require("./admin-system");
 const {
   readSupportChats,
   updateSupportChat,
@@ -1029,6 +1030,144 @@ function renderUserCardPage(deps, card) {
   });
 }
 
+function renderSystemPage(state) {
+  const ok = (value) => (value ? "chip-ok" : "chip-danger");
+  const dur = SYS.formatDuration;
+
+  const overdueRows = state.draws.overdue
+    .map(
+      (draw) => `<tr>
+        <td class="strong">${escapeHtml(draw.prize)}</td>
+        <td class="num">${draw.participants}</td>
+        <td class="num">${draw.lateMinutes} мин</td>
+        <td class="mono">${escapeHtml(draw.id)}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const groupRows = state.logs.errors.groups
+    .map(
+      (group) => `<tr>
+        <td class="strong nowrap">${escapeHtml(group.label)}</td>
+        <td class="num">${group.count}</td>
+        <td class="dim">${escapeHtml(SYS.scrub(group.last).slice(0, 180))}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const docRows = state.storage.docs
+    .map(
+      (doc) => `<tr>
+        <td class="mono">${escapeHtml(doc.key)}</td>
+        <td class="num">${escapeHtml(SYS.formatBytes(doc.size))}</td>
+        <td class="dim nowrap">${escapeHtml(doc.updatedAt || "—")}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const body = `
+    <div class="kpis kpis-4">
+      ${UI.kpi({
+        label: "Планировщик",
+        value: state.scheduler.alive ? "работает" : "молчит",
+        note: `пульс ${dur(state.scheduler.ageMs)} назад · тик #${state.scheduler.tick ?? "?"}`,
+      })}
+      ${UI.kpi({
+        label: "Сторож",
+        value: state.watchdog.installed ? (state.watchdog.healthy ? "норма" : "тревога") : "не стоит",
+        note: state.watchdog.checkedAgeMs !== null ? `проверка ${dur(state.watchdog.checkedAgeMs)} назад` : "проверок не было",
+      })}
+      ${UI.kpi({
+        label: "Аптайм процесса",
+        value: dur(state.process.uptimeMs),
+        note: `${state.process.memoryMb} МБ · node ${escapeHtml(state.process.node)}`,
+      })}
+      ${UI.kpi({
+        label: "Свежий бэкап",
+        value: state.backups.count ? dur(state.backups.ageMs) + " назад" : "нет",
+        note: `${state.backups.count} копий`,
+      })}
+    </div>
+
+    ${UI.card({
+      title: "Отчёт для разработчика",
+      subtitle: "нажмите — текст скопируется, вставьте его в чат",
+      tools: `<button class="btn btn-primary" id="copyReport" type="button">Скопировать отчёт</button>`,
+      body: `<pre class="report" id="reportText">${escapeHtml(SYS.buildPlainReport(state))}</pre>`,
+    })}
+
+    <div style="height:12px"></div>
+    ${UI.card({
+      title: "Розыгрыши, которые встали",
+      subtitle: `активных ${state.draws.active} · завершённых без уведомления ${state.draws.finishedWithoutNotify}`,
+      flush: true,
+      body: overdueRows
+        ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Приз</th><th class="num">Участников</th><th class="num">Просрочен</th><th>ID</th></tr></thead><tbody>${overdueRows}</tbody></table></div>`
+        : UI.blank("Всё вовремя", "Ни один активный розыгрыш не просрочен."),
+    })}
+
+    <div class="grid grid-2" style="margin-top:12px">
+      ${UI.card({
+        title: "Ошибки в логе",
+        subtitle: `${state.logs.errors.total} строк в хвосте`,
+        flush: true,
+        body: groupRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Что</th><th class="num">Раз</th><th>Последняя</th></tr></thead><tbody>${groupRows}</tbody></table></div>`
+          : UI.blank("Чисто", "В хвосте лога ошибок нет."),
+      })}
+      ${UI.card({
+        title: "База",
+        subtitle: SYS.formatBytes(state.storage.dbSize),
+        flush: true,
+        body: docRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Документ</th><th class="num">Размер</th><th>Обновлён (UTC)</th></tr></thead><tbody>${docRows}</tbody></table></div>`
+          : UI.blank("База недоступна"),
+      })}
+    </div>
+
+    <div style="height:12px"></div>
+    ${UI.card({
+      title: "Последние строки лога",
+      subtitle: "секреты вырезаны",
+      body: `<pre class="report">${escapeHtml(state.logs.errors.tail.join("\n") || "пусто")}</pre>`,
+    })}`;
+
+  return UI.renderShell({
+    title: "Система",
+    subtitle: state.scheduler.alive ? "планировщик работает" : "планировщик молчит",
+    active: "system",
+    tools: `<a class="btn" href="/admin/system">Обновить</a>`,
+    body,
+    styles: `
+      .report {
+        margin: 0; padding: 11px 12px; border-radius: 8px; background: var(--rail);
+        border: 1px solid var(--line); color: var(--text-dim);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+        max-height: 420px; overflow: auto;
+      }
+    `,
+    scripts: `<script>
+      const btn = document.getElementById("copyReport");
+      btn?.addEventListener("click", async () => {
+        const text = document.getElementById("reportText").textContent;
+        const was = btn.textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = "Скопировано";
+        } catch {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(document.getElementById("reportText"));
+          sel.removeAllRanges(); sel.addRange(range);
+          btn.textContent = "Выделено — Ctrl+C";
+        }
+        setTimeout(() => { btn.textContent = was; }, 1800);
+      });
+    </script>`,
+  });
+}
+
 function renderAdminNotFound(message) {
   return UI.renderShell({
     title: "Не найдено",
@@ -1755,6 +1894,21 @@ function registerAdminDashboard(app, deps) {
 
   // Faces come from Telegram. The organiser panel had its own avatar route
   // behind its own auth, so the admin panel had none and showed ids instead.
+  app.get("/admin/system", requireAuth, (_req, res) => {
+    try {
+      const state = SYS.collectSystemState({
+        timezone: deps.timezone,
+        buildId: process.env.JOIN_PAGE_BUILD,
+        botUsername: deps.botUsername,
+        schedulerIntervalMs: Number(process.env.CHECK_INTERVAL_MS || 30000),
+      });
+      res.type("html").send(renderSystemPage(state));
+    } catch (error) {
+      console.error("[admin] GET /admin/system:", error);
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать состояние системы."));
+    }
+  });
+
   app.get("/admin/avatar/:userId", requireAuth, async (req, res) => {
     const userId = String(req.params.userId || "").trim();
     const fileId = deps.readUserProjectProfiles()?.users?.[userId]?.meta?.avatarFileId;

@@ -11759,6 +11759,7 @@ registerAdminDashboard(app, {
   readKnownChannels,
   readDelegatedAdmins,
   resolveAvatarUrl: (fileId) => bot.telegram.getFileLink(fileId),
+  botUsername: BOT_USERNAME,
   getUserProfileBundle,
   getDrawParticipantMeta,
   collectDrawParticipantSignals,
