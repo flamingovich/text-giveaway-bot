@@ -636,12 +636,22 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     function parseJoinStartParamClient(raw) {
       const value = String(raw || "").trim();
       if (!value) return { drawId: "", referrerId: null };
-      const sep = "__ref__";
-      const idx = value.indexOf(sep);
-      if (idx < 0) return { drawId: value, referrerId: null };
-      const referrerRaw = value.slice(idx + sep.length).trim();
-      const referrerId = /^\\d+$/.test(referrerRaw) ? Number(referrerRaw) : null;
-      return { drawId: value.slice(0, idx).trim(), referrerId };
+      // Must match parseJoinStartParam on the server, including the mangled
+      // form: links went out with "__ref__" and arrived as plain "ref".
+      var seps = ["-ref-", "__ref__", "_ref_"];
+      for (var i = 0; i < seps.length; i += 1) {
+        var idx = value.indexOf(seps[i]);
+        if (idx > 0) {
+          var referrerRaw = value.slice(idx + seps[i].length).trim();
+          return {
+            drawId: value.slice(0, idx).trim(),
+            referrerId: /^\\d+$/.test(referrerRaw) ? Number(referrerRaw) : null,
+          };
+        }
+      }
+      var mangled = value.match(/^(draw_\\d+_\\d+)ref(\\d+)$/);
+      if (mangled) return { drawId: mangled[1], referrerId: Number(mangled[2]) };
+      return { drawId: value, referrerId: null };
     }
 
     function applyJoinStartParam(raw) {

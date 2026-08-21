@@ -1,20 +1,40 @@
 const REFERRAL_BOOST_PERCENT = 50;
 const REFERRAL_MAX_INVITES = 10;
-const REFERRAL_START_PARAM_SEP = "__ref__";
+// The separator used to be "__ref__", and something between the share sheet and
+// the mini app ate the underscores: links arrived as "…_9431ref8167143042",
+// which matches no draw at all. Real people were turned away from live draws by
+// it. A pair of double underscores is also exactly how Telegram writes
+// underline, so it was never a safe thing to put in a shared link.
+const REFERRAL_START_PARAM_SEP = "-ref-";
+
+// Links already in circulation keep working; a hyphen cannot appear in a draw
+// id, so none of these can split one by accident.
+const REFERRAL_SEPARATORS = [REFERRAL_START_PARAM_SEP, "__ref__", "_ref_"];
+const MANGLED_START_PARAM = /^(draw_\d+_\d+)ref(\d+)$/;
 
 function parseJoinStartParam(raw) {
   const value = String(raw || "").trim();
   if (!value) {
     return { drawId: "", referrerId: null };
   }
-  const idx = value.indexOf(REFERRAL_START_PARAM_SEP);
-  if (idx < 0) {
-    return { drawId: value, referrerId: null };
+
+  for (const separator of REFERRAL_SEPARATORS) {
+    const idx = value.indexOf(separator);
+    if (idx > 0) {
+      const referrerRaw = value.slice(idx + separator.length).trim();
+      return {
+        drawId: value.slice(0, idx).trim(),
+        referrerId: /^\d+$/.test(referrerRaw) ? Number(referrerRaw) : null,
+      };
+    }
   }
-  const drawId = value.slice(0, idx).trim();
-  const referrerRaw = value.slice(idx + REFERRAL_START_PARAM_SEP.length).trim();
-  const referrerId = /^\d+$/.test(referrerRaw) ? Number(referrerRaw) : null;
-  return { drawId, referrerId };
+
+  const mangled = value.match(MANGLED_START_PARAM);
+  if (mangled) {
+    return { drawId: mangled[1], referrerId: Number(mangled[2]) };
+  }
+
+  return { drawId: value, referrerId: null };
 }
 
 function buildJoinReferralStartParam(drawId, referrerId) {
