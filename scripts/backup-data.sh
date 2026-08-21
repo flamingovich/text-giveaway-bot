@@ -10,6 +10,12 @@ APP_DIR="${APP_DIR:-/opt/giveaway-bot}"
 BACKUP_DIR="${BACKUP_DIR:-${APP_DIR}/backups}"
 KEEP_HOURLY="${KEEP_HOURLY:-28}"
 KEEP_DAILY="${KEEP_DAILY:-14}"
+# The images barely change, but the whole folder was re-packed on every run and
+# the retention counted database copies and image archives together - so six
+# near-identical 140 MB archives crowded out the small copies that actually
+# matter. They now have their own schedule and their own limit.
+KEEP_UPLOADS="${KEEP_UPLOADS:-3}"
+UPLOADS_EVERY_HOURS="${UPLOADS_EVERY_HOURS:-24}"
 TIMESTAMP="$(date +%Y%m%d-%H%M)"
 DAILY_STAMP="$(date +%Y%m%d)"
 
@@ -33,11 +39,24 @@ else
 fi
 
 if [[ -d "${UPLOADS_DIR}" ]]; then
-  tar -czf "${BACKUP_DIR}/hourly/uploads-${TIMESTAMP}.tar.gz" -C "${APP_DIR}/data" uploads
-  echo "[$(date -Is)] uploads backup ok: uploads-${TIMESTAMP}.tar.gz"
+  LATEST_UPLOAD="$(ls -1t "${BACKUP_DIR}/hourly"/uploads-*.tar.gz 2>/dev/null | head -1 || true)"
+  UPLOAD_NEEDED=1
+  if [[ -n "${LATEST_UPLOAD}" ]]; then
+    AGE_HOURS=$(( ( $(date +%s) - $(stat -c %Y "${LATEST_UPLOAD}") ) / 3600 ))
+    if (( AGE_HOURS < UPLOADS_EVERY_HOURS )); then
+      UPLOAD_NEEDED=0
+      echo "[$(date -Is)] uploads backup skipped: свежему ${AGE_HOURS} ч"
+    fi
+  fi
+  if (( UPLOAD_NEEDED )); then
+    tar -czf "${BACKUP_DIR}/hourly/uploads-${TIMESTAMP}.tar.gz" -C "${APP_DIR}/data" uploads
+    echo "[$(date -Is)] uploads backup ok: uploads-${TIMESTAMP}.tar.gz"
+  fi
 fi
 
-ls -1t "${BACKUP_DIR}/hourly"/*.db "${BACKUP_DIR}/hourly"/*.tar.gz 2>/dev/null | tail -n +"$((KEEP_HOURLY + 1))" | xargs -r rm -f
+ls -1t "${BACKUP_DIR}/hourly"/*.db 2>/dev/null | tail -n +"$((KEEP_HOURLY + 1))" | xargs -r rm -f
+ls -1t "${BACKUP_DIR}/hourly"/uploads-*.tar.gz 2>/dev/null | tail -n +"$((KEEP_UPLOADS + 1))" | xargs -r rm -f
 ls -1t "${BACKUP_DIR}/daily"/*.db 2>/dev/null | tail -n +"$((KEEP_DAILY + 1))" | xargs -r rm -f
+echo "[$(date -Is)] занято: $(du -sh "${BACKUP_DIR}" | cut -f1)"
 
 echo "[$(date -Is)] backup finished"
