@@ -85,3 +85,39 @@ test("the activity filter hides users who never entered a draw", () => {
   assert.deepEqual(filterAdminUserRows(rows, { activity: "won" }).map((r) => r.userId), ["c"]);
   assert.deepEqual(filterAdminUserRows(rows, { activity: "unpaid" }).map((r) => r.userId), ["c"]);
 });
+
+// A page that throws while rendering passes every unit test around it and
+// still shows a blank screen; only rendering it catches that.
+test("the referrals page renders with real data", () => {
+  const { renderReferralsPage } = require("./admin-dashboard");
+  const { buildReferralStats } = require("./admin-referrals");
+  const stats = buildReferralStats(
+    [
+      {
+        id: "d1",
+        status: "finished",
+        ownerId: 9,
+        prize: "50$",
+        participantIds: [1, 2, 3],
+        winnerIds: [1],
+        drawReferrals: { 1: [2, 3] },
+        createdAt: "2026-08-01T00:00:00.000Z",
+      },
+    ],
+    { users: { 1: { meta: { username: "alpha" } }, 9: { meta: { username: "org" } } } },
+  );
+
+  const html = renderReferralsPage(stats);
+  assert.match(html, /Приглашения/);
+  assert.match(html, /@alpha/);
+  assert.match(html, /на розыгрыш не влияет/, "the page must not repeat the +50% claim");
+  assert.ok(html.includes('href="/admin/referrals"'), "the nav links to itself");
+});
+
+test("the referrals page renders when there is nothing yet", () => {
+  const { renderReferralsPage } = require("./admin-dashboard");
+  const { buildReferralStats } = require("./admin-referrals");
+  const html = renderReferralsPage(buildReferralStats([], {}));
+  assert.match(html, /Приглашения/);
+  assert.ok(!html.includes("undefined"));
+});

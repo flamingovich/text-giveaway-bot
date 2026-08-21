@@ -14,6 +14,7 @@ const { buildDashboardStats } = require("./admin-dashboard-stats");
 const UI = require("./admin-ui");
 const F = require("./admin-format");
 const SYS = require("./admin-system");
+const REFERRALS = require("./admin-referrals");
 const {
   readSupportChats,
   updateSupportChat,
@@ -1030,6 +1031,112 @@ function renderUserCardPage(deps, card) {
   });
 }
 
+function renderReferralsPage(stats) {
+  const t = stats.totals;
+  const w = stats.winners;
+
+  const inviterRows = stats.topInviters
+    .map(
+      (row, index) => `<tr>
+        <td class="num dim">${index + 1}</td>
+        <td>${UI.person(row.identity, { href: `/admin/users/${encodeURIComponent(row.identity.userId)}` })}</td>
+        <td class="num strong">${row.invites}</td>
+        <td class="num dim">${row.draws}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const organizerRows = stats.byOrganizer
+    .map(
+      (row) => `<tr>
+        <td>${UI.person(row.identity)}</td>
+        <td class="num strong">${row.invites}</td>
+        <td class="num dim">${row.draws}</td>
+        <td class="num">${row.perDraw}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const winnerRows = w.rows
+    .map(
+      (row) => `<tr>
+        <td>${UI.person(row.identity)}</td>
+        <td class="strong">${escapeHtml(String(row.prize))}</td>
+        <td class="num">${row.invites}</td>
+        <td class="num dim">${row.participants} / ${row.places}</td>
+      </tr>`,
+    )
+    .join("");
+
+  // The mini app tells people an invite is worth "+50% к шансу". The draw does
+  // not work that way - winners are picked uniformly and referrals are never
+  // consulted - so putting the two rates side by side is the honest thing for
+  // this page to do.
+  const verdict =
+    w.inviterEntries === 0
+      ? "Приглашавшие ещё ни разу не участвовали в завершённых розыгрышах."
+      : `Приглашавшие выигрывают в <b>${w.inviterWinRate}%</b> случаев, все участники — в <b>${w.averageWinRate}%</b>. Обещанный в мини-аппе бонус «+50% к шансу» на розыгрыш не влияет: победители выбираются равновероятно.`;
+
+  const body = `
+    <div class="kpis kpis-4">
+      ${UI.kpi({ label: "Приглашений", value: t.invites, lead: true, note: `${t.sharePercent}% всех участий` })}
+      ${UI.kpi({ label: "Приглашено людей", value: t.invitedPeople })}
+      ${UI.kpi({ label: "Кто приглашал", value: t.inviters })}
+      ${UI.kpi({ label: "Розыгрышей с приглашениями", value: `${t.drawsWithReferrals} из ${t.drawsTotal}` })}
+    </div>
+
+    <div class="grid grid-2" style="margin-top:12px">
+      ${UI.card({
+        title: "Кто приглашает",
+        subtitle: "по числу приведённых участников",
+        flush: true,
+        body: inviterRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="num">#</th><th>Человек</th><th class="num">Привёл</th><th class="num">Розыгрышей</th></tr></thead><tbody>${inviterRows}</tbody></table></div>`
+          : UI.blank("Пусто", "Приглашений пока не было."),
+      })}
+      ${UI.card({
+        title: "По организаторам",
+        subtitle: "у кого механика работает лучше",
+        flush: true,
+        body: organizerRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Организатор</th><th class="num">Приглашений</th><th class="num">Розыгрышей</th><th class="num">На розыгрыш</th></tr></thead><tbody>${organizerRows}</tbody></table></div>`
+          : UI.blank("Пусто", "Приглашений пока не было."),
+      })}
+    </div>
+
+    <div class="grid grid-2" style="margin-top:12px">
+      ${UI.card({
+        title: "Сколько приводит один человек",
+        body: UI.bars(stats.distribution.map((row) => ({ label: row.label, value: row.count }))),
+      })}
+      ${UI.card({
+        title: "По месяцам",
+        body: stats.months.length
+          ? UI.bars(stats.months.map((row) => ({ label: row.month, value: row.invites })))
+          : UI.blank("Пусто", "Данных пока нет."),
+      })}
+    </div>
+
+    <div style="margin-top:12px">
+      ${UI.card({
+        title: "Влияет ли приглашение на выигрыш",
+        subtitle: `${w.whoInvited} из ${w.total} победителей приглашали в том же розыгрыше`,
+        body: `<p class="dim" style="margin:0 0 10px">${verdict}</p>${
+          winnerRows
+            ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Победитель</th><th>Приз</th><th class="num">Пригласил</th><th class="num">Участников / мест</th></tr></thead><tbody>${winnerRows}</tbody></table></div>`
+            : ""
+        }`,
+      })}
+    </div>`;
+
+  return UI.renderShell({
+    title: "Приглашения",
+    subtitle: `${t.invites} приглашений от ${t.inviters} человек`,
+    active: "referrals",
+    body,
+  });
+}
+
 function renderSystemPage(state) {
   const ok = (value) => (value ? "chip-ok" : "chip-danger");
   const dur = SYS.formatDuration;
@@ -1920,6 +2027,17 @@ function registerAdminDashboard(app, deps) {
 
   // Faces come from Telegram. The organiser panel had its own avatar route
   // behind its own auth, so the admin panel had none and showed ids instead.
+  app.get("/admin/referrals", requireAuth, (_req, res) => {
+    try {
+      const draws = collectAllDraws(deps);
+      const stats = REFERRALS.buildReferralStats(draws, deps.readUserProjectProfiles());
+      res.type("html").send(renderReferralsPage(stats));
+    } catch (error) {
+      console.error("[admin] GET /admin/referrals:", error);
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать статистику приглашений."));
+    }
+  });
+
   app.get("/admin/system", requireAuth, (_req, res) => {
     try {
       const state = SYS.collectSystemState({
@@ -2128,7 +2246,9 @@ function registerAdminDashboard(app, deps) {
 module.exports = {
   registerAdminDashboard,
   hashPassword,
-  // Exported for tests: these decide what the users page actually shows.
+  // Exported for tests: these decide what the users page actually shows, and
+  // a page that throws while rendering is only caught by rendering it.
+  renderReferralsPage,
   buildAdminUserProjectRows,
   buildAdminUserRows,
   sortAdminUserRows,

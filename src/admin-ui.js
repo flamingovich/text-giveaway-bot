@@ -20,6 +20,8 @@ const ICONS = {
     '<path d="M20 15.5A2.5 2.5 0 0 1 17.5 18H8l-4 3V6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5z"/>',
   system:
     '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  referrals:
+    '<circle cx="8" cy="7" r="3"/><path d="M2.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 5l4 4-4 4"/><path d="M20 9h-6"/>',
   logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/>',
 };
 
@@ -34,6 +36,7 @@ function icon(name) {
 const NAV = [
   { id: "stats", href: "/admin/dashboard", label: "Статистика", icon: "stats" },
   { id: "users", href: "/admin/users", label: "Пользователи", icon: "users" },
+  { id: "referrals", href: "/admin/referrals", label: "Приглашения", icon: "referrals" },
   { id: "support", href: "/admin/support", label: "Поддержка", icon: "support" },
   { id: "system", href: "/admin/system", label: "Система", icon: "system" },
 ];
