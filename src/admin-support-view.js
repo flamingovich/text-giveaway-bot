@@ -59,29 +59,7 @@ function describeChat(chat) {
   };
 }
 
-const CHAT_TABS = [
-  { id: "attention", label: "Требуют внимания" },
-  { id: "open", label: "Живые" },
-  { id: "errors", label: "Со сбоями AI" },
-  { id: "closed", label: "Закрытые" },
-  { id: "all", label: "Все" },
-];
 
-function matchesTab(chat, tab) {
-  if (tab === "attention") {
-    return chat.needsAttention;
-  }
-  if (tab === "open") {
-    return !chat.sessionClosed;
-  }
-  if (tab === "errors") {
-    return chat.flags.some((flag) => flag.key === "hadError" || flag.key === "endedOnError");
-  }
-  if (tab === "closed") {
-    return Boolean(chat.sessionClosed);
-  }
-  return true;
-}
 
 function matchesQuery(chat, query) {
   const needle = String(query || "").trim().toLowerCase();
@@ -112,21 +90,19 @@ function summariseChats(chats) {
   };
 }
 
-function buildSupportView(chats, { tab = "attention", query = "", page = 1, pageSize = 50 } = {}) {
+// One list, newest first. The tabs that used to sit on top defaulted to
+// "требуют внимания", which is six conversations out of a hundred and forty
+// nine - so the page looked empty and the other 143 were behind a click nobody
+// knew to make. The flags stay on the rows, where they cost nothing to read.
+function buildSupportView(chats, { query = "", page = 1, pageSize = 50 } = {}) {
   const described = chats.map(describeChat);
   const summary = summariseChats(described);
 
-  const activeTab = CHAT_TABS.some((item) => item.id === tab) ? tab : "attention";
   const filtered = described
-    .filter((chat) => matchesTab(chat, activeTab))
     .filter((chat) => matchesQuery(chat, query))
-    .sort((left, right) => {
-      // Worst first inside the tab, then most recent.
-      if (right.severity !== left.severity) {
-        return right.severity - left.severity;
-      }
-      return String(right.lastMessageAt || "").localeCompare(String(left.lastMessageAt || ""));
-    });
+    .sort((left, right) =>
+      String(right.lastMessageAt || "").localeCompare(String(left.lastMessageAt || "")),
+    );
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -134,8 +110,6 @@ function buildSupportView(chats, { tab = "attention", query = "", page = 1, page
 
   return {
     summary,
-    tabs: CHAT_TABS,
-    activeTab,
     query,
     page: safePage,
     totalPages,
@@ -148,7 +122,6 @@ module.exports = {
   describeChat,
   buildSupportView,
   summariseChats,
-  CHAT_TABS,
   CHAT_FLAGS,
   LONG_CONVERSATION_MESSAGES,
 };

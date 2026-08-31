@@ -1860,10 +1860,8 @@ function formatCardDate(iso, timezone) {
 
 function supportHref(view, overrides = {}) {
   const query = new URLSearchParams();
-  const tab = overrides.tab ?? view.activeTab;
   const q = overrides.q ?? view.query;
   const page = overrides.page ?? 1;
-  if (tab && tab !== "attention") query.set("tab", tab);
   if (q) query.set("q", q);
   if (page > 1) query.set("page", String(page));
   const text = query.toString();
@@ -1871,23 +1869,6 @@ function supportHref(view, overrides = {}) {
 }
 
 function renderSupportAside(view, selectedId = "") {
-  const counts = {
-    attention: view.summary.attention,
-    open: view.summary.open,
-    errors: view.summary.withErrors,
-    closed: view.summary.total - view.summary.open,
-    all: view.summary.total,
-  };
-
-  const tabs = UI.segmented(
-    view.tabs.map((tab) => ({
-      label: tab.label,
-      href: `/admin/support${supportHref(view, { tab: tab.id })}`,
-      active: tab.id === view.activeTab,
-      count: counts[tab.id] ?? 0,
-    })),
-  );
-
   const items = view.rows
     .map((chat) => {
       const flags = chat.flags
@@ -1929,9 +1910,7 @@ function renderSupportAside(view, selectedId = "") {
 
   return `<aside class="conv-list">
     <div class="conv-head">
-      ${tabs}
       <form method="get" action="/admin/support" class="conv-search">
-        <input type="hidden" name="tab" value="${escapeHtml(view.activeTab)}" />
         <input type="search" name="q" value="${escapeHtml(view.query)}" placeholder="Поиск по переписке, имени, ID…" />
       </form>
     </div>
@@ -2366,7 +2345,6 @@ function registerAdminDashboard(app, deps) {
     });
 
     const view = buildSupportView(chats, {
-      tab: String(req.query.tab || "attention"),
       query: String(req.query.q || ""),
       page: Math.max(1, Number.parseInt(String(req.query.page || "1"), 10) || 1),
     });

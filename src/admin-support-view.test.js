@@ -60,30 +60,26 @@ test("a long conversation is marked, since the bot tends to circle", () => {
   assert.ok(flagKeys(describeChat(chat({ transcript }))).includes("long"));
 });
 
-test("the attention tab keeps only what a person should look at", () => {
-  const view = buildSupportView(
-    [
-      chat({ chatId: "quiet" }),
-      chat({ chatId: "unanswered", transcript: [{ role: "user", content: "?" }] }),
-      chat({ chatId: "closed", sessionClosed: true }),
-    ],
-    { tab: "attention" },
-  );
+// The list used to open on a "требуют внимания" filter that showed six
+// conversations out of a hundred and forty nine, so the page read as empty and
+// the rest were behind a click nobody knew to make. Everything is shown now.
+test("every conversation is listed, closed ones included", () => {
+  const view = buildSupportView([
+    chat({ chatId: "quiet" }),
+    chat({ chatId: "unanswered", transcript: [{ role: "user", content: "?" }] }),
+    chat({ chatId: "closed", sessionClosed: true }),
+  ]);
 
-  assert.deepEqual(view.rows.map((row) => row.chatId), ["unanswered"]);
+  assert.equal(view.rows.length, 3);
   assert.equal(view.summary.total, 3);
-  assert.equal(view.summary.attention, 1);
+  assert.equal(view.summary.attention, 1, "счётчики остаются — они видны в шапке");
   assert.equal(view.summary.open, 2);
 });
 
-test("closed conversations do not bury the live ones", () => {
-  const chats = [
-    ...Array.from({ length: 10 }, (_, i) => chat({ chatId: `closed_${i}`, sessionClosed: true })),
-    chat({ chatId: "live" }),
-  ];
-
-  const view = buildSupportView(chats, { tab: "open" });
-  assert.deepEqual(view.rows.map((row) => row.chatId), ["live"]);
+test("the flags stay on the rows even though the filters are gone", () => {
+  const view = buildSupportView([chat({ chatId: "unanswered", transcript: [{ role: "user", content: "?" }] })]);
+  assert.ok(view.rows[0].flags.some((flag) => flag.key === "awaitingReply"));
+  assert.equal(view.rows[0].needsAttention, true);
 });
 
 test("search looks inside the transcript, not only at the name", () => {
@@ -92,30 +88,29 @@ test("search looks inside the transcript, not only at the name", () => {
     chat({ chatId: "b", transcript: [{ role: "user", content: "как участвовать" }] }),
   ];
 
-  const view = buildSupportView(chats, { tab: "all", query: "выплата" });
+  const view = buildSupportView(chats, { query: "выплата" });
   assert.deepEqual(view.rows.map((row) => row.chatId), ["a"]);
 });
 
 test("search matches a telegram id", () => {
-  const view = buildSupportView([chat({ chatId: "987654" })], { tab: "all", query: "9876" });
+  const view = buildSupportView([chat({ chatId: "987654" })], { query: "9876" });
   assert.equal(view.rows.length, 1);
 });
 
-test("worst first, then most recent", () => {
-  const view = buildSupportView(
-    [
-      chat({ chatId: "old_unanswered", lastMessageAt: "2026-01-01", transcript: [{ role: "user", content: "?" }] }),
-      chat({ chatId: "recent_fine", lastMessageAt: "2026-08-20" }),
-    ],
-    { tab: "all" },
-  );
+// A chat list is read newest-first; an unanswered conversation from January is
+// not more interesting than one from this morning.
+test("newest first, whatever state it is in", () => {
+  const view = buildSupportView([
+    chat({ chatId: "old_unanswered", lastMessageAt: "2026-01-01", transcript: [{ role: "user", content: "?" }] }),
+    chat({ chatId: "recent_fine", lastMessageAt: "2026-08-20" }),
+  ]);
 
-  assert.deepEqual(view.rows.map((row) => row.chatId), ["old_unanswered", "recent_fine"]);
+  assert.deepEqual(view.rows.map((row) => row.chatId), ["recent_fine", "old_unanswered"]);
 });
 
 test("pages instead of printing everything at once", () => {
   const chats = Array.from({ length: 120 }, (_, i) => chat({ chatId: `c${i}` }));
-  const view = buildSupportView(chats, { tab: "all", page: 2, pageSize: 50 });
+  const view = buildSupportView(chats, { page: 2, pageSize: 50 });
 
   assert.equal(view.rows.length, 50);
   assert.equal(view.totalPages, 3);
@@ -123,7 +118,7 @@ test("pages instead of printing everything at once", () => {
 });
 
 test("a page beyond the end falls back to the last one", () => {
-  const view = buildSupportView([chat()], { tab: "all", page: 99 });
+  const view = buildSupportView([chat()], { page: 99 });
   assert.equal(view.page, 1);
   assert.equal(view.rows.length, 1);
 });
