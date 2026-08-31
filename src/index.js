@@ -49,6 +49,11 @@ const {
   getDrawOwnerId,
   migratePokerdomLegacyProfiles,
 } = require("./project-profile-bridge");
+const { resolveProjectId } = require("./project-identity");
+const {
+  toProfilePatch: toAttributionPatch,
+  needsAttribution,
+} = require("./project-attribution");
 const {
   tgCustomEmojiHtml,
   buildDrawPostCaptionPayload,
@@ -5139,6 +5144,37 @@ function upsertDrawParticipantMeta(draw, userId, participationMeta = {}) {
   draw.participantMeta[userKey] = next;
 }
 
+// Which admin brought this person to this project, written down at the moment
+// it happens. Inferring it later means reading a history that keeps moving into
+// the archive, and an answer that moves is not a status anyone can act on.
+function recordProjectFirstTouch(draw, userId) {
+  try {
+    const projectId = resolveProjectId(draw.projectId) || draw.projectId;
+    const ownerId = getDrawOwnerId(draw);
+    if (!projectId || !ownerId) {
+      return;
+    }
+    const profiles = readUserProjectProfiles();
+    const { projectData } = getUserProfileBundle(profiles, userId, projectId);
+    if (!needsAttribution(projectData)) {
+      return;
+    }
+    setUserProjectProfile(
+      userId,
+      projectId,
+      toAttributionPatch({
+        ownerId: String(ownerId),
+        at: Date.now(),
+        source: "participant",
+        drawId: String(draw.id),
+      }),
+    );
+  } catch (error) {
+    // Bookkeeping must never be the reason a join fails.
+    console.warn(`[attribution] не записана для ${userId}: ${error.message}`);
+  }
+}
+
 async function addUserToDraw(drawId, userId, participationMeta = null) {
   const data = readData();
   const draw = data.draws.find((item) => item.id === drawId);
@@ -5166,6 +5202,8 @@ async function addUserToDraw(drawId, userId, participationMeta = null) {
   // Joins are the hottest writer: a plain full-document write here discards the
   // post counter and winner notifications saved since this snapshot was read.
   writeDataPreservingLiveWinners(data);
+
+  recordProjectFirstTouch(draw, userId);
 
   scheduleDrawPostUpdate(draw.id, false);
   void enrichUserAvatar(userId);

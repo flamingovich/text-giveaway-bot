@@ -909,6 +909,13 @@ function renderUserCardPage(deps, card) {
       (project) => `<tr>
         <td class="strong">${escapeHtml(project.projectName)}</td>
         <td class="dim">${project.ownerId ? escapeHtml(displayNameForUser(String(project.ownerId), allProfiles)) : "—"}</td>
+        <td class="dim">${
+          project.firstTouchOwnerId
+            ? `${escapeHtml(displayNameForUser(String(project.firstTouchOwnerId), allProfiles))}<div class="dim" style="font-size:11px">${escapeHtml(
+                F.formatRelative(project.firstTouchAt, tz),
+              )}${project.firstTouchSource === "draw" ? " · примерно" : ""}</div>`
+            : "—"
+        }</td>
         <td>${renderRefStatusBadge(project.refStatus)}</td>
         <td>${escapeHtml(project.nickname || project.accountId || "—")}</td>
         <td class="mono">${escapeHtml(project.wallet || "—")}</td>
@@ -962,7 +969,7 @@ function renderUserCardPage(deps, card) {
     ${tableCard(
       "Проекты",
       `${card.projects.length} привязок`,
-      "<th>Проект</th><th>Организатор</th><th>Статус</th><th>Ник / ID аккаунта</th><th>Кошелёк</th><th>Обновлён</th>",
+      "<th>Проект</th><th>Организатор</th><th>Привёл первым</th><th>Статус</th><th>Ник / ID аккаунта</th><th>Кошелёк</th><th>Обновлён</th>",
       projectRows,
       "Нет привязок к проектам",
     )}

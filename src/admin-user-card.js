@@ -155,6 +155,11 @@ function buildUserCard(deps, userId, options = {}) {
       : projectData.selfReportedNonReferral
         ? "non-ref"
         : "unknown",
+    // Who brought this person to this project, settled once at their first
+    // join rather than re-inferred from a history that keeps moving.
+    firstTouchOwnerId: projectData.firstTouchOwnerId ?? null,
+    firstTouchAt: projectData.firstTouchAt || "",
+    firstTouchSource: projectData.firstTouchSource || "",
     nickname: projectData.referralNickname || "",
     accountId: projectData.projectAccountId || "",
     wallet: projectData.trc20Address || "",
