@@ -60,6 +60,10 @@ function isWorthAnotherModel(error) {
     return false;
   }
   return (
+    // A model that has been retired or is temporarily unrouteable looks like a
+    // configuration error but is not one: the chain exists so the next model
+    // answers instead of the bot going quiet.
+    /not a valid model|model not found|no endpoints found|no allowed providers/.test(message) ||
     /429|too many requests|rate.?limit/.test(message) ||
     /timeout|timed out|aborted/.test(message) ||
     /50\d|bad gateway|service unavailable|overloaded|provider returned error/.test(message) ||

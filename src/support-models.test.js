@@ -54,3 +54,15 @@ test("the chain crosses providers so one outage cannot take it all", () => {
   const providers = new Set(DEFAULT_MODEL_CHAIN.map((model) => model.split("/")[0]));
   assert.ok(providers.size >= 2, "иначе лимит одного провайдера убьёт всю цепочку");
 });
+
+// A model retired by OpenRouter reads like a config error but is not one: if the
+// chain stopped there, the bot would go silent for everybody at once.
+test("a retired or unrouteable model moves on to the next", () => {
+  for (const message of [
+    "not/a-real-model-xyz is not a valid model ID",
+    "No endpoints found for anthropic/claude-haiku-4.5",
+    "model not found",
+  ]) {
+    assert.equal(isWorthAnotherModel(new Error(message)), true, message);
+  }
+});
