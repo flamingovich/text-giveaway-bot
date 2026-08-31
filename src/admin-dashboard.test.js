@@ -121,3 +121,56 @@ test("the referrals page renders when there is nothing yet", () => {
   assert.match(html, /Приглашения/);
   assert.ok(!html.includes("undefined"));
 });
+
+test("the projects page renders with real-shaped data", () => {
+  const { renderProjectsPage } = require("./admin-dashboard");
+  const { buildProjectStats } = require("./admin-projects");
+  const projects = [
+    { id: "brand_a_1", name: "Alpha", ownerId: 1 },
+    { id: "brand_a_2", name: "Alpha", ownerId: 2 },
+  ];
+  const stats = buildProjectStats(
+    [
+      { id: "d1", projectId: "brand_a_1", ownerId: 1, participantIds: [10, 11] },
+      { id: "d2", projectId: "brand_a_2", ownerId: 2, participantIds: [11, 12] },
+    ],
+    projects,
+    {
+      users: {
+        1: { meta: { username: "one" } },
+        2: { meta: { username: "two" } },
+        11: { meta: {}, projects: { brand_a_1: { firstTouchOwnerId: 1 } } },
+      },
+    },
+  );
+
+  const html = renderProjectsPage(stats);
+  assert.match(html, /Проекты/);
+  assert.match(html, /@one/);
+  assert.ok(html.includes('href="/admin/projects"'), "меню ссылается на себя");
+  assert.match(html, /не складываются/, "предупреждение о пересечении обязано быть на виду");
+  assert.ok(!html.includes("undefined"));
+});
+
+// Grouped, never stacked: stacking unique people would claim a total that does
+// not exist, since the same person appears under two organisers.
+test("the projects chart never stacks unique people", () => {
+  const { renderProjectsPage } = require("./admin-dashboard");
+  const { buildProjectStats } = require("./admin-projects");
+  const html = renderProjectsPage(
+    buildProjectStats(
+      [{ id: "d1", projectId: "p", ownerId: 1, participantIds: [1] }],
+      [{ id: "p", name: "P", ownerId: 1 }],
+      { users: {} },
+    ),
+  );
+  assert.ok(!/stacked:\s*true/.test(html), "столбцы не должны складываться");
+});
+
+test("the projects page renders when there is nothing yet", () => {
+  const { renderProjectsPage } = require("./admin-dashboard");
+  const { buildProjectStats } = require("./admin-projects");
+  const html = renderProjectsPage(buildProjectStats([], [], {}));
+  assert.match(html, /Проекты/);
+  assert.ok(!html.includes("undefined"));
+});

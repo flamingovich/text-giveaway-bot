@@ -15,6 +15,7 @@ const UI = require("./admin-ui");
 const F = require("./admin-format");
 const SYS = require("./admin-system");
 const REFERRALS = require("./admin-referrals");
+const PROJECT_STATS = require("./admin-projects");
 const {
   readSupportChats,
   updateSupportChat,
@@ -1038,6 +1039,213 @@ function renderUserCardPage(deps, card) {
   });
 }
 
+// Colours are the three that survive the palette validator together on this
+// surface (lightness band, chroma, CVD separation and contrast, all pairs). A
+// fourth categorical hue fails, so everyone past the top three folds into a
+// neutral "Прочие" rather than getting a generated colour.
+const PROJECT_SERIES = ["#4f8cff", "#2f9d6e", "#cf7a22"];
+const PROJECT_REST = "#6b7789";
+
+function renderProjectsPage(stats) {
+  const t = stats.totals;
+  const topOwners = stats.owners.slice(0, 3);
+  const topIds = new Set(topOwners.map((owner) => owner.ownerId));
+  const hasRest = stats.owners.length > topOwners.length;
+
+  const labels = stats.brands.map((row) => row.brand);
+  const seriesFor = (ownerId) =>
+    labels.map((brand) => {
+      const cell = stats.cells.find((row) => row.brand === brand && row.ownerId === ownerId);
+      return cell ? cell.people : 0;
+    });
+  const restSeries = labels.map((brand) =>
+    stats.cells
+      .filter((row) => row.brand === brand && !topIds.has(row.ownerId))
+      .reduce((sum, row) => sum + row.people, 0),
+  );
+
+  const datasets = topOwners.map((owner, index) => ({
+    label: owner.identity.handle || owner.identity.title,
+    data: seriesFor(owner.ownerId),
+    backgroundColor: PROJECT_SERIES[index],
+    borderRadius: 4,
+    borderSkipped: false,
+  }));
+  if (hasRest && restSeries.some((value) => value > 0)) {
+    datasets.push({
+      label: "Прочие",
+      data: restSeries,
+      backgroundColor: PROJECT_REST,
+      borderRadius: 4,
+      borderSkipped: false,
+    });
+  }
+
+  // Credit for bringing people in, per organiser - one series, so no legend and
+  // the value sits on the bar instead.
+  const creditLabels = stats.owners.map((owner) => owner.identity.handle || owner.identity.title);
+  const creditValues = stats.owners.map((owner) =>
+    stats.cells.filter((row) => row.ownerId === owner.ownerId).reduce((sum, row) => sum + row.attributed, 0),
+  );
+
+  const brandRows = stats.brands
+    .map(
+      (row) => `<tr>
+        <td class="strong">${escapeHtml(row.brand)}</td>
+        <td class="num">${row.people}</td>
+        <td class="num dim">${row.entries}</td>
+        <td class="num dim">${row.draws}</td>
+        <td class="num dim">${row.owners}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const cellRows = stats.cells
+    .filter((row) => row.people > 0)
+    .sort((left, right) => right.people - left.people)
+    .map((row) => {
+      const owner = stats.owners.find((item) => item.ownerId === row.ownerId);
+      return `<tr>
+        <td>${owner ? UI.person(owner.identity) : escapeHtml(row.ownerId)}</td>
+        <td class="strong">${escapeHtml(row.brand)}</td>
+        <td class="num">${row.people}</td>
+        <td class="num dim">${row.entries}</td>
+        <td class="num dim">${row.draws}</td>
+        <td class="num">${row.attributed}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const spreadBars = (rows, forms) =>
+    UI.bars(
+      rows.map((row) => ({
+        label: `${row.count} ${F.plural(row.count, ...forms)}`,
+        value: row.people,
+        display: `${row.people}`,
+      })),
+    );
+
+  const payload = JSON.stringify({ labels, datasets, creditLabels, creditValues });
+
+  const body = `
+    <div class="kpis kpis-4">
+      ${UI.kpi({ label: "Людей всего", value: t.people, lead: true, note: "уникальных за всю историю" })}
+      ${UI.kpi({ label: "Привязок «человек + проект»", value: t.bindings })}
+      ${UI.kpi({
+        label: "Ходят в несколько проектов",
+        value: t.sharedPeople,
+        note: t.people ? `${Math.round((t.sharedPeople / t.people) * 100)}% базы` : "",
+      })}
+      ${UI.kpi({ label: "С отметкой «привёл первым»", value: t.attributed })}
+    </div>
+
+    <div style="margin-top:12px">
+      ${UI.card({
+        title: "Участники по проектам и организаторам",
+        subtitle: "уникальные люди; столбцы не складываются — четверть базы ходит в несколько проектов",
+        body: `<div class="chart chart-tall"><canvas id="projectsChart"></canvas></div>`,
+      })}
+    </div>
+
+    <div class="grid grid-2" style="margin-top:12px">
+      ${UI.card({
+        title: "Кто привёл первым",
+        subtitle: "по записи в профиле, а не по пересчёту",
+        body: `<div class="chart"><canvas id="creditChart"></canvas></div>`,
+      })}
+      ${UI.card({
+        title: "Насколько аудитории пересекаются",
+        subtitle: "в скольких проектах участвует один человек",
+        body:
+          spreadBars(stats.spreadByProject, ["проект", "проекта", "проектов"]) +
+          `<div class="dim" style="margin-top:12px;font-size:12px">У скольких организаторов</div>` +
+          spreadBars(stats.spreadByOwner, ["организатор", "организатора", "организаторов"]),
+      })}
+    </div>
+
+    <div class="grid grid-2" style="margin-top:12px">
+      ${UI.card({
+        title: "Проекты",
+        subtitle: "бренд целиком, по всем организаторам",
+        flush: true,
+        body: brandRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Проект</th><th class="num">Людей</th><th class="num">Участий</th><th class="num">Розыгрышей</th><th class="num">Организаторов</th></tr></thead><tbody>${brandRows}</tbody></table></div>`
+          : UI.blank("Пусто", "Данных пока нет."),
+      })}
+      ${UI.card({
+        title: "Проект каждого организатора",
+        subtitle: "отдельная связка «организатор + проект»",
+        flush: true,
+        body: cellRows
+          ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Организатор</th><th>Проект</th><th class="num">Людей</th><th class="num">Участий</th><th class="num">Розыгрышей</th><th class="num">Привёл</th></tr></thead><tbody>${cellRows}</tbody></table></div>`
+          : UI.blank("Пусто", "Данных пока нет."),
+      })}
+    </div>`;
+
+  const scripts = `
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const P = ${payload};
+    Chart.defaults.color = "#6b7789";
+    Chart.defaults.font.size = 11;
+    Chart.defaults.font.family = "ui-sans-serif, -apple-system, Segoe UI, Roboto, sans-serif";
+    Chart.defaults.plugins.tooltip.backgroundColor = "#161d2b";
+    Chart.defaults.plugins.tooltip.borderColor = "#1f2836";
+    Chart.defaults.plugins.tooltip.borderWidth = 1;
+    Chart.defaults.plugins.tooltip.padding = 10;
+
+    new Chart(document.getElementById("projectsChart"), {
+      type: "bar",
+      data: { labels: P.labels, datasets: P.datasets },
+      options: {
+        indexAxis: "y",
+        responsive: true, maintainAspectRatio: false,
+        // Grouped, not stacked: these are unique people and the same person can
+        // appear under two organisers, so a stack would claim a false total.
+        interaction: { mode: "nearest", intersect: true },
+        plugins: {
+          legend: { display: true, position: "bottom", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: "circle", padding: 14 } },
+          tooltip: { callbacks: { label: (c) => c.dataset.label + ": " + c.parsed.x + " чел." } },
+        },
+        scales: {
+          x: { beginAtZero: true, grid: { color: "rgba(148,163,184,.08)" }, border: { display: false } },
+          y: { grid: { display: false }, border: { color: "#1f2836" } },
+        },
+      },
+    });
+
+    new Chart(document.getElementById("creditChart"), {
+      type: "bar",
+      data: {
+        labels: P.creditLabels,
+        datasets: [{ label: "Привёл первым", data: P.creditValues, backgroundColor: "#4f8cff", borderRadius: 4, borderSkipped: false }],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (c) => c.parsed.x + " привязок" } },
+        },
+        scales: {
+          x: { beginAtZero: true, grid: { color: "rgba(148,163,184,.08)" }, border: { display: false } },
+          y: { grid: { display: false }, border: { color: "#1f2836" } },
+        },
+      },
+    });
+  </script>`;
+
+  return UI.renderShell({
+    title: "Проекты",
+    subtitle: `${t.people} человек · ${t.projects} проекта · ${t.owners} организатора`,
+    active: "projects",
+    body,
+    styles: `.chart { position: relative; height: 220px; margin-top: 6px; }
+             .chart-tall { height: 300px; }`,
+    scripts,
+  });
+}
+
 function renderReferralsPage(stats) {
   const t = stats.totals;
   const w = stats.winners;
@@ -2034,6 +2242,21 @@ function registerAdminDashboard(app, deps) {
 
   // Faces come from Telegram. The organiser panel had its own avatar route
   // behind its own auth, so the admin panel had none and showed ids instead.
+  app.get("/admin/projects", requireAuth, (_req, res) => {
+    try {
+      const draws = collectAllDraws(deps);
+      const stats = PROJECT_STATS.buildProjectStats(
+        draws,
+        deps.readProjects().projects || [],
+        deps.readUserProjectProfiles(),
+      );
+      res.type("html").send(renderProjectsPage(stats));
+    } catch (error) {
+      console.error("[admin] GET /admin/projects:", error);
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать статистику проектов."));
+    }
+  });
+
   app.get("/admin/referrals", requireAuth, (_req, res) => {
     try {
       const draws = collectAllDraws(deps);
@@ -2256,6 +2479,7 @@ module.exports = {
   // Exported for tests: these decide what the users page actually shows, and
   // a page that throws while rendering is only caught by rendering it.
   renderReferralsPage,
+  renderProjectsPage,
   buildAdminUserProjectRows,
   buildAdminUserRows,
   sortAdminUserRows,
