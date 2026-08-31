@@ -15,6 +15,11 @@ const { registerAdminDashboard } = require("./admin-dashboard");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const {
+  getEmojiPickerStyles,
+  getEmojiPickerMarkup,
+  getEmojiPickerScript,
+} = require("./emoji-picker");
+const {
   refreshRubUsdtRate,
   startRubUsdtRateRefresh,
   convertRubToUsdt,
@@ -9551,6 +9556,7 @@ ${getPanelFluidTypographyVars()}
       .form-footer button { max-width: none; }
     }
     ${getMiniAppStyles()}
+    ${getEmojiPickerStyles()}
   </style>
 </head>
 <body>
@@ -9620,9 +9626,10 @@ ${getPanelFluidTypographyVars()}
           </div>
 
           <div class="draw-block">
-            <div class="draw-field">
+            <div class="draw-field emoji-field" data-emoji-field>
               ${drawLabel("gift", "Заголовок")}
               <input class="draw-input" name="postTitle" type="text" maxlength="120" placeholder="Необязательно — только в посте" />
+              ${getEmojiPickerMarkup()}
             </div>
             <div class="draw-row-2">
               <div class="draw-field">
@@ -9908,6 +9915,7 @@ ${getPanelFluidTypographyVars()}
     </div>
   </div>
   <script>
+    ${getEmojiPickerScript()}
     ${getMiniAppInitScript({ authSession: true, previewShell: WEB_ONLY })}
 
     function setupDrawImageField() {
