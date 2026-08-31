@@ -71,3 +71,36 @@ test("every entry has real keywords", () => {
     }
   }
 });
+
+// The panel styles every <button> as a full-width primary button unless it is
+// named in a long :not() list. The picker's buttons were not on that list, so
+// the little 😊 rendered as a blue bar across the whole title field. It shipped
+// that way because it had only been checked on a page without the panel's CSS.
+test("the picker's buttons are excluded from the panel's catch-all button rule", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+
+  const catchAll = source.match(/button:not\([^{]*\)\s*\{/g) || [];
+  assert.ok(catchAll.length >= 3, "правило-ловушка должно существовать");
+
+  for (const rule of catchAll) {
+    for (const cls of ["emoji-open", "emoji-cell", "emoji-tab"]) {
+      assert.ok(
+        rule.includes(`:not(.${cls})`),
+        `кнопки пикера должны быть исключены: не хватает :not(.${cls})`,
+      );
+    }
+  }
+});
+
+test("the title field lets the picker hang outside it", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const styles = require("./emoji-picker").getEmojiPickerStyles();
+  const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+
+  // .draw-field clips its contents; the popover has to escape that.
+  assert.match(source, /\.draw-field \{[^}]*overflow: hidden/, "панель по-прежнему обрезает поле");
+  assert.match(styles, /\.emoji-field \{[^}]*overflow: visible/, "пикер должен это отменять");
+});

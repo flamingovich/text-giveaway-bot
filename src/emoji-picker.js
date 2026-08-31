@@ -20,9 +20,11 @@ function pickerData() {
 
 function getEmojiPickerStyles() {
   return `
-    .emoji-field { position: relative; }
+    /* .draw-field clips its contents, which would cut the popover off at the
+       bottom of the input. */
+    .emoji-field { position: relative; overflow: visible; }
     .emoji-field .draw-input { padding-right: 40px; }
-    .emoji-open {
+    .emoji-field button.emoji-open {
       position: absolute; right: 6px; bottom: 5px;
       width: 30px; height: 30px; padding: 0;
       display: flex; align-items: center; justify-content: center;
@@ -30,7 +32,7 @@ function getEmojiPickerStyles() {
       border: 0; border-radius: 8px; background: transparent;
       opacity: .65; transition: opacity .12s, background .12s;
     }
-    .emoji-open:hover, .emoji-open.is-open { opacity: 1; background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 16%, transparent); }
+    .emoji-field button.emoji-open:hover, .emoji-field button.emoji-open.is-open { opacity: 1; background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 16%, transparent); }
     .emoji-pop {
       position: absolute; z-index: 60; left: 0; right: 0; top: calc(100% + 6px);
       display: none; flex-direction: column;
@@ -41,7 +43,7 @@ function getEmojiPickerStyles() {
       box-shadow: 0 14px 40px rgba(0,0,0,.28);
     }
     .emoji-pop.is-open { display: flex; }
-    .emoji-search-wrap { padding: 8px 8px 6px; }
+    .emoji-search-wrap { flex: 0 0 auto; padding: 8px 8px 6px; }
     .emoji-search {
       width: 100%; box-sizing: border-box;
       font: inherit; font-size: 14px;
@@ -51,7 +53,7 @@ function getEmojiPickerStyles() {
       color: var(--tg-theme-text-color, #111);
     }
     .emoji-search:focus { outline: none; border-color: var(--tg-theme-link-color, #3390ec); }
-    .emoji-recent { padding: 0 8px 6px; }
+    .emoji-recent { flex: 0 0 auto; padding: 0 8px 6px; }
     .emoji-recent[hidden] { display: none; }
     .emoji-recent-title, .emoji-group-title {
       font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
@@ -59,25 +61,28 @@ function getEmojiPickerStyles() {
       padding: 4px 2px 5px;
     }
     .emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px; }
-    .emoji-cell {
+    .emoji-pop button.emoji-cell {
       border: 0; background: transparent; cursor: pointer;
       font-size: 21px; line-height: 1; padding: 5px 0; border-radius: 8px;
       font-family: "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;
     }
-    .emoji-cell:hover { background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent); }
-    .emoji-scroll { overflow-y: auto; padding: 0 8px 8px; flex: 1; overscroll-behavior: contain; }
+    .emoji-pop button.emoji-cell:hover { background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent); }
+    .emoji-scroll { overflow-y: auto; padding: 0 8px 8px; flex: 1 1 auto; min-height: 0; overscroll-behavior: contain; }
     .emoji-tabs {
+      /* Without this the row is a shrinkable flex item and the popover's
+         max-height squeezes it down to a sliver. */
+      flex: 0 0 auto;
       display: flex; gap: 2px; padding: 5px 6px;
       border-top: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 16%, transparent);
       background: var(--tg-theme-secondary-bg-color, #f7f7f8);
       overflow-x: auto; scrollbar-width: none;
     }
     .emoji-tabs::-webkit-scrollbar { display: none; }
-    .emoji-tab {
+    .emoji-tabs button.emoji-tab {
       flex: 0 0 auto; border: 0; background: transparent; cursor: pointer;
       font-size: 17px; line-height: 1; padding: 6px 8px; border-radius: 8px; opacity: .55;
     }
-    .emoji-tab.is-active { opacity: 1; background: color-mix(in srgb, var(--tg-theme-link-color, #3390ec) 16%, transparent); }
+    .emoji-tabs button.emoji-tab.is-active { opacity: 1; background: color-mix(in srgb, var(--tg-theme-link-color, #3390ec) 16%, transparent); }
     .emoji-empty { padding: 18px 6px; text-align: center; font-size: 13px; color: var(--tg-theme-hint-color, #7a8296); }
     @media (max-width: 480px) { .emoji-grid { grid-template-columns: repeat(7, 1fr); } }
   `;

@@ -8089,7 +8089,7 @@ ${getPanelFluidTypographyVars()}
     }
     label { display: block; font-size: 12px; margin-bottom: 6px; color: #3b4560; font-weight: 600; }
     .card-dark label { color: #e7edff; }
-    input, select, button:not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.theme-toggle-btn):not(.header-icon-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.winner-copy-btn):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit) {
+    input, select, button:not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.theme-toggle-btn):not(.header-icon-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.winner-copy-btn):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
       border-radius: 12px;
       border: 1px solid #cfd8ef;
       padding: 9px 11px;
@@ -8098,7 +8098,7 @@ ${getPanelFluidTypographyVars()}
       background: #fff;
     }
     input, select,
-    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn):not(.winner-copy-btn):not(.header-icon-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit) {
+    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn):not(.winner-copy-btn):not(.header-icon-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
       width: 100%;
     }
     .card-dark input,
@@ -8106,7 +8106,7 @@ ${getPanelFluidTypographyVars()}
       border: 1px solid #6f86d8;
       background: rgba(255, 255, 255, 0.96);
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit) {
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
       background: var(--primary);
       color: #fff;
       border: none;
@@ -8114,7 +8114,7 @@ ${getPanelFluidTypographyVars()}
       font-weight: 700;
       transition: all 0.18s ease;
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):hover {
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):hover {
       background: var(--primary-2);
       transform: translateY(-1px);
     }
