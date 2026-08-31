@@ -413,7 +413,37 @@ function stripUnicodeEmoji(text) {
     .trim();
 }
 
-async function callOpenRouter({
+// Tries each model in turn. A busy or silent provider moves on to the next one
+// instead of becoming an apology; a bad key or a malformed request stops at the
+// first, because the next model would fail identically.
+async function callOpenRouter(options) {
+  const chain = parseModelChain(options.model, DEFAULT_MODEL_CHAIN);
+  let lastError = null;
+
+  for (let index = 0; index < chain.length; index += 1) {
+    try {
+      const reply = await callOpenRouterOnce({ ...options, model: chain[index] });
+      if (index > 0) {
+        console.warn(`[support-ai] ответила запасная модель ${chain[index]} (после ${index} неудач)`);
+      }
+      return reply;
+    } catch (error) {
+      lastError = error;
+      const another = index < chain.length - 1 && isWorthAnotherModel(error);
+      console.warn(
+        `[support-ai] ${chain[index]}: ${String(error.message || error).slice(0, 120)}` +
+          (another ? " — пробую следующую" : ""),
+      );
+      if (!another) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("Не осталось моделей для ответа.");
+}
+
+async function callOpenRouterOnce({
   apiKey,
   model,
   referer,
@@ -451,7 +481,7 @@ async function callOpenRouter({
       temperature: AGENT_TEMPERATURE[agentName] ?? 0.8,
       user: userId ? String(userId) : undefined,
     }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(MODEL_ATTEMPT_TIMEOUT_MS),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -626,7 +656,14 @@ function humanizeSupportReply(text, agentName = "", options = {}) {
   return result || (name === "Мухаммад" ? "ща напиш што не так" : "ща гляну напиши ещё раз");
 }
 
-const DEFAULT_OPENROUTER_MODEL = "google/gemini-2.5-flash";
+const {
+  DEFAULT_MODEL_CHAIN,
+  ATTEMPT_TIMEOUT_MS: MODEL_ATTEMPT_TIMEOUT_MS,
+  parseModelChain,
+  isWorthAnotherModel,
+} = require("./support-models");
+
+const DEFAULT_OPENROUTER_MODEL = DEFAULT_MODEL_CHAIN[0];
 
 async function verifyOpenRouterKey(apiKey) {
   const response = await openRouterFetch("https://openrouter.ai/api/v1/auth/key", {
