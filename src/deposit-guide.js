@@ -72,6 +72,15 @@ function pickRandomDepositNetwork() {
   return keys[Math.floor(Math.random() * keys.length)];
 }
 
+// LuckyBear shows a hex id under the nickname (165ba529-04f5) rather than the
+// short #XXXXX the other brands use, so it needs its own input, guide and
+// checks - see project-account-id.js.
+function isLuckyBearProject(project) {
+  const slug = String(project?.templateSlug || project?.brandSlug || "").trim().toLowerCase();
+  const name = String(project?.name || "").trim().toLowerCase();
+  return slug === "luckybear" || name === "luckybear";
+}
+
 function isPokerdomProject(project) {
   const slug = String(project?.templateSlug || project?.brandSlug || "").trim().toLowerCase();
   const name = String(project?.name || "").trim().toLowerCase();
@@ -268,6 +277,7 @@ module.exports = {
   normalizeDepositNetwork,
   pickRandomDepositNetwork,
   isPokerdomProject,
+  isLuckyBearProject,
   isBrandTemplateProject,
   resolveDepositNetworkForProject,
   getDepositNetworkMeta,

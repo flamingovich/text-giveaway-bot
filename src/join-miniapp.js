@@ -1811,11 +1811,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             step.num +
             "</span> " +
             step.text +
+            // A picture that fails to load leaves a broken-image icon in the
+            // middle of the instructions; the words carry the step on their own,
+            // so the frame removes itself instead.
             '</p><div class="join-guide-img-wrap"><img class="join-guide-img" src="' +
             step.imageUrl +
             '" alt="Шаг ' +
             step.num +
-            '" /></div>',
+            '" onerror="this.closest(\'.join-guide-img-wrap\').remove()" /></div>',
         )
         .join("");
     }
@@ -1972,9 +1975,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (input) {
         input.placeholder = projectIdInputConfig.placeholder || "";
         input.maxLength = projectIdInputConfig.maxlength || 32;
-        input.inputMode = projectIdInputConfig.kind === "pokerdom" ? "text" : "text";
-        input.autocapitalize = projectIdInputConfig.kind === "pokerdom" ? "none" : "characters";
-        input.classList.toggle("join-input-id-pokerdom", projectIdInputConfig.kind === "pokerdom");
+        input.inputMode = "text";
+        // Only the #XXXXX brands are upper-case; the hex ids of Pokerdom and
+        // LuckyBear are lower-case, and auto-capitalising them on a phone
+        // rewrites what the person just pasted.
+        input.autocapitalize = projectIdInputConfig.showHashPrefix ? "characters" : "none";
+        input.classList.toggle("join-input-id-pokerdom", !projectIdInputConfig.showHashPrefix);
       }
       if (label) {
         label.textContent = projectIdInputConfig.label || "ID на проекте";
@@ -1997,7 +2003,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           lead.textContent =
             projectIdInputConfig?.kind === "pokerdom"
               ? "Зарегистрируйтесь на Pokerdom, найдите ID в личной информации и введите его здесь."
-              : "Зарегистрируйтесь на проекте, найдите ID в профиле и введите его здесь.";
+              : projectIdInputConfig?.kind === "luckybear"
+                ? "Зарегистрируйтесь на LuckyBear, откройте профиль и введите ID под уровнем."
+                : "Зарегистрируйтесь на проекте, найдите ID в профиле и введите его здесь.";
         }
         syncProjectIdGuideLinkVisibility();
         hideProjectIdGuide();
@@ -2033,6 +2041,17 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (projectIdInputConfig?.kind === "pokerdom") {
         return value.toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, projectIdInputConfig.maxlength || 64);
       }
+      // LuckyBear ids keep their dash - stripping it, as the #XXXXX branch does,
+      // would turn 165ba529-04f5 into something the project never issued.
+      if (projectIdInputConfig?.kind === "luckybear") {
+        return value
+          .toLowerCase()
+          .replace(/^#/, "")
+          .replace(/[^a-f0-9-]/g, "")
+          .replace(/-{2,}/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, projectIdInputConfig.maxlength || 32);
+      }
       return value
         .toUpperCase()
         .replace(/#/g, "")
@@ -2046,7 +2065,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (!body) {
         return "";
       }
-      return projectIdInputConfig?.kind === "pokerdom" ? body : "#" + body;
+      // The "#" belongs only to the brands that print it; adding it to a hex id
+      // would send the project something it cannot match.
+      return projectIdInputConfig?.showHashPrefix ? "#" + body : body;
     }
 
     function isValidProjectAccountIdPayload(payload) {
@@ -2055,6 +2076,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
       if (projectIdInputConfig?.kind === "pokerdom") {
         return payload.length >= 15 && /^[a-f0-9]+$/.test(payload);
+      }
+      if (projectIdInputConfig?.kind === "luckybear") {
+        return payload.replace(/-/g, "").length >= 8 && /^[a-f0-9]{6,16}(-[a-f0-9]{2,8})?$/.test(payload);
       }
       return /^#[A-Z0-9]{5}$/.test(payload);
     }

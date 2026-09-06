@@ -1,6 +1,15 @@
-const { isPokerdomProject } = require("./deposit-guide");
+const { isPokerdomProject, isLuckyBearProject } = require("./deposit-guide");
 
 const ROYAL_PROJECT_ACCOUNT_ID_PATTERN = /^#[A-Z0-9]{5}$/;
+// LuckyBear prints a hex id under the nickname, e.g. 165ba529-04f5. Only one
+// real example was available, so the shape is checked loosely on purpose:
+// refusing a genuine id keeps someone out of the draw, while a wrong-looking
+// one is caught later by the duplicate and fraud checks that every brand goes
+// through anyway.
+const LUCKYBEAR_PROJECT_ACCOUNT_ID_PATTERN = /^[a-f0-9]{6,16}(-[a-f0-9]{2,8})?$/;
+const LUCKYBEAR_PROJECT_ACCOUNT_ID_MIN_LENGTH = 8;
+const LUCKYBEAR_PROJECT_ACCOUNT_ID_MAX_LENGTH = 32;
+
 const POKERDOM_PROJECT_ACCOUNT_ID_MIN_LENGTH = 15;
 const POKERDOM_PROJECT_ACCOUNT_ID_MAX_LENGTH = 64;
 
@@ -21,6 +30,19 @@ const ROYAL_PROJECT_ID_GUIDE_STEPS = [
     num: 2,
     text: "Скопируйте ID под ником (формат #XXXXX)",
     imageUrl: "/assets/id_rp_guide/id_2.png",
+  },
+];
+
+const LUCKYBEAR_PROJECT_ID_GUIDE_STEPS = [
+  {
+    num: 1,
+    text: "Нажмите на значок профиля в правом верхнем углу",
+    imageUrl: "/assets/lb_id_guide/lb_id_1.png",
+  },
+  {
+    num: 2,
+    text: "Скопируйте ID под уровнем — из букв и цифр, например 165ba529-04f5",
+    imageUrl: "/assets/lb_id_guide/lb_id_2.png",
   },
 ];
 
@@ -52,6 +74,9 @@ function drawAsksProjectIdOnJoin(draw) {
 }
 
 function getProjectAccountIdKind(project) {
+  if (isLuckyBearProject(project)) {
+    return "luckybear";
+  }
   return isPokerdomProject(project) ? "pokerdom" : "royal";
 }
 
@@ -64,6 +89,11 @@ function detectStoredProjectAccountIdKind(value) {
     return "royal";
   }
   const hexBody = raw.replace(/^#/, "").toLowerCase();
+  // The dash is what tells a stored LuckyBear id from a Pokerdom one; without a
+  // project to ask, it is the only signal there is.
+  if (hexBody.includes("-") && LUCKYBEAR_PROJECT_ACCOUNT_ID_PATTERN.test(hexBody)) {
+    return "luckybear";
+  }
   if (/^[a-f0-9]+$/.test(hexBody) && hexBody.length >= POKERDOM_PROJECT_ACCOUNT_ID_MIN_LENGTH) {
     return "pokerdom";
   }
@@ -77,7 +107,7 @@ function resolveProjectAccountIdKind(kindOrProject, rawValue = "") {
   if (kindOrProject && typeof kindOrProject === "object") {
     return getProjectAccountIdKind(kindOrProject);
   }
-  if (kindOrProject === "pokerdom" || kindOrProject === "royal") {
+  if (kindOrProject === "pokerdom" || kindOrProject === "royal" || kindOrProject === "luckybear") {
     return kindOrProject;
   }
   return detectStoredProjectAccountIdKind(rawValue);
@@ -105,8 +135,24 @@ function normalizePokerdomProjectAccountId(raw) {
     .slice(0, POKERDOM_PROJECT_ACCOUNT_ID_MAX_LENGTH);
 }
 
+// People paste the id with the UID line, spaces or a stray # attached; keep the
+// hex and the dash and drop the rest.
+function normalizeLuckyBearProjectAccountId(raw) {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^#/, "")
+    .replace(/[^a-f0-9-]/g, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, LUCKYBEAR_PROJECT_ACCOUNT_ID_MAX_LENGTH);
+}
+
 function normalizeProjectAccountId(raw, kindOrProject = null) {
   const kind = resolveProjectAccountIdKind(kindOrProject, raw);
+  if (kind === "luckybear") {
+    return normalizeLuckyBearProjectAccountId(raw);
+  }
   if (kind === "pokerdom") {
     return normalizePokerdomProjectAccountId(raw);
   }
@@ -164,8 +210,33 @@ function validatePokerdomProjectAccountIdFormat(raw) {
   return { ok: true, normalized };
 }
 
+function validateLuckyBearProjectAccountIdFormat(raw) {
+  const normalized = normalizeLuckyBearProjectAccountId(raw);
+  if (!normalized) {
+    return { ok: false, error: "Введите ID с LuckyBear." };
+  }
+  if (normalized.replace(/-/g, "").length < LUCKYBEAR_PROJECT_ACCOUNT_ID_MIN_LENGTH) {
+    return { ok: false, error: "ID слишком короткий. Пример: 165ba529-04f5" };
+  }
+  if (!LUCKYBEAR_PROJECT_ACCOUNT_ID_PATTERN.test(normalized)) {
+    return {
+      ok: false,
+      error: "ID состоит из букв a-f и цифр, например 165ba529-04f5. Скопируйте его под уровнем в профиле.",
+    };
+  }
+  // The numeric UID sits right under the id on the same screen and gets copied
+  // by mistake; it is all digits, so it is worth naming the confusion outright.
+  if (/^[0-9-]+$/.test(normalized)) {
+    return { ok: false, error: "Это похоже на UID. Нужен ID выше — с буквами, например 165ba529-04f5" };
+  }
+  return { ok: true, normalized };
+}
+
 function validateProjectAccountIdFormat(raw, kindOrProject = null) {
   const kind = resolveProjectAccountIdKind(kindOrProject, raw);
+  if (kind === "luckybear") {
+    return validateLuckyBearProjectAccountIdFormat(raw);
+  }
   if (kind === "pokerdom") {
     return validatePokerdomProjectAccountIdFormat(raw);
   }
@@ -173,6 +244,9 @@ function validateProjectAccountIdFormat(raw, kindOrProject = null) {
 }
 
 function buildProjectIdGuideSteps(project = null) {
+  if (getProjectAccountIdKind(project) === "luckybear") {
+    return LUCKYBEAR_PROJECT_ID_GUIDE_STEPS;
+  }
   const steps =
     getProjectAccountIdKind(project) === "pokerdom"
       ? POKERDOM_PROJECT_ID_GUIDE_STEPS
@@ -181,6 +255,15 @@ function buildProjectIdGuideSteps(project = null) {
 }
 
 function buildProjectIdInputConfig(project = null) {
+  if (getProjectAccountIdKind(project) === "luckybear") {
+    return {
+      kind: "luckybear",
+      showHashPrefix: false,
+      placeholder: "165ba529-04f5",
+      maxlength: LUCKYBEAR_PROJECT_ACCOUNT_ID_MAX_LENGTH,
+      label: "ID на проекте",
+    };
+  }
   if (getProjectAccountIdKind(project) === "pokerdom") {
     return {
       kind: "pokerdom",
@@ -372,6 +455,7 @@ module.exports = {
   getProjectAccountIdKind,
   normalizeProjectAccountId,
   validateProjectAccountIdFormat,
+  detectStoredProjectAccountIdKind,
   buildProjectIdGuideSteps,
   buildProjectIdInputConfig,
   buildGlobalProjectAccountIdOwners,
