@@ -918,7 +918,11 @@ function renderUserCardPage(deps, card) {
             : "—"
         }</td>
         <td>${renderRefStatusBadge(project.refStatus)}</td>
-        <td>${escapeHtml(project.nickname || project.accountId || "—")}</td>
+        <td>${escapeHtml(project.nickname || project.accountId || "—")}${
+          project.idShapeMismatch
+            ? '<div><span class="chip chip-warn">формат чужого проекта</span></div>'
+            : ""
+        }</td>
         <td class="mono">${escapeHtml(project.wallet || "—")}</td>
         <td class="nowrap dim">${escapeHtml(F.formatRelative(project.updatedAt, tz))}</td>
       </tr>`,

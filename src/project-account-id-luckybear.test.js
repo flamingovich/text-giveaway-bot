@@ -85,3 +85,25 @@ test("the other brands are untouched", () => {
   assert.equal(buildProjectIdInputConfig(ROYAL).showHashPrefix, true);
   assert.equal(validateProjectAccountIdFormat(REAL_ID, ROYAL).ok, false, "royal не принимает hex");
 });
+
+// #SLAVA was typed to get past the step: LuckyBear never issues an id in that
+// shape. Within the right shape a made-up id cannot be told from a real one, so
+// this is the strongest signal there is without asking the project itself.
+test("an id shaped for another brand is spotted", () => {
+  const BEEF = { templateSlug: "beef", name: "BEEF" };
+  const POKERDOM_P = { templateSlug: "pokerdom", name: "Pokerdom" };
+  const { isProjectAccountIdShapeMismatched } = require("./project-account-id");
+
+  assert.equal(isProjectAccountIdShapeMismatched(LUCKYBEAR, "#SLAVA"), true);
+  assert.equal(isProjectAccountIdShapeMismatched(LUCKYBEAR, REAL_ID), false);
+  assert.equal(isProjectAccountIdShapeMismatched(BEEF, REAL_ID), true);
+  assert.equal(isProjectAccountIdShapeMismatched(BEEF, "#FJ0UW"), false);
+  assert.equal(isProjectAccountIdShapeMismatched(POKERDOM_P, "#FJ0UW"), true);
+});
+
+test("an empty id is missing, not mismatched", () => {
+  const { isProjectAccountIdShapeMismatched } = require("./project-account-id");
+  assert.equal(isProjectAccountIdShapeMismatched(LUCKYBEAR, ""), false);
+  assert.equal(isProjectAccountIdShapeMismatched(LUCKYBEAR, null), false);
+  assert.equal(isProjectAccountIdShapeMismatched(null, REAL_ID), false);
+});

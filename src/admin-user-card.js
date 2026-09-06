@@ -1,3 +1,4 @@
+const { isProjectAccountIdShapeMismatched } = require("./project-account-id");
 // Everything known about one person in one place. The users table answers "who
 // is this" but not "what actually happened to them", so a dispute or a
 // multi-account check meant reading the database by hand.
@@ -157,6 +158,12 @@ function buildUserCard(deps, userId, options = {}) {
         : "unknown",
     // Who brought this person to this project, settled once at their first
     // join rather than re-inferred from a history that keeps moving.
+    // An id shaped for a different brand was typed to get past the step rather
+    // than copied from the project.
+    idShapeMismatch: isProjectAccountIdShapeMismatched(
+      projectById.get(resolveProjectId(projectId)),
+      projectData.projectAccountId,
+    ),
     firstTouchOwnerId: projectData.firstTouchOwnerId ?? null,
     firstTouchAt: projectData.firstTouchAt || "",
     firstTouchSource: projectData.firstTouchSource || "",

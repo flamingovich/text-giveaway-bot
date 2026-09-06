@@ -243,6 +243,19 @@ function validateProjectAccountIdFormat(raw, kindOrProject = null) {
   return validateRoyalProjectAccountIdFormat(raw);
 }
 
+// An id whose shape belongs to a different brand was typed to get past the
+// step, not copied from the project: LuckyBear never issues #SLAVA, and no
+// #XXXXX brand issues a hex string. Within the right shape a made-up id is
+// indistinguishable from a real one - only the project itself can settle that -
+// so this is the strongest signal available without asking the project.
+function isProjectAccountIdShapeMismatched(project, value) {
+  const raw = String(value || "").trim();
+  if (!raw || !project) {
+    return false;
+  }
+  return getProjectAccountIdKind(project) !== detectStoredProjectAccountIdKind(raw);
+}
+
 function buildProjectIdGuideSteps(project = null) {
   if (getProjectAccountIdKind(project) === "luckybear") {
     return LUCKYBEAR_PROJECT_ID_GUIDE_STEPS;
@@ -456,6 +469,7 @@ module.exports = {
   normalizeProjectAccountId,
   validateProjectAccountIdFormat,
   detectStoredProjectAccountIdKind,
+  isProjectAccountIdShapeMismatched,
   buildProjectIdGuideSteps,
   buildProjectIdInputConfig,
   buildGlobalProjectAccountIdOwners,
