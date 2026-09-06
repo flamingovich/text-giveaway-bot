@@ -49,11 +49,17 @@ const POKERDOM_GUIDE_IMAGES = [
   path.join(ASSETS_ROOT, "step-3.png"),
 ];
 
+// Adding a brand here is all it takes: every organiser gets their own copy of
+// it the next time they open the panel, and they fill in the referral link,
+// emoji and promo code themselves. The slug becomes part of the project id
+// (brand_<slug>_<ownerId>), so it must never be edited afterwards - the ids
+// already written into draws and profiles would stop resolving.
 const BRAND_PROJECT_TEMPLATES = [
   { templateSlug: "pokerdom", name: "Pokerdom" },
   { templateSlug: "beef", name: "BEEF" },
   { templateSlug: "fugu", name: "FUGU" },
   { templateSlug: "iris", name: "IRIS" },
+  { templateSlug: "luckybear", name: "LuckyBear" },
 ];
 
 function normalizeDepositNetwork(value) {

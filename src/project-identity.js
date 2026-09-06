@@ -1,5 +1,5 @@
 // Projects used to be created by hand per organiser; they are fixed brands now
-// (Pokerdom, BEEF, FUGU, IRIS, one set per organiser). The brand migration
+// (see BRAND_PROJECT_TEMPLATES, one set per organiser). The brand migration
 // rewrote the projectId on draws but left user profiles pointing at the old
 // ids, so a thousand bindings resolved to nothing and the panel reported
 // "Проект удалён" for projects that were only moved.

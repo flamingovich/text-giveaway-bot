@@ -498,7 +498,9 @@ function migrateBrandProjectTemplates() {
   writeProjects(projectsData);
   writeData(drawsData);
   fs.writeFileSync(markerPath, new Date().toISOString(), "utf8");
-  console.log("Миграция заготовленных проектов выполнена: Pokerdom, BEEF, FUGU, IRIS.");
+  console.log(
+    `Миграция заготовленных проектов выполнена: ${BRAND_PROJECT_TEMPLATES.map((item) => item.name).join(", ")}.`,
+  );
 }
 
 function migratePokerdomLegacyWalletProfiles() {
