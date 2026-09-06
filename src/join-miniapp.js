@@ -2058,7 +2058,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         return value
           .toLowerCase()
           .replace(/^#/, "")
-          .replace(/[^a-f0-9-]/g, "")
+          .replace(/[^a-z0-9-]/g, "")
           .replace(/-{2,}/g, "-")
           .replace(/^-+|-+$/g, "")
           .slice(0, projectIdInputConfig.maxlength || 32);
@@ -2089,7 +2089,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         return payload.length >= 15 && /^[a-f0-9]+$/.test(payload);
       }
       if (projectIdInputConfig?.kind === "luckybear") {
-        return payload.replace(/-/g, "").length >= 8 && /^[a-f0-9]{6,16}(-[a-f0-9]{2,8})?$/.test(payload);
+        return payload.replace(/-/g, "").length >= 4 && /^[a-z0-9]{3,}(-[a-z0-9]{1,})*$/.test(payload);
       }
       return /^#[A-Z0-9]{5}$/.test(payload);
     }

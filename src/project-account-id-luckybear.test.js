@@ -41,14 +41,22 @@ test("no # is bolted onto a LuckyBear id", () => {
 
 // The numeric UID sits directly under the id on the same screen, so it is the
 // thing people will copy by mistake.
-test("the UID from the line below is refused by name", () => {
-  const result = validateProjectAccountIdFormat("1771050325", LUCKYBEAR);
-  assert.equal(result.ok, false);
-  assert.match(result.error, /UID/);
+// This used to be refused as "похоже на UID". Written from one screenshot, that
+// guess turned out to block real participants - fifteen rejections in a row -
+// so a digits-only id goes through now. Guessing which of two identifiers a
+// project prints is not worth keeping people out of a draw.
+test("an all-digits id goes through", () => {
+  assert.equal(validateProjectAccountIdFormat("1771050325", LUCKYBEAR).ok, true);
+});
+
+test("letters outside a-f survive normalisation", () => {
+  const result = validateProjectAccountIdFormat("abz123xy", LUCKYBEAR);
+  assert.equal(result.ok, true);
+  assert.equal(result.normalized, "abz123xy", "hex-фильтр молча переписывал чужой ID");
 });
 
 test("obvious rubbish is refused", () => {
-  for (const raw of ["", "   ", "12345", "привет", "-", "---"]) {
+  for (const raw of ["", "   ", "1", "привет", "-", "---"]) {
     assert.equal(validateProjectAccountIdFormat(raw, LUCKYBEAR).ok, false, JSON.stringify(raw));
   }
 });

@@ -6,8 +6,15 @@ const ROYAL_PROJECT_ACCOUNT_ID_PATTERN = /^#[A-Z0-9]{5}$/;
 // refusing a genuine id keeps someone out of the draw, while a wrong-looking
 // one is caught later by the duplicate and fraud checks that every brand goes
 // through anyway.
-const LUCKYBEAR_PROJECT_ACCOUNT_ID_PATTERN = /^[a-f0-9]{6,16}(-[a-f0-9]{2,8})?$/;
-const LUCKYBEAR_PROJECT_ACCOUNT_ID_MIN_LENGTH = 8;
+// Written from a single screenshot, this was far too narrow: it demanded hex
+// characters and roughly a 8-4 shape, and every single person trying to join
+// was refused - fifteen rejections in a row before anyone noticed. Whatever
+// LuckyBear actually prints varies more than one example showed, so the rule
+// now only insists on something id-shaped. Refusing a real participant costs a
+// prize; letting an odd-looking id through costs nothing, because duplicates
+// and fraud checks still run on it afterwards.
+const LUCKYBEAR_PROJECT_ACCOUNT_ID_PATTERN = /^[a-z0-9]{3,}(-[a-z0-9]{1,})*$/;
+const LUCKYBEAR_PROJECT_ACCOUNT_ID_MIN_LENGTH = 4;
 const LUCKYBEAR_PROJECT_ACCOUNT_ID_MAX_LENGTH = 32;
 
 const POKERDOM_PROJECT_ACCOUNT_ID_MIN_LENGTH = 15;
@@ -142,7 +149,9 @@ function normalizeLuckyBearProjectAccountId(raw) {
     .trim()
     .toLowerCase()
     .replace(/^#/, "")
-    .replace(/[^a-f0-9-]/g, "")
+    // Every letter, not just a-f: a hex-only filter silently rewrote any id
+    // containing g-z into a different id, which the project would never match.
+    .replace(/[^a-z0-9-]/g, "")
     .replace(/-{2,}/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, LUCKYBEAR_PROJECT_ACCOUNT_ID_MAX_LENGTH);
@@ -216,18 +225,13 @@ function validateLuckyBearProjectAccountIdFormat(raw) {
     return { ok: false, error: "Введите ID с LuckyBear." };
   }
   if (normalized.replace(/-/g, "").length < LUCKYBEAR_PROJECT_ACCOUNT_ID_MIN_LENGTH) {
-    return { ok: false, error: "ID слишком короткий. Пример: 165ba529-04f5" };
+    return { ok: false, error: "ID слишком короткий. Скопируйте его целиком из профиля." };
   }
   if (!LUCKYBEAR_PROJECT_ACCOUNT_ID_PATTERN.test(normalized)) {
     return {
       ok: false,
-      error: "ID состоит из букв a-f и цифр, например 165ba529-04f5. Скопируйте его под уровнем в профиле.",
+      error: "ID состоит из букв и цифр. Скопируйте его в профиле на проекте.",
     };
-  }
-  // The numeric UID sits right under the id on the same screen and gets copied
-  // by mistake; it is all digits, so it is worth naming the confusion outright.
-  if (/^[0-9-]+$/.test(normalized)) {
-    return { ok: false, error: "Это похоже на UID. Нужен ID выше — с буквами, например 165ba529-04f5" };
   }
   return { ok: true, normalized };
 }
