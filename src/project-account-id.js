@@ -37,12 +37,12 @@ const LUCKYBEAR_PROJECT_ID_GUIDE_STEPS = [
   {
     num: 1,
     text: "Нажмите на значок профиля в правом верхнем углу",
-    imageUrl: "/assets/lb_id_guide/lb_id_1.png",
+    imageUrl: "/assets/lb_id_guide/lb_id_1.jpg",
   },
   {
     num: 2,
     text: "Скопируйте ID под уровнем — из букв и цифр, например 165ba529-04f5",
-    imageUrl: "/assets/lb_id_guide/lb_id_2.png",
+    imageUrl: "/assets/lb_id_guide/lb_id_2.jpg",
   },
 ];
 
