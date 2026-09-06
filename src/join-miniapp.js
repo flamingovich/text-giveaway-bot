@@ -1811,16 +1811,27 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             step.num +
             "</span> " +
             step.text +
-            // A picture that fails to load leaves a broken-image icon in the
-            // middle of the instructions; the words carry the step on their own,
-            // so the frame removes itself instead.
             '</p><div class="join-guide-img-wrap"><img class="join-guide-img" src="' +
             step.imageUrl +
             '" alt="Шаг ' +
             step.num +
-            '" onerror="this.closest(\'.join-guide-img-wrap\').remove()" /></div>',
+            '" /></div>',
         )
         .join("");
+      // A picture that fails to load would leave a broken-image icon among the
+      // instructions; the words carry the step on their own, so the frame
+      // removes itself. Bound here rather than as an inline onerror attribute:
+      // the quotes in that attribute are consumed building this page, so they
+      // reach the browser bare and end the client's own string early - which is
+      // how the whole mini app stopped parsing and nobody could take part.
+      for (const img of container.querySelectorAll(".join-guide-img")) {
+        img.addEventListener("error", function () {
+          const wrap = this.parentElement;
+          if (wrap) {
+            wrap.remove();
+          }
+        });
+      }
     }
 
     function getProjectIdGuideElements() {
