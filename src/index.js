@@ -81,6 +81,7 @@ const {
   getInvalidAddressError,
   validateDepositAddress,
   buildWinnerDepositAddressRequestHtml: buildDepositAddressRequestHtml,
+  buildWinnerInvalidAddressHtml,
   buildBotGuideStepTexts,
   getBotGuideImagePaths,
   buildBotGuideFooterNote,
@@ -1791,38 +1792,41 @@ function buildWinnerWinMessageHtml(draw, payoutPrize, options = {}) {
   const antiFraud = options.antiFraud === true;
   const postLink = buildDrawPostLink(draw);
   const giveawayWord = postLink
-    ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
-    : "розыгрыше";
+    ? `<a href="${escapeHtml(postLink)}"><b>розыгрыше</b></a>`
+    : "<b>розыгрыше</b>";
   const prizeLabel = antiFraud
     ? resolveWinnerPrizeLabel(draw, getPerWinnerPrizeText(draw))
     : resolveWinnerPrizeLabel(draw, payoutPrize);
   const prizeHtml = expired
-    ? `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}`
-    : antiFraud
-      ? `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> <b>${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}</b>`
-      : `🏆 Приз: ${escapeHtml(prizeLabel)}`;
+    ? `${pe("trophy")} <b>Приз:</b> <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, prizeLabel))}`
+    : `${pe("trophy")} <b>Приз:</b> <b>${escapeHtml(prizeLabel)}</b>`;
 
+  // The burned-prize wording deliberately carries no prize line: the amount is
+  // not what the person needs to read there.
   if (antiFraud) {
     return [
-      `<b>😔 Вы выиграли в ${giveawayWord}... Но...</b>`,
-      prizeHtml,
-      "🛡️ Ваш приз сгорел, так как система антифрод заподозорила Вас в мошенничестве и мультиаккинге.",
+      `<b>${pe("brokenHeart")}</b><b> Вы выиграли в </b>${giveawayWord}<b>... Но...</b>`,
       "",
-      "Если это не так, или Вы считаете, что произошла ошибка, то пишите в поддержку - @rollerbot_support_bot",
+      `${pe("shield")} Ваш приз сгорел, так как "Система-антифрод" определила Вас в мошенничестве и мультиаккинге.`,
+      "",
+      `<blockquote>${pe("phone")} Если это не так, или Вы считаете, что произошла ошибка, то пишите в поддержку - @rollerbot_support_bot</blockquote>`,
     ].join("\n");
   }
 
-  return [`<b>🎉 Вы выиграли в ${giveawayWord}.</b>`, prizeHtml].join("\n");
+  return [
+    `<b>${pe("party")}</b><b> Вы выиграли в </b>${giveawayWord}<b>.</b>`,
+    prizeHtml,
+  ].join("\n");
 }
 
 function buildWinnerExpiredText(draw) {
   const windowLabel = formatWinnerConfirmWindowAfterResults(draw);
   return [
-    "⏰ Приз сгорел — вы не подтвердили получение вовремя.",
+    `<b>${pe("coffin")}</b><b> Приз сгорел — вы не подтвердили получение вовремя.</b>`,
     "",
-    `Срок был: <i>${escapeHtml(windowLabel)} после итогов</i>.`,
+    `${pe("alarm")}Срок был: <b>${escapeHtml(windowLabel)} после итогов.</b>`,
     "",
-    "Если вы считаете, что произошла ошибка, пишите в поддержку — @rollerbot_support_bot",
+    `<blockquote>${pe("phone")} Если это не так, или Вы считаете, что произошла ошибка, то пишите в поддержку - <b>@rollerbot_support_bot</b></blockquote>`,
   ].join("\n");
 }
 
@@ -1841,16 +1845,17 @@ function buildWinnerDepositAddressRequestHtml(draw, networkId) {
 
 function buildWinnerDepositAddressReceivedHtml(address) {
   return [
-    `✅ Адрес получен: <code>${escapeHtml(address)}</code>`,
-    "Ожидайте выплату от организатора.",
+    `${pe("check")}<b> Адрес получен:</b> <code>${escapeHtml(address)}</code>`,
+    "",
+    `${pe("hourglass")} Ожидайте выплату от организатора.`,
   ].join("\n");
 }
 
 function buildWinnerDepositAddressExpiredText() {
   return [
-    `⏰ Приз сгорел — вы не успели отправить адрес депозита (${WINNER_DEPOSIT_ADDRESS_MINUTES} минут).`,
+    `${pe("coffin")} <b> Приз сгорел — вы не успели отправить адрес депозита</b> (${WINNER_DEPOSIT_ADDRESS_MINUTES} минут).`,
     "",
-    "Если вы считаете, что произошла ошибка, пишите в поддержку — @rollerbot_support_bot",
+    `<blockquote>${pe("phone")} Если это не так, или Вы считаете, что произошла ошибка, то пишите в поддержку - <b>@rollerbot_support_bot</b></blockquote>`,
   ].join("\n");
 }
 
@@ -1884,7 +1889,14 @@ function getWinnerDepositAddressKeyboard(draw) {
 }
 
 function getWinnerPanelTrcDisplay(draw, notifyInfo, projectData) {
-  if (drawAsksWinnerDepositAddress(draw)) {
+  // A winner asked for an address after the fact is showing one that the join
+  // flow never had. Read the notify record whenever it is carrying one, not
+  // only when the draw was set up to collect it there.
+  const notifyIsAboutAddress =
+    notifyInfo?.status === "awaiting_address" ||
+    Boolean(notifyInfo?.addressRerequestedAt) ||
+    hasSavedWinnerDepositAddress(notifyInfo);
+  if (drawAsksWinnerDepositAddress(draw) || notifyIsAboutAddress) {
     if (notifyInfo?.status === "awaiting_address") {
       if (isDepositAddressExpired(notifyInfo)) {
         return { text: "Не успел отправить адрес", copyable: false };
@@ -2071,6 +2083,21 @@ function isWinnerPrizeForfeited(notifyInfo, antiFraud) {
   return Boolean(antiFraud?.hasFraudFlag);
 }
 
+// Thin wrappers over src/winner-address-request.js: that module holds the
+// rules and the tests, this side supplies the clock and the fraud verdict.
+function getWinnerAddressForfeitureKind(notifyInfo) {
+  return forfeitureKindOf(notifyInfo, isDepositAddressExpired);
+}
+
+function canRequestWinnerAddressAgain(draw, notifyInfo, antiFraud = null) {
+  return canAskWinnerForAddressAgain(draw, notifyInfo, {
+    hasFraudFlag: Boolean(antiFraud?.hasFraudFlag),
+    isAddressWindowExpired: isDepositAddressExpired,
+    isNotificationExpired: isWinnerNotificationExpired,
+    hasSavedAddress: hasSavedWinnerDepositAddress,
+  });
+}
+
 function getWinnerForfeitedDeliveryReason(notifyInfo) {
   if (!notifyInfo) {
     return "";
@@ -2097,16 +2124,14 @@ function getWinnerForfeitedDeliveryReason(notifyInfo) {
 function buildWinnerSubscriptionForfeitedHtml(draw, payoutPrize) {
   const postLink = buildDrawPostLink(draw);
   const giveawayWord = postLink
-    ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
-    : "розыгрыше";
-  const prizeLabel = resolveWinnerPrizeLabel(draw, payoutPrize);
-  const prizeHtml = `🏆 Приз: <s>${escapeHtml(prizeLabel)}</s> ${escapeHtml(formatExpiredZeroPrize(draw, payoutPrize))}`;
+    ? `<a href="${escapeHtml(postLink)}"><b>розыгрыше</b></a>`
+    : "<b>розыгрыше</b>";
   return [
-    `<b>😔 Вы выиграли в ${giveawayWord}... Но...</b>`,
-    prizeHtml,
-    "📢 Приз сгорел — вы отписались от канала розыгрыша.",
+    `<b>${pe("brokenHeart")}</b><b> Вы выиграли в </b>${giveawayWord}<b>... Но...</b>`,
     "",
-    "Если это ошибка, пишите в поддержку — @rollerbot_support_bot",
+    `${pe("sadFace")} Приз сгорел — вы отписались от канала розыгрыша.`,
+    "",
+    `<blockquote>${pe("phone")} Если это не так, или Вы считаете, что произошла ошибка, то пишите в поддержку - @rollerbot_support_bot</blockquote>`,
   ].join("\n");
 }
 
@@ -2144,12 +2169,13 @@ function buildDrawPostLink(draw) {
 function buildParticipationSuccessMessage(draw) {
   const postLink = buildDrawPostLink(draw);
   const giveawayWord = postLink
-    ? `<a href="${escapeHtml(postLink)}">розыгрыше</a>`
-    : "розыгрыше";
+    ? `<a href="${escapeHtml(postLink)}"><b>розыгрыше</b></a>`
+    : "<b>розыгрыше</b>";
 
   return [
-    `<b>Вы участвуете в ${giveawayWord} 🎉</b>`,
-    "Если выиграете, бот отправит вам уведомление в личные сообщения.",
+    `<b>${pe("check")}</b><b> Вы участвуете в </b>${giveawayWord}`,
+    "",
+    "<blockquote>Если вы выиграете — бот отправит Вам уведомление в личные сообщения с этим ботом.</blockquote>",
   ].join("\n");
 }
 
@@ -2158,6 +2184,59 @@ function getParticipationReplyOptions() {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   };
+}
+
+// Premium emoji are entities Telegram is allowed to refuse, and these are the
+// messages that tell somebody they won money - a refused one is a winner who is
+// never told. Any 400 on a message that carries them is retried once with the
+// tags removed, which leaves the ordinary emoji and the same words behind. A
+// failure of any other kind is re-thrown untouched, so the existing handling of
+// "bot was blocked" and friends still sees what it expects.
+async function sendHtmlWithEmojiFallback(chatId, html, extra = {}) {
+  const options = { parse_mode: "HTML", link_preview_options: { is_disabled: true }, ...extra };
+  try {
+    return await bot.telegram.sendMessage(chatId, html, options);
+  } catch (error) {
+    if (error?.response?.error_code !== 400 || !hasPremiumEmoji(html)) {
+      throw error;
+    }
+    console.warn(`[emoji] премиум-эмодзи отклонены для ${chatId}: ${error.message} — шлю без них`);
+    return bot.telegram.sendMessage(chatId, stripPremiumEmoji(html), options);
+  }
+}
+
+// The two "приз сгорел" notices are edits of the win message rather than new
+// messages, and their callers swallow failures. Without this a rejected premium
+// emoji would leave the old "Вы выиграли" standing and nothing in the log.
+async function editHtmlWithEmojiFallback(chatId, messageId, html, extra = {}) {
+  const options = { parse_mode: "HTML", ...extra };
+  try {
+    return await bot.telegram.editMessageText(chatId, messageId, undefined, html, options);
+  } catch (error) {
+    if (error?.response?.error_code !== 400 || !hasPremiumEmoji(html)) {
+      throw error;
+    }
+    return bot.telegram.editMessageText(
+      chatId,
+      messageId,
+      undefined,
+      stripPremiumEmoji(html),
+      options,
+    );
+  }
+}
+
+async function replyHtmlWithEmojiFallback(ctx, html, extra = {}) {
+  const options = { parse_mode: "HTML", link_preview_options: { is_disabled: true }, ...extra };
+  try {
+    return await ctx.reply(html, options);
+  } catch (error) {
+    if (error?.response?.error_code !== 400 || !hasPremiumEmoji(html)) {
+      throw error;
+    }
+    console.warn(`[emoji] премиум-эмодзи отклонены в ответе: ${error.message} — шлю без них`);
+    return ctx.reply(stripPremiumEmoji(html), options);
+  }
 }
 
 // Telegram offers no "may I write to this person" query, but a chat action
@@ -2185,11 +2264,7 @@ async function sendParticipationDm(draw, userId) {
     return;
   }
   try {
-    await bot.telegram.sendMessage(
-      userId,
-      buildParticipationSuccessMessage(draw),
-      getParticipationReplyOptions(),
-    );
+    await sendHtmlWithEmojiFallback(userId, buildParticipationSuccessMessage(draw));
   } catch (error) {
     console.warn(`[join] не удалось отправить «Вы участвуете» в личку ${userId}: ${error.message}`);
   }
@@ -2227,7 +2302,15 @@ function buildProjectLinkHtml(projectId) {
   if (!project) {
     return "<b>проекте</b>";
   }
-  return `<a href="${escapeHtml(project.refLink)}"><b>${escapeHtml(project.name)}</b></a>`;
+  // A brand the organiser has not put a referral link on yet used to render as
+  // <a href="">, which Telegram refuses to parse. The whole message then failed
+  // to send - and the two messages this appears in are the deposit-address
+  // request and its guide, so the winner was simply never asked for an address.
+  const refLink = String(project.refLink || "").trim();
+  if (!refLink) {
+    return `<b>${escapeHtml(project.name)}</b>`;
+  }
+  return `<a href="${escapeHtml(refLink)}"><b>${escapeHtml(project.name)}</b></a>`;
 }
 
 function formatDurationRu(value, unit) {
@@ -3867,13 +3950,9 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
   }
 
   if (antiFraud.hasFraudFlag) {
-    const message = await bot.telegram.sendMessage(
+    const message = await sendHtmlWithEmojiFallback(
       userId,
       buildWinnerWinMessageHtml(draw, payoutPrize, { antiFraud: true }),
-      {
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-      },
     );
 
     draw.winnerNotifications[String(userId)] = {
@@ -3904,30 +3983,19 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     }),
     "",
   ];
-  if (drawAsksWinnerDepositAddress(draw)) {
-    winMessageLines.push(
-      "Подтвердите, что вы человек — выберите правильный ответ ниже.",
-      `${task.a} + ${task.b} = ?`,
-    );
-  } else {
-    winMessageLines.push(
-      "Пройди проверку для подтверждения и получения приза 👇",
-      `${task.a} + ${task.b} = ?`,
-    );
-  }
-
-  const message = await bot.telegram.sendMessage(
-    userId,
-    winMessageLines.join("\n"),
-    {
-      parse_mode: "HTML",
-      ...Markup.inlineKeyboard(
-        task.options.map((value) =>
-          Markup.button.callback(String(value), `wp:cap:${draw.id}:${value}`)
-        )
-      ),
-    }
+  // Both kinds of draw now ask the same way; the wording used to differ only
+  // because the deposit-address flow was added later.
+  winMessageLines.push(
+    `<blockquote>${pe("red")}  Подтвердите, что вы человек — выберите правильный ответ ниже.</blockquote>`,
+    "",
+    `${peDigits(task.a)}${pe("plus")}${peDigits(task.b)}${pe("equals")}${pe("question")}`,
   );
+
+  const message = await sendHtmlWithEmojiFallback(userId, winMessageLines.join("\n"), {
+    ...Markup.inlineKeyboard(
+      task.options.map((value) => Markup.button.callback(String(value), `wp:cap:${draw.id}:${value}`)),
+    ),
+  });
 
   draw.winnerNotifications[String(userId)] = {
     sentAt: new Date().toISOString(),
@@ -4101,7 +4169,7 @@ async function markWinnerNotificationExpired(draw, userId) {
   }
 
   try {
-    await bot.telegram.sendMessage(userId, buildWinnerExpiredText(draw), { parse_mode: "HTML" });
+    await sendHtmlWithEmojiFallback(userId, buildWinnerExpiredText(draw));
   } catch (error) {
     // Не критично, если не получилось отправить отдельное уведомление.
   }
@@ -4141,14 +4209,16 @@ async function markWinnerDepositAddressExpired(draw, userId) {
   notify.forfeitedAt = new Date().toISOString();
 
   try {
-    await bot.telegram.sendMessage(userId, buildWinnerDepositAddressExpiredText(), {
-      parse_mode: "HTML",
-    });
+    await sendHtmlWithEmojiFallback(userId, buildWinnerDepositAddressExpiredText());
   } catch {
     // ignore
   }
 
   return true;
+}
+
+function clearWinnerAddressForRerequest(notify) {
+  return clearWinnerAddressBeforeRerequest(notify, isDepositAddressExpired);
 }
 
 async function requestWinnerDepositAddress(draw, userId, notify) {
@@ -4165,14 +4235,10 @@ async function requestWinnerDepositAddress(draw, userId, notify) {
   notify.addressExpiresAt = addressExpiresAt;
   notify.trc20Address = "";
 
-  const message = await bot.telegram.sendMessage(
+  const message = await sendHtmlWithEmojiFallback(
     userId,
     buildWinnerDepositAddressRequestHtml(draw, networkId),
-    {
-      parse_mode: "HTML",
-      link_preview_options: { is_disabled: true },
-      ...getWinnerDepositAddressKeyboard(draw),
-    },
+    getWinnerDepositAddressKeyboard(draw),
   );
   notify.addressPromptMessageId = message.message_id;
   return message;
@@ -4204,15 +4270,11 @@ async function markWinnerSubscriptionForfeited(draw, userId) {
 
   if (notify.lastMessageId) {
     try {
-      await bot.telegram.editMessageText(
+      await editHtmlWithEmojiFallback(
         userId,
         notify.lastMessageId,
-        undefined,
         buildWinnerSubscriptionForfeitedHtml(draw, payoutPrize),
-        {
-          parse_mode: "HTML",
-          reply_markup: { inline_keyboard: [] },
-        },
+        { reply_markup: { inline_keyboard: [] } },
       );
     } catch (error) {
       // Не критично, если не получилось отредактировать старое сообщение.
@@ -4249,15 +4311,11 @@ async function markWinnerAccountUnavailableForfeited(draw, userId, errorMessage 
 
   if (notify.lastMessageId) {
     try {
-      await bot.telegram.editMessageText(
+      await editHtmlWithEmojiFallback(
         userId,
         notify.lastMessageId,
-        undefined,
         buildWinnerAccountUnavailableForfeitedHtml(draw, payoutPrize),
-        {
-          parse_mode: "HTML",
-          reply_markup: { inline_keyboard: [] },
-        },
+        { reply_markup: { inline_keyboard: [] } },
       );
     } catch (error) {
       // Не критично, если не получилось отредактировать старое сообщение.
@@ -4460,10 +4518,9 @@ async function processWinnerDepositAddressTimeouts(data) {
     if (draw.status !== DRAW_STATUS.FINISHED || !draw.winnerNotifications) {
       continue;
     }
-    if (!drawAsksWinnerDepositAddress(draw)) {
-      continue;
-    }
 
+    // Same reason as findAwaitingWinnerDepositAddress: the window belongs to
+    // the record that is waiting, whatever the draw was configured to do.
     for (const [userIdRaw, notify] of Object.entries(draw.winnerNotifications)) {
       const userId = Number(userIdRaw);
       if (!Number.isInteger(userId)) {
@@ -5318,9 +5375,14 @@ function findAwaitingWinnerDepositAddress(userId) {
   const userKey = String(userId);
   let best = null;
   for (const draw of data.draws || []) {
-    if (draw.status !== DRAW_STATUS.FINISHED || !drawAsksWinnerDepositAddress(draw)) {
+    if (draw.status !== DRAW_STATUS.FINISHED) {
       continue;
     }
+    // The record saying "awaiting_address" is the fact that matters: someone
+    // asked this person for an address. Filtering on the draw's join-time
+    // setting instead meant an owner could ask through the panel and then
+    // silently ignore the answer, because the draw had collected the wallet at
+    // join time and was therefore skipped here.
     const notify = draw.winnerNotifications?.[userKey];
     if (!notify || notify.status !== "awaiting_address") {
       continue;
@@ -5363,11 +5425,7 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
   const networkId = resolveDepositNetworkForProject(project, notify.requiredDepositNetwork);
 
   if (!validateDepositAddress(text, networkId)) {
-    const network = getDepositNetworkMeta(networkId);
-    await ctx.reply(
-      `${getInvalidAddressError(networkId)}\n\nНужна сеть: <b>${network.shortLabel}</b>`,
-      { parse_mode: "HTML" },
-    );
+    await replyHtmlWithEmojiFallback(ctx, buildWinnerInvalidAddressHtml(networkId));
     return true;
   }
 
@@ -5436,14 +5494,9 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
   liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: false });
   writeDataPreservingLiveWinners(data);
 
-  const receivedLines = [buildWinnerDepositAddressReceivedHtml(text)];
-  if (forceNonReferralByWallet) {
-    receivedLines.push(
-      "",
-      "На этом кошельке уже были транзакции в блокчейне — выплата как для не-реферала.",
-    );
-  }
-  await ctx.reply(receivedLines.join("\n"), { parse_mode: "HTML" });
+  // The wallet-had-transactions note is deliberately not shown to the winner:
+  // it still drives the payout rate, it just is not their business to read.
+  await replyHtmlWithEmojiFallback(ctx, buildWinnerDepositAddressReceivedHtml(text));
   return true;
 }
 
@@ -5477,12 +5530,12 @@ async function startJoinFlow(ctx, drawId) {
   const data = readData();
   const draw = data.draws.find((item) => item.id === drawId);
   if (!draw || draw.status !== DRAW_STATUS.ACTIVE) {
-    await ctx.reply("Этот розыгрыш недоступен.");
+    await replyHtmlWithEmojiFallback(ctx, `<b>${pe("red")}</b><b> Этот розыгрыш недоступен.</b>`);
     return;
   }
 
   if (drawHasParticipant(draw, ctx.from.id)) {
-    await ctx.reply("Вы уже участвуете ✅");
+    await replyHtmlWithEmojiFallback(ctx, `${pe("check")} <b>Вы уже участвуете</b>`);
     return;
   }
 
@@ -5498,13 +5551,20 @@ async function startJoinFlow(ctx, drawId) {
 
   const participateUrl = getJoinParticipateUrl(drawId);
   if (participateUrl.startsWith("https://")) {
-    await ctx.reply("Нажмите кнопку ниже 👇", {
-      reply_markup: { inline_keyboard: [[{ text: "🎁 Участвовать", url: participateUrl, style: "danger" }]] },
-    });
+    await replyHtmlWithEmojiFallback(
+      ctx,
+      `${pe("down")}<b>Нажмите кнопку ниже </b>${pe("down")}`,
+      {
+        reply_markup: { inline_keyboard: [[{ text: "🎁 Участвовать", url: participateUrl, style: "danger" }]] },
+      },
+    );
     return;
   }
 
-  await ctx.reply("Участие временно недоступно. Попробуйте позже.");
+  await replyHtmlWithEmojiFallback(
+    ctx,
+    `<b>${pe("red")}</b><b>  Участие временно недоступно. Попробуйте позже.</b>`,
+  );
 }
 
 let lifecycleJobRunning = false;
@@ -6532,23 +6592,37 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     !isDeliveryFailed &&
     !isAwaitingAddress &&
     (!drawAsksWinnerDepositAddress(draw) || trcDisplay.copyable);
-  const winnerActionButtons = canResendNotification
-    ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/notify/${encodeURIComponent(String(winnerId))}">
+  const winnerActionForm = (action, label, extraClass = "") =>
+    `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/${action}/${encodeURIComponent(String(winnerId))}">
         ${returnPanelField}
-        <button type="submit" class="winner-action-btn">Оповестить заново</button>
-      </form>`
-    : canMarkPaid
-      ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/pay/${encodeURIComponent(String(winnerId))}">
-          ${returnPanelField}
-          <button type="submit" class="winner-action-btn">Оплатил</button>
-        </form>
-        <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/deny-pay/${encodeURIComponent(String(winnerId))}">
-          ${returnPanelField}
-          <button type="submit" class="winner-action-btn winner-action-secondary">Отказано в выплате</button>
-        </form>`
-      : "";
+        <button type="submit" class="winner-action-btn${extraClass}">${label}</button>
+      </form>`;
+  const canAskAddressAgain = canRequestWinnerAddressAgain(draw, notifyInfo, antiFraud);
+  const winnerActionList = [];
+  if (canResendNotification) {
+    winnerActionList.push(winnerActionForm("notify", "Оповестить заново"));
+  } else if (canMarkPaid) {
+    winnerActionList.push(winnerActionForm("pay", "Оплатил"));
+  }
+  // Offered next to "Оплатил" on purpose: the address turning out to be wrong
+  // is discovered at the moment of paying, not before it.
+  if (canAskAddressAgain) {
+    winnerActionList.push(
+      winnerActionForm(
+        "request-address",
+        "Запросить адрес повторно",
+        " winner-action-secondary winner-request-address-btn",
+      ),
+    );
+  }
+  if (canMarkPaid) {
+    winnerActionList.push(
+      winnerActionForm("deny-pay", "Отказано в выплате", " winner-action-secondary"),
+    );
+  }
+  const winnerActionButtons = winnerActionList.join("");
   const winnerActionsHtml = winnerActionButtons
-    ? `<div class="winner-card-actions${canMarkPaid ? " winner-card-actions-stack" : ""}">${winnerActionButtons}</div>`
+    ? `<div class="winner-card-actions${winnerActionList.length > 1 ? " winner-card-actions-stack" : ""}">${winnerActionButtons}</div>`
     : "";
   const profileUrl = buildParticipantProfileUrl(winnerId, PANEL_BASE);
   const profileBtn = `<a href="${escapeHtml(profileUrl)}" class="winner-profile-btn" title="Профиль участника" aria-label="Профиль участника">${renderFormIcon("user")}</a>`;
@@ -10606,6 +10680,22 @@ ${getPanelFluidTypographyVars()}
       cancelBtn.addEventListener("click", resetProjectForm);
     }
 
+    document.addEventListener(
+      "click",
+      (event) => {
+        const btn = event.target.closest(".winner-request-address-btn");
+        if (!btn) return;
+        const ok = confirm(
+          "Запросить у победителя адрес заново? Бот попросит прислать адрес в личку. " +
+            "Если он не ответит за ${WINNER_DEPOSIT_ADDRESS_MINUTES} мин, приз сгорит.",
+        );
+        if (!ok) {
+          event.preventDefault();
+        }
+      },
+      true,
+    );
+
     function setupFlashMessages() {
       document.querySelectorAll(".msg").forEach((el) => {
         window.setTimeout(() => {
@@ -11875,6 +11965,75 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
   redirectWithMessage(res, `Уведомление отправлено пользователю ${userId}.`);
 });
 
+panelRouter.post(
+  "/draws/:id/request-address/:userId",
+  webAuth.requireAuth,
+  requireOrganizer,
+  async (req, res) => {
+    const drawId = req.params.id;
+    const userId = Number(req.params.userId);
+    const ownerId = req.webUser.id;
+    const panelReturn = getPanelReturnOptions(req);
+
+    if (!Number.isInteger(userId)) {
+      redirectWithMessage(res, "Некорректный userId победителя.", panelReturn);
+      return;
+    }
+
+    const loaded = loadOwnedDrawForPanel(drawId, ownerId);
+    if (!loaded?.draw) {
+      redirectWithMessage(res, "Розыгрыш не найден.", panelReturn);
+      return;
+    }
+
+    const { data, archivedData, draw, inArchive } = loaded;
+    if (!draw.winnerIds?.includes(userId)) {
+      redirectWithMessage(res, "Пользователь не является победителем этого розыгрыша.", panelReturn);
+      return;
+    }
+
+    if (!draw.winnerNotifications) {
+      draw.winnerNotifications = {};
+    }
+    // The page was rendered some seconds ago; the winner may have sent the
+    // address in the meantime. Decide on the live record, not the snapshot.
+    const liveNotify = getLiveWinnerNotify(draw.id, userId);
+    if (liveNotify) {
+      draw.winnerNotifications[String(userId)] = liveNotify;
+    }
+    const notify = draw.winnerNotifications[String(userId)];
+
+    const userProfiles = readUserProjectProfiles();
+    const antiFraud = getWinnerAntiFraud(draw, userId, userProfiles, null, notify);
+    if (!canRequestWinnerAddressAgain(draw, notify, antiFraud)) {
+      redirectWithMessage(res, "Запросить адрес повторно сейчас нельзя.", panelReturn);
+      return;
+    }
+
+    clearWinnerAddressForRerequest(notify);
+
+    try {
+      await requestWinnerDepositAddress(draw, userId, notify);
+    } catch (error) {
+      // Nothing is persisted on failure, so the winner keeps the address and
+      // the state they already had.
+      redirectWithMessage(
+        res,
+        `Не удалось отправить запрос адреса: ${error.message}`,
+        panelReturn,
+      );
+      return;
+    }
+
+    persistOwnedDrawContext({ data, archivedData, draw, inArchive });
+    redirectWithMessage(
+      res,
+      `Запрос адреса отправлен победителю ${userId}. У него ${WINNER_DEPOSIT_ADDRESS_MINUTES} мин.`,
+      panelReturn,
+    );
+  },
+);
+
 panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const drawId = req.params.id;
   const userId = Number(req.params.userId);
@@ -11958,8 +12117,15 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
     hasFraudFlag: antiFraud.hasFraudFlag,
   });
 
+  const paidPostLink = buildDrawPostLink(draw);
+  const paidGiveawayWord = paidPostLink
+    ? `<a href="${escapeHtml(paidPostLink)}"><b>розыгрыш</b></a>`
+    : "<b>розыгрыш</b>";
   try {
-    await bot.telegram.sendMessage(userId, `✅ Ваш приз ${payoutText} выплачен!`);
+    await sendHtmlWithEmojiFallback(
+      userId,
+      `${pe("party")} <b>Ваш приз ${escapeHtml(payoutText)} за </b>${paidGiveawayWord}<b> выплачен!</b>`,
+    );
   } catch (error) {
     redirectWithMessage(res, "Не удалось отправить сообщение о выплате победителю.", panelReturn);
     return;
@@ -12563,7 +12729,9 @@ bot.action(/^wp:cap:([^:]+):(\d+)$/, async (ctx) => {
     }
 
     if (selected !== correctAnswer) {
-      await ctx.answerCbQuery("Неверно, попробуйте еще раз.");
+      // A callback answer is a plain-text toast: Telegram renders no entities
+      // there, so this one keeps the ordinary ❌ rather than the premium one.
+      await ctx.answerCbQuery("❌ Неверно, попробуйте еще раз.");
       return;
     }
 
@@ -12804,7 +12972,17 @@ async function runPayoutQueueSubscriptionRecheckCli() {
   console.log(`[payout-queue] готово${changed ? ", данные обновлены" : ""}`);
 }
 
-if (process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
+// Required by a preview or a test rather than run as a program: export the
+// message builders and start nothing at all. Deliberately an explicit env flag
+// and not `require.main === module` - pm2 runs this in cluster mode, where it
+// loads the script through its own wrapper and require.main is pm2's, not
+// ours. Keying on that would have meant the bot never booting in production.
+// Unset, which is every real run, nothing below changes.
+const MODULE_ONLY = process.env.ROLLERBOT_MODULE_ONLY === "1";
+
+if (MODULE_ONLY) {
+  // nothing starts
+} else if (process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
   runPayoutQueueSubscriptionRecheckCli()
     .then(() => process.exit(0))
     .catch((error) => {
@@ -12818,7 +12996,7 @@ if (process.env.RUN_PAYOUT_QUEUE_SUBSCRIPTION_RECHECK === "1") {
   });
 }
 
-if (!WEB_ONLY && !SKIP_TELEGRAM_POLLING) {
+if (!MODULE_ONLY && !WEB_ONLY && !SKIP_TELEGRAM_POLLING) {
   process.once("SIGINT", () => {
     shuttingDown = true;
     bot.stop("SIGINT");
@@ -12828,3 +13006,28 @@ if (!WEB_ONLY && !SKIP_TELEGRAM_POLLING) {
     bot.stop("SIGTERM");
   });
 }
+
+// Exported for previews and tests only; nothing in the running bot reads this.
+module.exports = {
+  buildParticipationSuccessMessage,
+  buildWinnerWinMessageHtml,
+  buildWinnerExpiredText,
+  buildWinnerDepositAddressRequestHtml,
+  buildWinnerDepositAddressReceivedHtml,
+  buildWinnerDepositAddressExpiredText,
+  buildWinnerSubscriptionForfeitedHtml,
+  buildWinnerAccountUnavailableForfeitedHtml,
+  buildDrawPostTelegramContent: getDrawPostTelegramContent,
+  getKeyboard,
+  getFinishedKeyboard,
+  getWinnerDepositAddressKeyboard,
+  getPerWinnerPrizeText,
+  getWinnerPayoutText,
+  buildCaptchaTask,
+  buildBotGuideStepTexts,
+  buildBotGuideFooterNote,
+  getProjectById,
+  buildProjectLinkHtml,
+  resolveDepositNetworkForProject,
+  WINNER_DEPOSIT_ADDRESS_MINUTES,
+};

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rollerbot-design",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:design"],
+      "port": 3000
+    }
+  ]
+}

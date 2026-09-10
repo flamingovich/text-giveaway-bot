@@ -4,6 +4,8 @@ const path = require("path");
 const ASSETS_ROOT = path.join(__dirname, "..", "assets", "trc20-guide");
 const RP_GUIDE_DIR = path.join(ASSETS_ROOT, "rp_guide");
 
+const { emoji: pe } = require("./premium-emoji-text");
+
 const DEPOSIT_NETWORKS = {
   trc20: {
     id: "trc20",
@@ -193,14 +195,27 @@ function buildWinnerDepositAddressRequestHtml(_draw, project, networkId, winnerD
   const projectPart =
     projectLinkHtml || `<b>${String(project?.name || "проекте").replace(/&/g, "&amp;").replace(/</g, "&lt;")}</b>`;
   return [
-    "✅ Проверка пройдена!",
+    `${pe("check")} <b>Проверка пройдена!</b>`,
     "",
-    `Отправьте <b>АКТУАЛЬНЫЙ</b> адрес пополнения ${projectPart} в сети <b>${network.shortLabel}</b> (${network.selectLabel}).`,
-    "⚠️ Очень важно: Если сеть будет неверной — <b>приз НЕ ПРИДЁТ</b>! Перепроверяйте сеть!",
+    `Отправьте <b>АКТУАЛЬНЫЙ</b> адрес пополнения <b>USDT</b> на ${projectPart} в сети <b>${network.shortLabel}</b><i> (${network.selectLabel}).</i>`,
+    `<blockquote>${pe("red")} <b>Очень важно: Если сеть будет неверной — приз НЕ ПРИДЁТ! Перепроверяйте сеть!</b></blockquote>`,
     "",
+    `${pe("alarm")} <b>У вас есть ${winnerDepositMinutes} минут — иначе приз сгорит.</b>`,
     `Пример: <code>${network.addressExample}</code>`,
+  ].join("\n");
+}
+
+// The wrong-format reply the winner gets in the bot. Kept apart from
+// getInvalidAddressError on purpose: that one is also rendered inside the mini
+// app, where HTML tags would show up as literal text.
+function buildWinnerInvalidAddressHtml(networkId) {
+  const network = getDepositNetworkMeta(networkId);
+  return [
+    `${pe("cross")}  <b>Неверный формат ${network.shortLabel} адреса.</b>`,
     "",
-    `У вас есть ${winnerDepositMinutes} минут — иначе приз сгорит.`,
+    `${pe("red")} Пример: ${network.addressExample}`,
+    "",
+    `Нужна сеть <b>${network.shortLabel}</b> и валюта <b>USDT</b>!`,
   ].join("\n");
 }
 
@@ -286,6 +301,7 @@ module.exports = {
   buildNetworkForfeitWarningHtml,
   buildJoinWalletStepPayload,
   buildWinnerDepositAddressRequestHtml,
+  buildWinnerInvalidAddressHtml,
   buildBotGuideStepTexts,
   getBotGuideImagePaths,
   buildBotGuideFooterNote,

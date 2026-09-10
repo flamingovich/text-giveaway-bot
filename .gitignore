@@ -11,6 +11,10 @@ data/known-channels.json
 data/user-project-profiles.json
 data/delegated-admins.json
 data/support-chats.json
+data/depman-support-chats.json
+data/draws-archive.json
+data/.brand-project-templates-v1
+data/.pokerdom-legacy-profiles-v1
 data/giveaway.db
 data/giveaway.db-wal
 data/giveaway.db-shm
