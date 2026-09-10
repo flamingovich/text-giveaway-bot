@@ -92,6 +92,22 @@ const {
 const { archiveStaleDraws } = require("./draw-archive");
 const { isMegaDraw, removeMegaSession, registerMegaGiveawayBot } = require("./mega-giveaway");
 const {
+  isParticipantAnonymous,
+  setParticipantAnonymous,
+  maskDisplayName,
+} = require("./participant-anonymity");
+const {
+  emoji: pe,
+  digits: peDigits,
+  stripPremiumEmoji,
+  hasPremiumEmoji,
+} = require("./premium-emoji-text");
+const {
+  getWinnerAddressForfeitureKind: forfeitureKindOf,
+  canRequestWinnerAddressAgain: canAskWinnerForAddressAgain,
+  clearWinnerAddressForRerequest: clearWinnerAddressBeforeRerequest,
+} = require("./winner-address-request");
+const {
   DATA_DIR,
   UPLOADS_DIR,
   ensureStorage,
@@ -2847,16 +2863,21 @@ function formatDrawPrizePlain(draw) {
   return String(draw.prize || "").trim();
 }
 
-function getWinnerMentionLink(userProfiles, winnerId) {
+// The results post names the winner and stops there. Every name used to be a
+// link to that person's Telegram, which turned a finished draw into a ready
+// list of people to write to about the money they had just been told they won.
+// buildDrawPostFinishedPayload already renders a winner without a url as plain
+// text, so an empty url is all it takes.
+function getWinnerMentionLink(userProfiles, winnerId, draw = null) {
   const userNode = userProfiles.users?.[String(winnerId)] || {};
   const meta = userNode.meta || {};
-  const displayName =
+  const realName =
     [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim() ||
     getWinnerDisplayName(meta, winnerId);
-  const url = meta.username
-    ? `https://t.me/${String(meta.username).replace(/^@/, "")}`
-    : `tg://user?id=${winnerId}`;
-  return { displayName, url };
+  const displayName = isParticipantAnonymous(draw, winnerId)
+    ? maskDisplayName(realName)
+    : realName;
+  return { displayName, url: "" };
 }
 
 function getDrawPostTelegramContent(draw, options = {}) {
@@ -2866,7 +2887,7 @@ function getDrawPostTelegramContent(draw, options = {}) {
   if (includeWinners) {
     const userProfiles = readUserProjectProfiles();
     const winners = (draw.winnerIds || []).map((winnerId) =>
-      getWinnerMentionLink(userProfiles, winnerId),
+      getWinnerMentionLink(userProfiles, winnerId, draw),
     );
     const payload = buildDrawPostFinishedPayload({
       prizeLabel: formatDrawPrizePlain(draw),
@@ -5281,6 +5302,24 @@ function drawHasParticipant(draw, userId) {
   return (draw.participantIds || []).some((id) => String(id) === key);
 }
 
+// The draw document is the hottest thing in the app, and this is written from
+// the mini app while joins are landing: a plain writeData here would discard
+// every join and winner notification saved since this snapshot was read.
+function setDrawParticipantAnonymous(drawId, userId, anonymous) {
+  const data = readData();
+  const draw = data.draws.find((item) => item.id === drawId);
+  if (!draw) {
+    return { ok: false, error: "Розыгрыш не найден." };
+  }
+  if (!drawHasParticipant(draw, userId)) {
+    return { ok: false, error: "Вы не участвуете в этом розыгрыше." };
+  }
+  if (setParticipantAnonymous(draw, userId, anonymous)) {
+    writeDataPreservingLiveWinners(data);
+  }
+  return { ok: true, anonymous: isParticipantAnonymous(draw, userId) };
+}
+
 function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
   if (!projectId) {
     return false;
@@ -6579,6 +6618,11 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
       : notifySent
         ? `<span class="winner-badge">Уведомлён</span>`
         : `<span class="winner-badge">Ожидает</span>`;
+  // The public pages mask this person; the panel must not, or the owner cannot
+  // tell who they are paying. The badge says why the channel post looks different.
+  const anonymousBadge = isParticipantAnonymous(draw, winnerId)
+    ? `<span class="winner-badge winner-badge-anon">Аноним</span>`
+    : "";
   const antiFraudBadges = antiFraud.labels
     .map((label) => `<span class="winner-badge winner-badge-danger">${escapeHtml(label)}</span>`)
     .join("");
@@ -6639,7 +6683,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
           ${usernameMetaHtml}
           ${projectLabelHtml}
           ${victoryDateHtml}
-          <div class="winner-card-badges">${refBadge}${statusBadge}${antiFraudBadges}</div>
+          <div class="winner-card-badges">${refBadge}${statusBadge}${anonymousBadge}${antiFraudBadges}</div>
         </div>
       </div>
       <div class="winner-card-row${payoutRow.rowClass}">
@@ -9264,6 +9308,11 @@ ${getPanelFluidTypographyVars()}
       background: #ffebe9;
       border-color: #ff8182;
     }
+    .winner-badge-anon {
+      color: #6b3fa0;
+      background: #f3ecff;
+      border-color: #d3bdf0;
+    }
     .winner-card-row {
       display: flex;
       align-items: flex-start;
@@ -9641,6 +9690,11 @@ ${getPanelFluidTypographyVars()}
       color: #ff9a9a;
       background: color-mix(in srgb, #ff6b6b 14%, transparent);
       border-color: color-mix(in srgb, #ff6b6b 28%, transparent);
+    }
+    body.app-theme-dark .winner-badge-anon {
+      color: #c9a9ff;
+      background: color-mix(in srgb, #a97bff 16%, transparent);
+      border-color: color-mix(in srgb, #a97bff 30%, transparent);
     }
     body.app-theme-dark .winner-profile-btn {
       background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 14%, transparent);
@@ -11091,6 +11145,8 @@ registerJoinMiniApp(app, {
   getChannelSubscribePayload,
   computeJoinWinChance,
   buildJoinReferralDirectLink: require("./join-referrals").buildJoinReferralDirectLink,
+  isPlatformAdmin,
+  setDrawParticipantAnonymous,
 });
 
 registerWinnersMiniApp(app, {
@@ -11105,6 +11161,12 @@ registerWinnersMiniApp(app, {
   ensureUserAvatars,
   bot: WEB_ONLY ? null : bot,
   designPreview: ENABLE_DEV_PREVIEW,
+  // Opening someone's Telegram profile from the results page is an admin tool.
+  // The page itself is public and unauthenticated, so the answer is decided on
+  // the server from signed initData, never from what the client claims to be.
+  validateInitData,
+  BOT_TOKEN,
+  isPlatformAdmin,
 });
 
 app.get("/", (_req, res) => {

@@ -9,8 +9,10 @@ const {
   renderDesktopTiledBackground,
   renderThemeToggleButton,
   getParticipantRowChevronIcon,
+  getAnonymousIdentityStyles,
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
+const { isParticipantAnonymous, buildPublicIdentity } = require("./participant-anonymity");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
 const { resolveFileLink } = require("./file-link-cache");
 
@@ -67,7 +69,9 @@ function renderAvatar(user) {
   const inner = user.avatarUrl
     ? `<img src="${escapeHtml(user.avatarUrl)}" alt="" class="winners-avatar-img" loading="lazy" onerror="this.classList.add('hidden');var f=this.nextElementSibling;if(f)f.classList.remove('hidden')" />${fallback}`
     : fallback;
-  return `<div class="winners-avatar">${inner}</div>`;
+  // buildPublicIdentity already dropped the photo url, so an anonymous row can
+  // only ever blur the initial - there is no picture here to peel the blur off.
+  return `<div class="winners-avatar${user.anonymous ? " is-anon-avatar" : ""}">${inner}</div>`;
 }
 function buildUserViewModel(userId, draw, deps, options = {}) {
   const userProfiles = deps.readUserProjectProfiles();
@@ -77,18 +81,23 @@ function buildUserViewModel(userId, draw, deps, options = {}) {
   const initial = (displayName.replace(/^@/, "") || String(userId)).charAt(0).toUpperCase() || "?";
   const avatarUrl = meta.avatarFileId ? `/winners/avatar/${encodeURIComponent(String(userId))}` : "";
   const backUrl = options.backUrl || (draw?.id ? `/winners/${encodeURIComponent(draw.id)}` : "");
-  const profilePageUrl = buildParticipantProfileUrl(userId, backUrl);
+  const anonymous = isParticipantAnonymous(draw, userId);
   const prize = options.includePrize ? deps.getPerWinnerPrizeText(draw) : "";
 
-  return {
-    id: String(userId),
-    displayName,
-    username,
-    initial,
-    avatarUrl,
-    profilePageUrl,
-    prize,
-  };
+  return buildPublicIdentity(
+    {
+      id: String(userId),
+      displayName,
+      username,
+      initial,
+      avatarUrl,
+      // A masked row must not carry a way through to the page that names the
+      // person. The owner sees them by name in the panel instead.
+      profilePageUrl: anonymous ? "" : buildParticipantProfileUrl(userId, backUrl),
+      prize,
+    },
+    anonymous,
+  );
 }
 
 function buildWinnerViewModel(winnerId, draw, deps) {
@@ -102,29 +111,43 @@ function buildParticipantsList(draw, deps) {
     .map((userId) => buildUserViewModel(userId, draw, deps));
 }
 
+// The row is deliberately not a link and not focusable. Results are read by
+// everyone in the channel, and every name here used to be a tap away from that
+// person's Telegram profile. The owner still needs profiles for anti-fraud, so
+// the page asks the server who is looking and only then turns the rows back
+// into links - see enableProfileLinks below. Nothing is hidden by rendering it
+// and disabling it in CSS: a row that must not be clickable is not rendered as
+// a link in the first place.
 function renderUserRow(user, options = {}) {
   const showPrize = options.showPrize === true;
-  const handle = user.username || "без username";
+  const handle = user.anonymous ? "скрыт" : user.username || "без username";
   const prizeBlock = showPrize
     ? `<div class="winners-row-prize">
         <span class="winners-row-prize-label">Приз:</span>
         <span class="winners-row-prize-value">${escapeHtml(user.prize)}</span>
       </div>`
     : "";
+  const profileAttr = user.profilePageUrl
+    ? ` data-profile-url="${escapeHtml(user.profilePageUrl)}"`
+    : "";
+  const anonTag = user.anonymous
+    ? `<span class="anon-tag" title="Участник скрыл имя">Аноним</span>`
+    : "";
 
-  return `<article class="winners-row winners-row-link${showPrize ? "" : " winners-row-compact"}" data-profile-url="${escapeHtml(user.profilePageUrl)}" role="link" tabindex="0">
-    <a href="${escapeHtml(user.profilePageUrl)}" class="winners-row-hit" aria-label="Профиль ${escapeHtml(user.displayName)}">
+  return `<article class="winners-row${showPrize ? "" : " winners-row-compact"}"${profileAttr}>
+    <div class="winners-row-hit">
       ${renderAvatar(user)}
       <div class="winners-row-body">
         <div class="winners-row-identity">
           <span class="winners-row-name-line">
-            <span class="winners-row-name">${escapeHtml(user.displayName)}</span>
-            <span class="winners-row-chevron" aria-hidden="true">${getParticipantRowChevronIcon()}</span>
+            <span class="winners-row-name${user.anonymous ? " is-anon-name" : ""}">${escapeHtml(user.displayName)}</span>
+            ${anonTag}
+            <span class="winners-row-chevron hidden" aria-hidden="true">${getParticipantRowChevronIcon()}</span>
           </span>
         </div>
-        <div class="winners-row-handle">${escapeHtml(handle)}</div>
+        <div class="winners-row-handle${user.anonymous ? " is-anon-handle" : ""}">${escapeHtml(handle)}</div>
       </div>
-    </a>
+    </div>
     ${prizeBlock}
   </article>`;
 }
@@ -170,9 +193,6 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
   const prizeTitle = escapeHtml(draw?.prize || "приз");
   const winnersCount = winners.length;
   const participantCount = participants.length;
-  const winnerIds = (draw?.winnerIds || []).map(String);
-  const participantIds = (draw?.participantIds || []).map(String);
-
   const defaultTab = "winners";
   const winnersRowsHtml = winnersCount > 0 ? winners.map((w) => renderWinnerCard(w)).join("") : "";
   const participantsRowsHtml =
@@ -192,6 +212,7 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
     .preview-toolbar { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; width: 100%; box-sizing: border-box; }
     ${isPreview ? getPreviewDevStyles() : ""}
     ${getWinnersPageStyles()}
+    ${getAnonymousIdentityStyles()}
     ${getMiniAppStyles()}
   </style>
 </head>
@@ -223,10 +244,15 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
     (function () {
       ${getMiniAppProfileNavigateScript()}
 
+      // The winner and participant id lists used to be printed into this page
+      // so the client could work out "did I win". That put every participant's
+      // raw Telegram id in the source of a public page - which also handed
+      // anyone the id of a person who had asked to stay anonymous. The server
+      // answers the same question from signed initData instead.
       const DRAW_VIEW = {
-        winnerIds: ${JSON.stringify(winnerIds)},
-        participantIds: ${JSON.stringify(participantIds)},
-        previewViewerId: ${options.previewViewerId != null ? JSON.stringify(String(options.previewViewerId)) : "null"},
+        drawId: ${JSON.stringify(String(draw?.id || ""))},
+        previewStatus: ${options.previewStatus ? JSON.stringify(String(options.previewStatus)) : "null"},
+        previewCanOpenProfiles: ${options.previewCanOpenProfiles ? "true" : "false"},
       };
 
       const tg = window.Telegram?.WebApp;
@@ -235,24 +261,18 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
         tg.expand();
       }
 
-      function applyViewerStatus() {
+      function applyViewerStatus(status) {
         const el = document.getElementById("viewerStatus");
         if (!el) return;
         const iconEl = el.querySelector(".winners-viewer-banner-icon");
         const titleEl = el.querySelector(".winners-viewer-banner-title");
         const subEl = el.querySelector(".winners-viewer-banner-sub");
-        let userId = DRAW_VIEW.previewViewerId;
-        if (!userId && tg?.initDataUnsafe?.user?.id) {
-          userId = String(tg.initDataUnsafe.user.id);
-        }
-        if (!userId) {
+        if (!status) {
           el.classList.add("hidden");
           return;
         }
         el.classList.remove("hidden", "is-won", "is-lost", "is-none");
-        const winners = new Set(DRAW_VIEW.winnerIds);
-        const participants = new Set(DRAW_VIEW.participantIds);
-        if (winners.has(userId)) {
+        if (status === "won") {
           el.classList.add("is-won");
           if (iconEl) iconEl.innerHTML = ${JSON.stringify(VIEWER_WON_ICON)};
           if (titleEl) titleEl.textContent = "Вы выиграли";
@@ -260,7 +280,7 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
             subEl.textContent = "Проверьте личные сообщения бота";
             subEl.classList.remove("hidden");
           }
-        } else if (participants.has(userId)) {
+        } else if (status === "lost") {
           el.classList.add("is-lost");
           if (iconEl) iconEl.innerHTML = ${JSON.stringify(VIEWER_LOST_ICON)};
           if (titleEl) titleEl.textContent = "Вы не выиграли";
@@ -279,29 +299,60 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
         }
       }
 
-      applyViewerStatus();
+      let profileLinksEnabled = false;
 
-      function bindProfileLinks(root) {
-        (root || document).querySelectorAll(".winners-row-link").forEach((row) => {
+      // Rows arrive inert. Only an owner or admin gets them turned back into
+      // links, and only after the server has said so from signed initData -
+      // never from what this page could decide about itself.
+      function enableProfileLinks() {
+        profileLinksEnabled = true;
+        document.querySelectorAll(".winners-row[data-profile-url]").forEach((row) => {
           if (row.dataset.bound === "1") return;
           row.dataset.bound = "1";
+          row.classList.add("winners-row-link");
+          row.setAttribute("role", "link");
+          row.setAttribute("tabindex", "0");
+          const chevron = row.querySelector(".winners-row-chevron");
+          if (chevron) chevron.classList.remove("hidden");
           const go = (event) => {
             if (event) event.preventDefault();
-            const href = row.getAttribute("data-profile-url") || row.querySelector(".winners-row-hit")?.getAttribute("href") || "";
-            navigateMiniAppProfileUrl(href);
+            navigateMiniAppProfileUrl(row.getAttribute("data-profile-url") || "");
           };
-          row.querySelector(".winners-row-hit")?.addEventListener("click", go);
-          row.addEventListener("click", (event) => {
-            if (event.target.closest("a.winners-row-hit")) return;
-            go(event);
-          });
+          row.addEventListener("click", go);
           row.addEventListener("keydown", (event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              go(event);
-            }
+            if (event.key === "Enter" || event.key === " ") go(event);
           });
         });
       }
+
+      async function loadViewerRole() {
+        if (DRAW_VIEW.previewStatus) {
+          applyViewerStatus(DRAW_VIEW.previewStatus);
+          if (DRAW_VIEW.previewCanOpenProfiles) enableProfileLinks();
+          return;
+        }
+        const initData = tg?.initData || "";
+        if (!initData || !DRAW_VIEW.drawId) return;
+        try {
+          const response = await fetch(
+            "/api/winners/" + encodeURIComponent(DRAW_VIEW.drawId) + "/viewer",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": initData },
+              body: JSON.stringify({ initData: initData }),
+            },
+          );
+          if (!response.ok) return;
+          const data = await response.json();
+          applyViewerStatus(data.status);
+          if (data.canOpenProfiles) enableProfileLinks();
+        } catch (error) {
+          // The banner is a nicety; the results are the page. A failed check
+          // leaves the rows inert, which is the safe side to fail on.
+        }
+      }
+
+      loadViewerRole();
 
       function ensureWinnersRowsVisible(root) {
         (root || document).querySelectorAll(".winners-row").forEach((row) => {
@@ -322,7 +373,7 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
         });
         const activePanel = tab === "winners" ? winnersPanel : participantsPanel;
         requestAnimationFrame(() => ensureWinnersRowsVisible(activePanel));
-        bindProfileLinks(document.querySelector(".winners-panel"));
+        if (profileLinksEnabled) enableProfileLinks();
       }
 
       document.querySelectorAll(".winners-stat-btn").forEach((btn) => {
@@ -332,7 +383,6 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
         });
       });
 
-      bindProfileLinks(document);
       ensureWinnersRowsVisible(document);
       requestAnimationFrame(() => ensureWinnersRowsVisible(document));
       setTimeout(() => ensureWinnersRowsVisible(document), 350);
@@ -414,6 +464,9 @@ function registerWinnersMiniApp(app, deps) {
     ensureUserAvatars,
     bot,
     designPreview,
+    validateInitData,
+    BOT_TOKEN,
+    isPlatformAdmin,
   } = deps;
 
   const viewDeps = {
@@ -487,6 +540,31 @@ function registerWinnersMiniApp(app, deps) {
     res.type("html").send(renderWinnersPage(draw, winners, participants));
   });
 
+  // Who is looking, decided here rather than in the page. Two things hang off
+  // it: the "Вы выиграли" banner, which the client used to work out from a
+  // list of everyone's ids printed into the html, and whether the rows may
+  // open a profile at all.
+  app.post("/api/winners/:drawId/viewer", (req, res) => {
+    const draw = getFinishedDraw(req.params.drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш не найден или ещё не завершён." });
+      return;
+    }
+    const initData = req.headers["x-telegram-init-data"] || req.body?.initData || "";
+    const user = validateInitData ? validateInitData(initData, BOT_TOKEN) : null;
+    if (!user?.id) {
+      res.status(401).json({ error: "Откройте через Telegram." });
+      return;
+    }
+    const viewerKey = String(user.id);
+    const isWinner = (draw.winnerIds || []).some((id) => String(id) === viewerKey);
+    const isParticipant = (draw.participantIds || []).some((id) => String(id) === viewerKey);
+    res.json({
+      status: isWinner ? "won" : isParticipant ? "lost" : "none",
+      canOpenProfiles: Boolean(isPlatformAdmin && isPlatformAdmin(user.id)),
+    });
+  });
+
   app.get("/api/winners/:drawId", (req, res) => {
     const draw = getFinishedDraw(req.params.drawId);
     if (!draw) {
@@ -516,6 +594,9 @@ function registerWinnersMiniApp(app, deps) {
       prizeAmount: 20,
       participantIds: ["1001", "1002", "1003", "1004", "1005", "999001"],
       projectId: "demo",
+      // One winner and one participant asked to stay hidden, so the preview
+      // shows both states of the list side by side.
+      participantMeta: { "1002": { anonymous: true }, "1004": { anonymous: true } },
     };
     const previewViewDeps = {
       ...viewDeps,
@@ -530,7 +611,8 @@ function registerWinnersMiniApp(app, deps) {
       res.type("html").send(
         renderWinnersPage(mockDraw, mockWinners, mockParticipants, {
           isPreview: true,
-          previewViewerId: "1003",
+          previewStatus: "lost",
+          previewCanOpenProfiles: false,
         }),
       );
     });

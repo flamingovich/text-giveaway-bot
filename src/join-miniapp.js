@@ -7,6 +7,7 @@ const {
   getMiniAppFontLinks,
   getPreviewDevStyles,
   getJoinFlowStyles,
+  getAnonymousIdentityStyles,
   getGatePageStyles,
   getJoinPreviewThemeStyles,
   renderThemeToggleButton,
@@ -16,6 +17,11 @@ const {
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
+const {
+  isParticipantAnonymous,
+  buildPublicIdentity,
+  maskDisplayName,
+} = require("./participant-anonymity");
 const {
   getDrawOwnerId,
   resolveJoinProjectContext,
@@ -400,6 +406,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
     .hidden { display: none !important; }
     ${getJoinFlowStyles()}
+    ${getAnonymousIdentityStyles()}
     ${isPreview ? getPreviewDevStyles() : ""}
     ${isPreview ? getJoinPreviewThemeStyles() : ""}
     ${getMiniAppStyles()}
@@ -554,6 +561,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             </div>
           </div>
           <button type="button" class="join-btn join-btn-gradient join-done-boost-btn" id="joinDoneBoostBtn">✨ Пригласить друзей</button>
+          <button type="button" class="join-btn join-btn-outline join-done-anon-btn" id="joinDoneAnonBtn" aria-pressed="false">
+            <span class="join-done-anon-icon">${JOIN_DONE_MASK_ICON}</span>
+            <span class="join-btn-label" id="joinDoneAnonLabel">Участвовать анонимно</span>
+          </button>
+          <p class="join-done-anon-note hidden" id="joinDoneAnonNote"></p>
           <div class="join-done-tips">
             <div class="join-done-tip">
               <span class="join-done-tip-icon">${JOIN_DONE_BELL_ICON}</span>
@@ -1351,6 +1363,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         avatarEl.appendChild(fallback);
       }
       fallback.textContent = participant.initial || "?";
+      avatarEl.classList.toggle("is-anon-avatar", Boolean(participant.anonymous));
       if (participant.fallbackStyle) {
         fallback.setAttribute("style", participant.fallbackStyle);
       } else {
@@ -1404,17 +1417,35 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const nameEl = row.querySelector(".join-done-row-name");
       if (nameEl) {
         nameEl.textContent = participant.displayName || "";
+        nameEl.classList.toggle("is-anon-name", Boolean(participant.anonymous));
+      }
+
+      const anonTagEl = row.querySelector(".anon-tag");
+      if (anonTagEl) {
+        anonTagEl.classList.toggle("hidden", !participant.anonymous);
       }
 
       const handleEl = row.querySelector(".join-done-row-handle");
       if (handleEl) {
-        if (participant.username) {
+        handleEl.classList.toggle("is-anon-handle", Boolean(participant.anonymous));
+        if (participant.anonymous) {
+          handleEl.textContent = "скрыт";
+          handleEl.classList.add("join-done-row-handle-muted");
+        } else if (participant.username) {
           handleEl.textContent = participant.username;
           handleEl.classList.remove("join-done-row-handle-muted");
         } else {
           handleEl.textContent = "без username";
           handleEl.classList.add("join-done-row-handle-muted");
         }
+      }
+
+      // A row with nowhere to go must not look like it has somewhere to go.
+      const hasProfile = Boolean(participant.profilePageUrl);
+      row.classList.toggle("join-done-row-link", hasProfile);
+      const chevron = row.querySelector(".join-done-row-chevron");
+      if (chevron) {
+        chevron.classList.toggle("hidden", !hasProfile);
       }
 
       const youBadge = row.querySelector(".join-done-you");
@@ -1432,8 +1463,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     function createDoneParticipantRow(participant) {
       const row = document.createElement("article");
-      row.className =
-        "join-done-row join-done-row-link" + (participant.isYou ? " join-done-row-you" : "");
+      row.className = "join-done-row" + (participant.isYou ? " join-done-row-you" : "");
       row.dataset.participantId = String(participant.id || "");
       if (participant.profilePageUrl) {
         row.dataset.profileUrl = participant.profilePageUrl;
@@ -1456,8 +1486,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       nameEl.className = "join-done-row-name";
       nameLine.appendChild(nameEl);
 
+      const anonTagEl = document.createElement("span");
+      anonTagEl.className = "anon-tag hidden";
+      anonTagEl.title = "Участник скрыл имя";
+      anonTagEl.textContent = "Аноним";
+      nameLine.appendChild(anonTagEl);
+
       const chevronEl = document.createElement("span");
-      chevronEl.className = "join-done-row-chevron";
+      chevronEl.className = "join-done-row-chevron hidden";
       chevronEl.setAttribute("aria-hidden", "true");
       chevronEl.innerHTML = PARTICIPANT_ROW_CHEVRON_HTML;
       nameLine.appendChild(chevronEl);
@@ -1474,7 +1510,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       updateDoneParticipantRow(row, participant);
       if (!row.dataset.profileBound) {
         row.dataset.profileBound = "1";
-        row.addEventListener("click", () => navigateToProfile(participant.profilePageUrl));
+        // The url is only there for a viewer the server allowed and a
+        // participant who did not ask to be hidden, so reading it at click
+        // time is what keeps a row from outliving the permission it was built with.
+        row.addEventListener("click", () => {
+          const href = row.dataset.profileUrl || "";
+          if (href) navigateToProfile(href);
+        });
       }
       return row;
     }
@@ -1509,6 +1551,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           updateDoneParticipantRow(row, participant);
           if (participant.profilePageUrl) {
             row.dataset.profileUrl = participant.profilePageUrl;
+          } else {
+            delete row.dataset.profileUrl;
           }
           existing.delete(id);
         }
@@ -1521,6 +1565,66 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       });
     }
 
+    let anonRequestInFlight = false;
+
+    function renderDoneAnonymous(payload) {
+      const btn = document.getElementById("joinDoneAnonBtn");
+      const label = document.getElementById("joinDoneAnonLabel");
+      const note = document.getElementById("joinDoneAnonNote");
+      if (!btn || !label) return;
+      const on = Boolean(payload.anonymous);
+      btn.classList.toggle("is-on", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+      label.textContent = on ? "Вы участвуете анонимно" : "Участвовать анонимно";
+      if (note) {
+        note.classList.remove("join-done-anon-note-error");
+        note.classList.toggle("hidden", !on);
+        if (on) {
+          const mask = payload.anonymousMask || lastDonePayload.anonymousMask || "";
+          note.innerHTML = mask
+            ? "В итогах вас покажут как <b>" + escapeHtml(mask) + "</b> — без фото и юзернейма."
+            : "В итогах ваше имя и фото не покажут.";
+        }
+      }
+    }
+
+    async function toggleDoneAnonymous() {
+      if (anonRequestInFlight) return;
+      const btn = document.getElementById("joinDoneAnonBtn");
+      const next = !(lastDonePayload && lastDonePayload.anonymous);
+      if (PAGE_MODE === "preview") {
+        lastDonePayload = { ...lastDonePayload, anonymous: next };
+        renderDoneAnonymous(lastDonePayload);
+        return;
+      }
+      anonRequestInFlight = true;
+      if (btn) btn.classList.add("is-loading");
+      try {
+        const data = await api(
+          "/api/join/" + encodeURIComponent(drawId) + "/anonymous",
+          { anonymous: next },
+        );
+        lastDonePayload = { ...lastDonePayload, ...data };
+        renderDoneAnonymous(lastDonePayload);
+        if (Array.isArray(data.participants)) {
+          syncDoneParticipantsList(data.participants);
+        }
+      } catch (error) {
+        // Leave the toggle showing the state the server last confirmed rather
+        // than the one that was asked for and did not land.
+        renderDoneAnonymous(lastDonePayload || {});
+        const note = document.getElementById("joinDoneAnonNote");
+        if (note) {
+          note.textContent = error.message || "Не удалось изменить настройку.";
+          note.classList.remove("hidden");
+          note.classList.add("join-done-anon-note-error");
+        }
+      } finally {
+        anonRequestInFlight = false;
+        if (btn) btn.classList.remove("is-loading");
+      }
+    }
+
     function renderDoneStats(payload) {
       const stats = document.getElementById("joinDoneStats");
       const participantsBlock = document.getElementById("joinDoneParticipants");
@@ -1528,6 +1632,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const countEl = document.getElementById("joinDoneCount");
       const chanceEl = document.getElementById("joinDoneChance");
       if (!stats || !participantsBlock || !list || !countEl || !chanceEl) return;
+
+      renderDoneAnonymous(payload);
 
       const participantCount = Number(payload.participantCount) || 0;
       const participants = Array.isArray(payload.participants) ? payload.participants : [];
@@ -2430,6 +2536,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     bindClick("joinDoneBoostBtn", () => openJoinBoostSheet(lastDonePayload || {}));
+    bindClick("joinDoneAnonBtn", toggleDoneAnonymous);
 
     bindClick("joinBoostCloseBtn", () => closeJoinBoostSheet());
     document.getElementById("joinBoostBackdrop")?.addEventListener("click", () => closeJoinBoostSheet());
@@ -2550,10 +2657,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
                 referralInviteCount: 1,
                 referralMaxInvites: 10,
                 endAt: previewEnd,
+                anonymous: false,
+                anonymousMask: "А***й",
+                canOpenProfiles: false,
                 participants: [
-                  { id: "1001", displayName: "Алексей", username: "@alex_winner", initial: "А", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#5b7cfa,#325fff)", profilePageUrl: "/user/1001?back=%2Fdev%2Fpreview%2Fjoin", isYou: true },
-                  { id: "1002", displayName: "Мария", username: "@maria_p", initial: "М", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#f97316,#ea580c)", profilePageUrl: "/user/1002?back=%2Fdev%2Fpreview%2Fjoin", isYou: false },
-                  { id: "1003", displayName: "Дмитрий", username: "@dmitry_k", initial: "Д", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#14b8a6,#0d9488)", profilePageUrl: "/user/1003?back=%2Fdev%2Fpreview%2Fjoin", isYou: false },
+                  { id: "1001", displayName: "Алексей", username: "@alex_winner", initial: "А", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#5b7cfa,#325fff)", profilePageUrl: "", isYou: true, anonymous: false },
+                  { id: "1002", displayName: "М***я", username: "", initial: "М", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#f97316,#ea580c)", profilePageUrl: "", isYou: false, anonymous: true },
+                  { id: "1003", displayName: "Дмитрий", username: "@dmitry_k", initial: "Д", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#14b8a6,#0d9488)", profilePageUrl: "", isYou: false, anonymous: false },
                 ],
               });
               return;
@@ -2705,6 +2815,8 @@ function registerJoinMiniApp(app, deps) {
     getChannelSubscribePayload = null,
     computeJoinWinChance: computeJoinWinChanceFn = null,
     buildJoinReferralDirectLink = null,
+    isPlatformAdmin = () => false,
+    setDrawParticipantAnonymous = null,
   } = deps;
 
   async function verifyRecaptchaToken(token) {
@@ -2985,6 +3097,10 @@ function registerJoinMiniApp(app, deps) {
           referralBoostPerInvite: 50,
         };
 
+    // Unlike the results page, this request is authenticated, so the answer to
+    // "may this person open profiles" is settled here instead of being asked
+    // for afterwards. Everyone else gets rows with nowhere to tap.
+    const viewerCanOpenProfiles = Boolean(isPlatformAdmin(userId));
     const participants = participantIds
       .filter((id) => !shouldHideParticipant(id))
       .map((id) => {
@@ -2993,16 +3109,32 @@ function registerJoinMiniApp(app, deps) {
         const username = meta.username ? `@${meta.username}` : "";
         const initial = (displayName.replace(/^@/, "") || String(id)).charAt(0).toUpperCase() || "?";
         const avatarFileId = meta.avatarFileId || "";
-        return {
-          id: String(id),
-          displayName,
-          username,
-          initial,
-          avatarUrl: avatarFileId ? `/winners/avatar/${encodeURIComponent(String(id))}` : "",
-          fallbackStyle: avatarFileId ? "" : getAvatarFallbackStyle(id),
-          profilePageUrl: buildParticipantProfileUrl(id, `/join/${encodeURIComponent(draw.id)}`),
-          isYou: Number(id) === Number(userId),
-        };
+        const anonymous = isParticipantAnonymous(draw, id);
+        // Your own row is never masked to you - you are the one who chose it,
+        // and seeing yourself blurred reads as the setting having gone wrong.
+        const isYou = Number(id) === Number(userId);
+        const identity = buildPublicIdentity(
+          {
+            id: String(id),
+            displayName,
+            username,
+            initial,
+            avatarUrl: avatarFileId ? `/winners/avatar/${encodeURIComponent(String(id))}` : "",
+            fallbackStyle: avatarFileId ? "" : getAvatarFallbackStyle(id),
+            profilePageUrl:
+              viewerCanOpenProfiles && !anonymous
+                ? buildParticipantProfileUrl(id, `/join/${encodeURIComponent(draw.id)}`)
+                : "",
+            isYou,
+          },
+          anonymous && !isYou,
+        );
+        if (identity.anonymous) {
+          // The photo is gone, so the row falls back to the tinted initial -
+          // which someone who had a photo never had a tint for.
+          identity.fallbackStyle = getAvatarFallbackStyle(id);
+        }
+        return identity;
       });
 
     return buildJoinStepResponse("done", {
@@ -3017,6 +3149,11 @@ function registerJoinMiniApp(app, deps) {
       referralBoostPerInvite: chance.referralBoostPerInvite,
       endAt: draw.endAt || null,
       participants,
+      anonymous: isParticipantAnonymous(draw, userId),
+      anonymousMask: maskDisplayName(
+        getWinnerDisplayName(getUserProfileBundle(userProfiles, userId, draw.projectId).meta, userId),
+      ),
+      canOpenProfiles: viewerCanOpenProfiles,
     });
   }
 
@@ -3230,6 +3367,9 @@ function registerJoinMiniApp(app, deps) {
       referralBoostPerInvite: payload.referralBoostPerInvite,
       endAt: payload.endAt,
       participants: payload.participants,
+      anonymous: payload.anonymous,
+      anonymousMask: payload.anonymousMask,
+      canOpenProfiles: payload.canOpenProfiles,
     });
   });
 
@@ -3410,6 +3550,41 @@ function registerJoinMiniApp(app, deps) {
     }
 
     await proceedAfterChannelVerified(draw, userId, session, req, res);
+  });
+
+  app.post("/api/join/:drawId/anonymous", requireJoinUser, async (req, res) => {
+    const drawId = req.params.drawId;
+    const userId = req.telegramUser.id;
+    const draw = getActiveDraw(drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
+    if (!drawHasParticipant(draw, userId)) {
+      res.status(403).json({ error: "Сначала завершите участие в розыгрыше." });
+      return;
+    }
+    if (typeof setDrawParticipantAnonymous !== "function") {
+      res.status(503).json({ error: "Анонимное участие недоступно." });
+      return;
+    }
+
+    const result = setDrawParticipantAnonymous(drawId, userId, req.body?.anonymous !== false);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    // The list is returned with the answer: the person has just changed how
+    // they appear in it, and a stale list under a switched toggle is the one
+    // thing that makes this setting look like it did not take.
+    const updated = getActiveDraw(drawId) || draw;
+    const payload = buildJoinDonePayload(updated, userId);
+    res.json({
+      anonymous: result.anonymous,
+      participants: payload.participants,
+      canOpenProfiles: payload.canOpenProfiles,
+    });
   });
 
   app.post("/api/join/:drawId/referral-link", requireJoinUser, async (req, res) => {

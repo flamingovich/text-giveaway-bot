@@ -2114,7 +2114,57 @@ function getJoinFlowStyles() {
     body.join-flow .join-done-boost-btn {
       width: 100%;
       margin-top: 8px;
-      margin-bottom: 20px;
+      margin-bottom: 10px;
+    }
+
+    body.join-flow .join-done-anon-btn {
+      width: 100%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    body.join-flow .join-done-anon-icon {
+      display: inline-flex;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+
+    body.join-flow .join-done-anon-icon svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    body.join-flow .join-done-anon-btn.is-on {
+      background: #f3ecff;
+      border-color: #c4a7ee;
+      color: #5b32a0;
+    }
+
+    body.join-flow .join-done-anon-btn.is-loading {
+      opacity: 0.65;
+      pointer-events: none;
+    }
+
+    body.join-flow .join-done-anon-note {
+      margin: 0 0 18px;
+      font-size: 12px;
+      line-height: 1.45;
+      text-align: center;
+      color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    body.join-flow .join-done-anon-note-error {
+      color: #cf222e;
+    }
+
+    body.join-flow.app-theme-dark .join-done-anon-btn.is-on {
+      background: color-mix(in srgb, #a97bff 20%, transparent);
+      border-color: color-mix(in srgb, #a97bff 42%, transparent);
+      color: #d9c2ff;
     }
 
     @keyframes join-btn-gradient-shift {
@@ -3482,8 +3532,59 @@ function getGatePageStyles() {
   `;
 }
 
+// Shown on the public results and participants lists for people who chose to
+// join anonymously. What sits under the blur is already the mask the channel
+// post prints - the real name never reaches this page - so the blur is there to
+// look like a hidden name, not to be the thing hiding it. A blur is CSS; on a
+// desktop it comes off in two clicks.
+function getAnonymousIdentityStyles() {
+  return `
+    .is-anon-name {
+      filter: blur(4.5px);
+      opacity: 0.85;
+      letter-spacing: 0.14em;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: none;
+    }
+    .is-anon-avatar {
+      filter: blur(5px) saturate(0.65);
+      opacity: 0.9;
+    }
+    .is-anon-handle {
+      font-style: italic;
+      opacity: 0.7;
+    }
+    .anon-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      margin-left: 6px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      font-style: normal;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      color: #6b3fa0;
+      background: #f3ecff;
+      border: 1px solid #d3bdf0;
+    }
+    body.app-theme-dark .anon-tag {
+      color: #c9a9ff;
+      background: color-mix(in srgb, #a97bff 18%, transparent);
+      border-color: color-mix(in srgb, #a97bff 32%, transparent);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .is-anon-name { filter: blur(3px); }
+    }
+  `;
+}
+
 module.exports = {
   getPanelFluidTypographyVars,
+  getAnonymousIdentityStyles,
   getMiniAppStyles,
   getMiniAppInitScript,
   getMiniAppHeadScript,
