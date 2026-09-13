@@ -89,6 +89,7 @@ function computeUserWinningsSummary(draws, userId, deps) {
         : { hasFraudFlag: false };
       const amount = deps.getWinnerPayoutAmount(draw, projectData, {
         hasFraudFlag: fraud.hasFraudFlag,
+        winnerId: userId,
       });
       if (draw.prizeType === "money_usd" && deps.convertUsdToRub) {
         totalRub += deps.convertUsdToRub(amount);

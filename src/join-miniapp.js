@@ -17,6 +17,7 @@ const {
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
+const { isParticipationUnregistered } = require("./unregistered-participation");
 const {
   isParticipantAnonymous,
   buildPublicIdentity,
@@ -485,6 +486,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <button type="button" class="join-btn join-btn-primary join-btn-locked" id="refConfirmBtn" disabled><span class="join-btn-label">Подтвердить статус реферала</span></button>
             <div id="refConfirmStatus" class="join-ref-status hidden" role="status"></div>
             <button type="button" class="join-btn join-btn-outline" id="registrationNonRefBtn">Я не реферал</button>
+            <button type="button" class="join-btn join-btn-outline" data-unregistered-open>Я не зарегистрирован</button>
           </div>
           <div id="registrationProjectIdMode" class="join-step-stack hidden">
             <div class="join-trc20-field join-trc20-field-compact">
@@ -497,6 +499,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <button type="button" class="join-btn join-btn-primary" id="projectAccountIdVerifyBtn"><span class="join-btn-label">Проверить ID</span></button>
             <div id="projectAccountIdStatus" class="join-field-status hidden" role="status"></div>
             <button type="button" class="join-btn join-btn-outline" id="registrationProjectIdNonRefBtn">Я не реферал</button>
+            <button type="button" class="join-btn join-btn-outline" data-unregistered-open>Я не зарегистрирован</button>
           </div>
         </div>`,
       )}
@@ -584,6 +587,18 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         "join-done-card",
       )}
 
+    </div>
+  </div>
+
+  <div id="joinUnregisteredModal" class="join-done-info-modal join-unregistered-modal hidden" role="dialog" aria-modal="true" aria-labelledby="joinUnregisteredTitle">
+    <button type="button" class="join-done-info-backdrop" id="joinUnregisteredBackdrop" aria-label="Закрыть"></button>
+    <div class="join-done-info-card">
+      <h4 id="joinUnregisteredTitle" class="join-done-info-title">Вы не зарегистрированы?</h4>
+      <p class="join-done-info-text">Если вы не зарегистрированы на проекте, то ваш приз будет <b>в 2 раза меньше</b>.</p>
+      <div class="join-unregistered-actions">
+        <button type="button" class="join-btn join-btn-primary" id="joinUnregisteredRegisterBtn">Зарегистрироваться</button>
+        <button type="button" class="join-btn join-btn-outline" id="joinUnregisteredContinueBtn">Продолжить</button>
+      </div>
     </div>
   </div>
 
@@ -2424,6 +2439,43 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       await submitRegistration({ action: "non_ref" });
     });
 
+    // Asked every time on purpose: unlike "Я не реферал" nothing is saved to
+    // the profile, and only the draw the choice was made in pays half.
+    function openUnregisteredModal() {
+      document.getElementById("joinUnregisteredModal")?.classList.remove("hidden");
+    }
+
+    function closeUnregisteredModal() {
+      document.getElementById("joinUnregisteredModal")?.classList.add("hidden");
+    }
+
+    document.querySelectorAll("[data-unregistered-open]").forEach((btn) => {
+      btn.addEventListener("click", openUnregisteredModal);
+    });
+    bindClick("joinUnregisteredBackdrop", closeUnregisteredModal);
+
+    bindClick("joinUnregisteredRegisterBtn", () => {
+      closeUnregisteredModal();
+      // The same link as "Перейти на …", so opening the site from here unlocks
+      // the confirm button exactly as opening it from there does. A brand with
+      // no referral link has nowhere to go, and an empty href would reload the
+      // mini app, so the modal just closes.
+      const link = document.getElementById("projectLink");
+      if (link && link.getAttribute("href")) {
+        link.click();
+      }
+    });
+
+    bindClick("joinUnregisteredContinueBtn", async () => {
+      closeUnregisteredModal();
+      if (PAGE_MODE === "preview") {
+        applyWalletStep(PREVIEW_WALLET_STEP);
+        showStep("trc20");
+        return;
+      }
+      await submitRegistration({ action: "unregistered" });
+    });
+
     if (askProjectIdOnJoin) {
       applyRegistrationMode("project_id", PROJECT_ID_GUIDE_STEPS, PROJECT_ID_INPUT_CONFIG);
     }
@@ -2434,6 +2486,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const refBtn = document.getElementById("refConfirmBtn");
       if (nonRefBtn) nonRefBtn.disabled = true;
       if (projectIdNonRefBtn) projectIdNonRefBtn.disabled = true;
+      document.querySelectorAll("[data-unregistered-open]").forEach((btn) => {
+        btn.disabled = true;
+      });
       if (refBtn && !refBtn.classList.contains("is-done")) refBtn.disabled = true;
       try {
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/registration", body);
@@ -2444,6 +2499,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       } finally {
         if (nonRefBtn) nonRefBtn.disabled = false;
         if (projectIdNonRefBtn) projectIdNonRefBtn.disabled = false;
+        document.querySelectorAll("[data-unregistered-open]").forEach((btn) => {
+          btn.disabled = false;
+        });
         if (refBtn && !refConfirmed) {
           setRefConfirmLocked(!projectLinkOpened);
         }
@@ -2909,6 +2967,9 @@ function registerJoinMiniApp(app, deps) {
     if (sessionReferrer && !meta.referrerId) {
       meta.referrerId = sessionReferrer;
     }
+    if (session?.unregistered) {
+      meta.unregistered = true;
+    }
     return meta;
   }
 
@@ -3179,7 +3240,8 @@ function registerJoinMiniApp(app, deps) {
       (draw) =>
         draw.projectId === projectId &&
         (excludeDrawId ? draw.id !== excludeDrawId : true) &&
-        (draw.participantIds || []).some((id) => String(id) === userKey),
+        (draw.participantIds || []).some((id) => String(id) === userKey) &&
+        !isParticipationUnregistered(draw, userKey),
     );
   }
 
@@ -3749,11 +3811,17 @@ function registerJoinMiniApp(app, deps) {
     }
 
     const action = String(req.body?.action || "opened");
-    if (drawAsksProjectIdOnJoin(draw) && action !== "non_ref") {
+    if (drawAsksProjectIdOnJoin(draw) && action !== "non_ref" && action !== "unregistered") {
       res.status(400).json({ error: "Введите ID с проекта." });
       return;
     }
-    if (action === "non_ref") {
+    // "Не зарегистрирован" writes nothing to the project profile - no referral
+    // status, no id step - so the next draw asks again. It lives on this join
+    // only, carried by the session into the draw's participantMeta.
+    session.unregistered = action === "unregistered";
+    if (action === "unregistered") {
+      session.skipReferralCheck = false;
+    } else if (action === "non_ref") {
       applySelfReportedNonReferral(userId, session);
       if (drawAsksProjectIdOnJoin(draw)) {
         setUserProjectProfile(userId, session.projectId, {
@@ -3803,10 +3871,18 @@ function registerJoinMiniApp(app, deps) {
     const ownerId = getDrawOwnerId(draw);
     const isReferral = !forceNonReferralByWallet && !session.skipReferralCheck;
 
+    // An unregistered join keeps the wallet but records no referral status at
+    // all: writing one would mark registration complete and skip the question
+    // on the next draw, which is exactly what the choice is not supposed to do.
+    const referralFields = session.unregistered
+      ? {}
+      : {
+          referralVerified: isReferral,
+          selfReportedNonReferral: forceNonReferralByWallet ? true : Boolean(session.skipReferralCheck),
+          referralOwnerId: isReferral ? ownerId : null,
+        };
     setUserProjectProfile(userId, session.projectId, {
-      referralVerified: isReferral,
-      selfReportedNonReferral: forceNonReferralByWallet ? true : Boolean(session.skipReferralCheck),
-      referralOwnerId: isReferral ? ownerId : null,
+      ...referralFields,
       trc20Address: address,
       depositNetwork: networkId,
       verifiedBy: "miniapp",

@@ -223,9 +223,10 @@ function buildUserProjectActivityIndex(deps, userProfiles, formatUserLabel) {
       }
 
       if (isMoneyPrizeType(draw.prizeType)) {
-        const nominal = getWinnerPayoutAmount(draw, projectData, { hasFraudFlag: false });
+        const nominal = getWinnerPayoutAmount(draw, projectData, { hasFraudFlag: false, winnerId });
         const payoutAmount = getWinnerPayoutAmount(draw, projectData, {
           hasFraudFlag: antiFraud.hasFraudFlag,
+          winnerId,
         });
 
         if (draw.prizeType === "money_rub") {

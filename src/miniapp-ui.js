@@ -2524,6 +2524,16 @@ function getJoinFlowStyles() {
       border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 38%, transparent);
     }
 
+    body.join-flow .join-unregistered-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    body.join-flow .join-unregistered-actions .join-btn {
+      width: 100%;
+    }
+
     body.join-flow.app-theme-dark .join-guide-sheet-card {
       background: var(--tg-theme-secondary-bg-color, #232f42);
       border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 28%, transparent);

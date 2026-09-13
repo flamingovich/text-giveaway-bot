@@ -103,6 +103,11 @@ const {
   hasPremiumEmoji,
 } = require("./premium-emoji-text");
 const {
+  applyPrizeHalving,
+  isPrizeHalved,
+  isParticipationUnregistered,
+} = require("./unregistered-participation");
+const {
   getWinnerAddressForfeitureKind: forfeitureKindOf,
   canRequestWinnerAddressAgain: canAskWinnerForAddressAgain,
   clearWinnerAddressForRerequest: clearWinnerAddressBeforeRerequest,
@@ -1281,11 +1286,8 @@ function getWinnerPayoutAmount(draw, projectData, options = {}) {
   if (!Number.isFinite(total) || total <= 0) {
     return 0;
   }
-  let perWinner = Math.floor(total / getPrizeSplitCount(draw));
-  if (projectData?.selfReportedNonReferral) {
-    perWinner = Math.floor(perWinner / 2);
-  }
-  return perWinner;
+  const perWinner = Math.floor(total / getPrizeSplitCount(draw));
+  return applyPrizeHalving(perWinner, draw, options.winnerId, projectData);
 }
 
 function getDrawPrizePoolUsdt(draw) {
@@ -1334,7 +1336,10 @@ function summarizePendingPayouts(draws, userProfiles, panelContext = null) {
       const notifyInfo = draw.winnerNotifications?.[String(winnerId)];
       const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
       const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
-      const amount = getWinnerPayoutAmount(draw, projectData, { hasFraudFlag: antiFraud.hasFraudFlag });
+      const amount = getWinnerPayoutAmount(draw, projectData, {
+        hasFraudFlag: antiFraud.hasFraudFlag,
+        winnerId,
+      });
       totalUsdt += draw.prizeType === "money_usd" ? amount : convertRubToUsdt(amount);
     }
   }
@@ -1543,7 +1548,7 @@ function computeDrawStats(draws, userProfiles, _panelContext = null) {
         continue;
       }
       const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
-      const amount = getWinnerPayoutAmount(draw, projectData);
+      const amount = getWinnerPayoutAmount(draw, projectData, { winnerId });
       const usdtAmount =
         draw.prizeType === "money_usd" ? amount : convertRubToUsdt(amount);
       paidAllTimeUsdt += usdtAmount;
@@ -1590,7 +1595,7 @@ function getWinnerPayoutText(draw, projectData, options = {}) {
     const zeroAmount = draw.prizeType === "money_usd" ? formatUsdAmount(0) : formatRubAmount(0);
     return zeroAmount || base || draw.prize || "—";
   }
-  if (!projectData?.selfReportedNonReferral || !isMoneyPrizeType(draw.prizeType)) {
+  if (!isPrizeHalved(draw, options.winnerId, projectData) || !isMoneyPrizeType(draw.prizeType)) {
     return base || draw.prize || "—";
   }
 
@@ -1616,10 +1621,10 @@ function getWinnerPayoutPanelHtml(draw, projectData, options = {}) {
 function getWinnerPayoutRowHtml(
   draw,
   projectData,
-  { isPaid, isPaymentDenied, isExpired, hasFraudFlag = false },
+  { isPaid, isPaymentDenied, isExpired, hasFraudFlag = false, winnerId = null },
 ) {
   if (isPaid) {
-    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag });
+    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag, winnerId });
     return {
       icon: "check",
       iconClass: " winner-card-row-icon-paid",
@@ -1629,7 +1634,7 @@ function getWinnerPayoutRowHtml(
   }
 
   if (isPaymentDenied) {
-    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag });
+    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag, winnerId });
     return {
       icon: "close",
       iconClass: " winner-card-row-icon-denied",
@@ -1649,7 +1654,7 @@ function getWinnerPayoutRowHtml(
     };
   }
 
-  const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag });
+  const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag, winnerId });
   return {
     icon: "prize",
     iconClass: "",
@@ -3958,6 +3963,7 @@ async function sendWinnerVerificationNotification(draw, userId, sentBy, subscrip
     : projectData.trc20Address || "не указан";
   const payoutPrize = getWinnerPayoutText(draw, projectData, {
     hasFraudFlag: antiFraud.hasFraudFlag,
+    winnerId: userId,
   });
   const channelFields = {
     channelSubscribed: subscriptionCheck?.ok ? Boolean(subscriptionCheck.subscribed) : notifyExisting.channelSubscribed,
@@ -4167,9 +4173,7 @@ async function markWinnerNotificationExpired(draw, userId) {
     try {
       const payoutPrize =
         notify.payoutPrize ||
-        getWinnerPayoutText(
-          draw,
-          getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData,
+        getWinnerPayoutText(draw, getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData, { winnerId: userId }
         );
       await bot.telegram.editMessageText(
         userId,
@@ -4284,9 +4288,7 @@ async function markWinnerSubscriptionForfeited(draw, userId) {
 
   const payoutPrize =
     notify.payoutPrize ||
-    getWinnerPayoutText(
-      draw,
-      getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData,
+    getWinnerPayoutText(draw, getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData, { winnerId: userId }
     );
 
   if (notify.lastMessageId) {
@@ -4325,9 +4327,7 @@ async function markWinnerAccountUnavailableForfeited(draw, userId, errorMessage 
 
   const payoutPrize =
     notify.payoutPrize ||
-    getWinnerPayoutText(
-      draw,
-      getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData,
+    getWinnerPayoutText(draw, getUserProfileBundle(readUserProjectProfiles(), userId, draw.projectId).projectData, { winnerId: userId }
     );
 
   if (notify.lastMessageId) {
@@ -5220,6 +5220,12 @@ function upsertDrawParticipantMeta(draw, userId, participationMeta = {}) {
   if (ipHash) {
     next.updatedAt = new Date().toISOString();
   }
+  // Set, never cleared here. A later write for the same join carries no opinion
+  // about registration and must not quietly restore the full prize.
+  if (participationMeta.unregistered === true) {
+    next.unregistered = true;
+    next.unregisteredAt = next.unregisteredAt || new Date().toISOString();
+  }
 
   draw.participantMeta[userKey] = next;
 }
@@ -5329,7 +5335,8 @@ function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
     (draw) =>
       draw.projectId === projectId &&
       (excludeDrawId ? draw.id !== excludeDrawId : true) &&
-      drawHasParticipant(draw, userId),
+      drawHasParticipant(draw, userId) &&
+      !isParticipationUnregistered(draw, userId),
   );
 }
 
@@ -5515,7 +5522,7 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
     liveNotify.antiFraudFlag = true;
     liveNotify.forfeitureReason = "antifraud";
     liveNotify.forfeitedAt = checkedAt;
-    liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: true });
+    liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: true, winnerId: userId });
     writeDataPreservingLiveWinners(data);
     await ctx.reply(
       [
@@ -5530,7 +5537,7 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
 
   liveNotify.status = "confirmed";
   liveNotify.antiFraudFlag = false;
-  liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: false });
+  liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: false, winnerId: userId });
   writeDataPreservingLiveWinners(data);
 
   // The wallet-had-transactions note is deliberately not shown to the winner:
@@ -6520,6 +6527,11 @@ function formatOrganizerReferralLabel(ownerId, userProfiles) {
 }
 
 function getWinnerReferralBadgeHtml(winnerId, draw, userProfiles) {
+  // First, because it is the reason this particular prize is halved - "Реф"
+  // beside a halved amount would read as a mistake.
+  if (isParticipationUnregistered(draw, winnerId)) {
+    return `<span class="winner-badge winner-badge-warn">Не зарег.</span>`;
+  }
   const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
   const drawOwnerId = getDrawOwnerId(draw);
   const project = draw.projectId ? getProjectById(draw.projectId, draw.ownerId) : null;
@@ -6591,6 +6603,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const isPrizeForfeited = isWinnerPrizeForfeited(notifyInfo, antiFraud);
   const forfeitedDeliveryReason = getWinnerForfeitedDeliveryReason(notifyInfo);
   const payoutRow = getWinnerPayoutRowHtml(draw, projectData, {
+    winnerId,
     isPaid,
     isPaymentDenied,
     isExpired: isExpired || notifyInfo?.forfeitureReason === "address_timeout",
@@ -12177,6 +12190,7 @@ panelRouter.post("/draws/:id/pay/:userId", webAuth.requireAuth, requireOrganizer
   }
   const payoutText = getWinnerPayoutText(draw, projectData, {
     hasFraudFlag: antiFraud.hasFraudFlag,
+    winnerId: userId,
   });
 
   const paidPostLink = buildDrawPostLink(draw);
