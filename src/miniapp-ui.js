@@ -2466,12 +2466,19 @@ function getJoinFlowStyles() {
       text-align: left;
     }
 
+    /* The two reminders on the done step, as one quiet block: plain icons with
+       no tile behind them, smaller type, no card per line. They are worth
+       reading once, not worth a third of the screen. */
     body.join-flow .join-done-tips {
       width: 100%;
+      box-sizing: border-box;
       display: flex;
       flex-direction: column;
       gap: 8px;
-      margin: 4px 0 14px;
+      margin: 2px 0 14px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 8%, transparent);
     }
 
     body.join-flow .join-done-participants-title {
@@ -2622,37 +2629,31 @@ function getJoinFlowStyles() {
     body.join-flow .join-done-tip {
       display: flex;
       align-items: flex-start;
-      gap: 10px;
+      gap: 9px;
       text-align: left;
-      padding: 12px;
-      border-radius: 12px;
-      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 6%, var(--tg-theme-secondary-bg-color, #fff));
-      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
     }
 
+    /* Nudged down a pixel to sit on the first line of text rather than above it. */
     body.join-flow .join-done-tip-icon {
-      width: 32px;
-      height: 32px;
-      border-radius: 10px;
-      flex-shrink: 0;
+      flex: none;
       display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 12%, transparent);
-      color: var(--tg-theme-button-color, #325fff);
+      width: 15px;
+      height: 15px;
+      margin-top: 1px;
+      color: var(--tg-theme-hint-color, #65708a);
     }
 
     body.join-flow .join-done-tip-icon svg {
-      width: 16px;
-      height: 16px;
+      width: 15px;
+      height: 15px;
       display: block;
     }
 
     body.join-flow .join-done-tip-text {
       margin: 0;
-      font-size: 13px;
-      line-height: 1.5;
-      color: var(--tg-theme-text-color, #151a2d);
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: color-mix(in srgb, var(--tg-theme-text-color, #151a2d) 80%, var(--tg-theme-hint-color, #65708a));
     }
 
     body.join-flow .join-done-card .join-step-head {
@@ -3294,8 +3295,8 @@ function getJoinFlowStyles() {
       color: var(--tg-theme-text-color, #eef1f7);
     }
 
-    body.join-flow.app-theme-dark .join-done-tip {
-      background: color-mix(in srgb, var(--tg-theme-button-color, #5b8cff) 10%, var(--tg-theme-secondary-bg-color, #232f42));
+    body.join-flow.app-theme-dark .join-done-tips {
+      background: color-mix(in srgb, #9aa6bd 8%, transparent);
     }
   `;
 }
