@@ -133,6 +133,7 @@ const {
   readUserProjectProfilesSnapshot,
   readDelegatedAdminsSnapshot,
 } = require("./storage");
+const { withFloodRetry } = require("./telegram-flood-retry");
 const {
   hasSavedWinnerDepositAddress,
   writeDataPreservingLiveWinners,
@@ -3665,7 +3666,15 @@ function recordDrawCreate(userId, fingerprint) {
 
 const TELEGRAM_EDIT_TIMEOUT_MS = Number(process.env.TELEGRAM_EDIT_TIMEOUT_MS || 8000);
 
+// A 429 is waited out and the edit tried again, each attempt with a fresh
+// timeout (telegram-flood-retry.js). Holding a draws snapshot through that wait
+// is safe for the callers here: they save with writeDataPreservingLiveWinners,
+// which merges back the joins and winners that landed meanwhile.
 async function withTelegramEditTimeout(task, ms = TELEGRAM_EDIT_TIMEOUT_MS) {
+  return withFloodRetry(() => withTelegramEditTimeoutOnce(task, ms), { label: "правка поста" });
+}
+
+async function withTelegramEditTimeoutOnce(task, ms) {
   let timer = null;
   try {
     return await Promise.race([
