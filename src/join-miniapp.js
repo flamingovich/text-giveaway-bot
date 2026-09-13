@@ -693,6 +693,55 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
+    // The success buzz of a fresh join, in time with the mark on the done step
+    // (join-done-* in getJoinFlowStyles): a light tap as the disc lands with
+    // the first ring, a softer one with the second ring, and Telegram's
+    // success pattern as the tick finishes drawing.
+    const DONE_HAPTIC_BEATS = [
+      [420, "impact", "light"],
+      [640, "impact", "soft"],
+      [920, "notification", "success"],
+    ];
+    let doneHapticTimers = [];
+
+    function cancelDoneHaptics() {
+      doneHapticTimers.forEach((timer) => clearTimeout(timer));
+      doneHapticTimers = [];
+    }
+
+    function playDoneHaptics() {
+      cancelDoneHaptics();
+      if (tg?.HapticFeedback && (typeof tg.isVersionAtLeast !== "function" || tg.isVersionAtLeast("6.1"))) {
+        doneHapticTimers = DONE_HAPTIC_BEATS.map(([at, type, style]) =>
+          setTimeout(() => {
+            try {
+              if (type === "impact") {
+                tg.HapticFeedback.impactOccurred(style);
+              } else {
+                tg.HapticFeedback.notificationOccurred(style);
+              }
+            } catch (_error) {
+              // Decoration only.
+            }
+          }, at),
+        );
+        return;
+      }
+      const activated = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+      if (typeof navigator.vibrate !== "function" || !activated) return;
+      // Android browsers take the same rhythm as one pattern started on the
+      // first beat: buzz, then a pause that runs up to the next beat.
+      doneHapticTimers = [
+        setTimeout(() => {
+          try {
+            navigator.vibrate([14, 206, 10, 266, 28]);
+          } catch (_error) {
+            // Decoration only.
+          }
+        }, DONE_HAPTIC_BEATS[0][0]),
+      ];
+    }
+
     function parseStartParamFromInitData(raw) {
       if (!raw) return "";
       try {
@@ -1296,6 +1345,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (activeStep === name) return;
 
       if (activeStep === "done" && name !== "done") {
+        cancelDoneHaptics();
         stopDoneLivePolling();
         stopDoneCountdown();
         cancelJoinBoostAutoOpen();
@@ -1959,10 +2009,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (title) title.textContent = message;
       renderDoneStats(payload);
       showStep("done");
-      // Timed to the disc popping in. Not on "Вы уже участвуете": reopening the
-      // app should not buzz as if something new had happened.
+      // Not on "Вы уже участвуете": reopening the app should not buzz as if
+      // something new had happened.
       if (!payload.alreadyJoined) {
-        setTimeout(() => haptic("success"), 450);
+        playDoneHaptics();
       }
       startDoneLivePolling(payload);
       updateJoinBoostUi(payload);
