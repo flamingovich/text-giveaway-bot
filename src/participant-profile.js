@@ -1,5 +1,6 @@
 const {
   getMiniAppStyles,
+  getEmbossStyles,
   getMiniAppInitScript,
   getMiniAppViewportMeta,
   getMiniAppHeadScript,
@@ -548,6 +549,7 @@ function renderParticipantProfilePage(profile, options = {}) {
     ${isPreview ? getPreviewDevStyles() : ""}
     ${getParticipantProfileStyles()}
     ${getMiniAppStyles()}
+    ${getEmbossStyles()}
   </style>
 </head>
 <body class="profile-page mini-app-shell${isPreview ? " join-preview" : ""}">

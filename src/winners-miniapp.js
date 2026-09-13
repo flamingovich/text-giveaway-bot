@@ -1,5 +1,6 @@
 const {
   getMiniAppStyles,
+  getEmbossStyles,
   getMiniAppInitScript,
   getMiniAppViewportMeta,
   getMiniAppHeadScript,
@@ -210,6 +211,7 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
     ${getWinnersPageStyles()}
     ${getAnonymousIdentityStyles()}
     ${getMiniAppStyles()}
+    ${getEmbossStyles()}
   </style>
 </head>
 <body class="winners-page mini-app-shell${isPreview ? " join-preview" : ""}">
@@ -402,6 +404,7 @@ function renderWinnersAppLauncherPage() {
     .hidden { display: none !important; }
     ${getWinnersPageStyles()}
     ${getMiniAppStyles()}
+    ${getEmbossStyles()}
     body.winners-page .winners-app-status {
       margin: 24px auto 0;
       max-width: 320px;

@@ -3351,6 +3351,189 @@ function getJoinFlowStyles() {
   `;
 }
 
+// Emboss ("тиснение") for the participant mini apps: join, results, gate and
+// profile. Included after every other style on those pages.
+function getEmbossStyles() {
+  return `
+    /* A lit top edge and a shaded bottom edge inside every surface and button,
+       so they read as slightly raised; a pressed button swaps that for a
+       shade along the top, pushed in. Inputs and the stepper track are the
+       inverse all the time, as grooves.
+
+       Only box-shadow is touched, and !important is deliberate: page rules of
+       every specificity set box-shadow, often to none, and this layer has to
+       win over all of them. The outer shadows those rules cast are restated
+       here, per theme, so nothing loses its drop shadow. Disabled and locked
+       buttons stay flat - a raised look would say "press me". The fake
+       reCAPTCHA, avatars and small icon tiles are left alone. */
+    body.mini-app-shell {
+      --emb-hi: rgba(255, 255, 255, 0.9);
+      --emb-lo: rgba(22, 40, 90, 0.08);
+      --emb-inner-hi: rgba(255, 255, 255, 0.7);
+      --emb-inner-lo: rgba(22, 40, 90, 0.05);
+      --emb-fill-hi: rgba(255, 255, 255, 0.3);
+      --emb-fill-lo: rgba(0, 0, 0, 0.16);
+      --emb-press: inset 0 2px 3px rgba(22, 40, 90, 0.16);
+      --emb-groove: inset 0 1px 2px rgba(22, 40, 90, 0.1);
+      --emb-drop-card: 0 8px 24px rgba(27, 45, 94, 0.06);
+      --emb-drop-row: 0 4px 12px rgba(27, 45, 94, 0.04);
+      --emb-drop-header: 0 6px 18px rgba(27, 45, 94, 0.05);
+      --emb-drop-empty: 0 0 #0000;
+      --emb-drop-gate: 0 12px 32px rgba(27, 45, 94, 0.08);
+    }
+
+    body.mini-app-shell.app-theme-dark {
+      --emb-hi: rgba(255, 255, 255, 0.07);
+      --emb-lo: rgba(0, 0, 0, 0.32);
+      --emb-inner-hi: rgba(255, 255, 255, 0.05);
+      --emb-inner-lo: rgba(0, 0, 0, 0.24);
+      --emb-fill-hi: rgba(255, 255, 255, 0.24);
+      --emb-fill-lo: rgba(0, 0, 0, 0.22);
+      --emb-press: inset 0 2px 4px rgba(0, 0, 0, 0.38);
+      --emb-groove: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+      --emb-drop-card: 0 8px 28px rgba(0, 0, 0, 0.22);
+      --emb-drop-row: 0 6px 20px rgba(0, 0, 0, 0.18);
+      --emb-drop-header: 0 6px 20px rgba(0, 0, 0, 0.18);
+      --emb-drop-empty: 0 6px 20px rgba(0, 0, 0, 0.18);
+      --emb-drop-gate: 0 12px 32px rgba(0, 0, 0, 0.22);
+    }
+
+    /* Raised surfaces, each with the drop shadow it had. */
+    body.join-flow .join-step-card,
+    body.join-flow .join-progress {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo), var(--emb-drop-card) !important;
+    }
+
+    body.join-flow .join-done-info-card {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo), 0 18px 40px rgba(0, 0, 0, 0.22) !important;
+    }
+
+    body.join-flow .join-boost-card {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo), 0 -8px 32px rgba(0, 0, 0, 0.12) !important;
+    }
+
+    body.join-flow .join-guide-sheet-card {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo), 0 -12px 40px rgba(0, 0, 0, 0.22) !important;
+    }
+
+    body.winners-page .winners-header {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo), var(--emb-drop-header) !important;
+    }
+
+    body.winners-page .winners-row {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo), var(--emb-drop-row) !important;
+    }
+
+    body.winners-page .winners-empty {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo), var(--emb-drop-empty) !important;
+    }
+
+    body.gate-page .gate-card {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo), var(--emb-drop-gate) !important;
+    }
+
+    /* Surfaces sitting inside a card: the same edges, fainter. */
+    body.join-flow .join-done-stats,
+    body.join-flow .join-done-tips,
+    body.join-flow .join-done-row,
+    body.join-flow .join-ref-status-ok,
+    body.join-flow .join-ref-status-error,
+    body.join-flow .join-field-status-error,
+    body.join-flow .join-boost-link-notice.is-ok,
+    body.join-flow .join-boost-link-notice.is-error,
+    body.join-flow .msg.ok,
+    body.join-flow .msg.error,
+    body.winners-page .winners-viewer-banner.is-won,
+    body.winners-page .winners-viewer-banner.is-lost,
+    body.winners-page .winners-viewer-banner.is-none,
+    body.winners-page .winners-stat,
+    body.gate-page .gate-tip,
+    body.gate-page .gate-badge,
+    body.profile-page .profile-stats {
+      box-shadow: inset 0 1px 0 var(--emb-inner-hi), inset 0 -1px 0 var(--emb-inner-lo) !important;
+    }
+
+    /* Tonal and outlined buttons, and the stepper circles still to come. */
+    body.join-flow .join-btn-secondary:not(:disabled):not(.join-btn-locked),
+    body.join-flow .join-btn-outline:not(:disabled),
+    body.join-flow .join-btn-guide,
+    body.join-flow .join-paste-btn,
+    body.join-flow .join-boost-close,
+    body.join-flow .join-guide-sheet-close,
+    body.join-flow .join-progress-node,
+    body.winners-page .winners-stat-btn:not(.is-active),
+    body.profile-page .profile-back-btn,
+    body.profile-page .profile-tg-btn,
+    body.mini-app-shell .theme-toggle-btn,
+    body.mini-app-shell .preview-nav button {
+      box-shadow: inset 0 1px 0 var(--emb-hi), inset 0 -1px 0 var(--emb-lo) !important;
+    }
+
+    body.winners-page .winners-stat-btn.is-active {
+      box-shadow:
+        inset 0 1px 0 var(--emb-hi),
+        inset 0 -1px 0 var(--emb-lo),
+        0 0 0 1px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 28%, transparent) !important;
+    }
+
+    /* Filled buttons and badges: a brighter lit edge, a heavier shaded one. */
+    body.join-flow .join-btn-primary:not(:disabled):not(.join-btn-locked),
+    body.join-flow .join-btn-gradient:not(:disabled),
+    body.join-flow .join-progress-dot.is-done .join-progress-node,
+    body.gate-page .gate-cta-btn {
+      box-shadow: inset 0 1px 0 var(--emb-fill-hi), inset 0 -2px 0 var(--emb-fill-lo) !important;
+    }
+
+    body.join-flow .join-boost-badge {
+      box-shadow:
+        inset 0 1px 0 var(--emb-fill-hi),
+        inset 0 -2px 0 var(--emb-fill-lo),
+        0 4px 14px rgba(91, 124, 250, 0.35) !important;
+    }
+
+    body.gate-page .gate-lock-icon {
+      box-shadow:
+        inset 0 1px 0 var(--emb-fill-hi),
+        inset 0 -2px 0 var(--emb-fill-lo),
+        0 10px 24px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 24%, transparent) !important;
+    }
+
+    /* Grooves: fields and the stepper track. The id field's own input sits
+       inside the row, which carries the groove, so it stays plain. */
+    body.join-flow .join-input,
+    body.join-flow .join-id-input-row,
+    body.join-flow .join-progress-track {
+      box-shadow: var(--emb-groove) !important;
+    }
+
+    body.join-flow .join-input:focus,
+    body.join-flow .join-id-input-row:focus-within {
+      box-shadow:
+        var(--emb-groove),
+        0 0 0 3px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 14%, transparent) !important;
+    }
+
+    body.join-flow .join-input.join-input-id,
+    body.join-flow .join-input.join-input-id:focus {
+      box-shadow: none !important;
+    }
+
+    /* Pressed: last, so it wins over every raised rule above. */
+    body.join-flow .join-btn:not(:disabled):not(.join-btn-locked):active,
+    body.join-flow .join-paste-btn:active,
+    body.join-flow .join-boost-close:active,
+    body.join-flow .join-guide-sheet-close:active,
+    body.winners-page .winners-stat-btn:active,
+    body.gate-page .gate-cta-btn:active,
+    body.profile-page .profile-back-btn:active,
+    body.profile-page .profile-tg-btn:active,
+    body.mini-app-shell .theme-toggle-btn:active,
+    body.mini-app-shell .preview-nav button:active {
+      box-shadow: var(--emb-press) !important;
+    }
+  `;
+}
+
 const JOIN_PROGRESS_CHECK = `<svg class="join-progress-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
 
 // One node of the stepper. The client rebuilds the stepper from these when the
@@ -4335,6 +4518,7 @@ module.exports = {
   getPanelFluidTypographyVars,
   getAnonymousIdentityStyles,
   getMiniAppStyles,
+  getEmbossStyles,
   getMiniAppInitScript,
   getMiniAppHeadScript,
   getMiniAppViewportMeta,

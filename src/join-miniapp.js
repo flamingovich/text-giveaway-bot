@@ -1,6 +1,7 @@
 const express = require("express");
 const {
   getMiniAppStyles,
+  getEmbossStyles,
   getMiniAppInitScript,
   getMiniAppViewportMeta,
   getMiniAppHeadScript,
@@ -106,6 +107,7 @@ function renderOrganizerGatePage(_botUsername, options = {}) {
     ${isPreview ? getPreviewDevStyles() : ""}
     ${getGatePageStyles()}
     ${getMiniAppStyles()}
+    ${getEmbossStyles()}
   </style>
 </head>
 <body class="gate-page mini-app-shell${isPreview ? " gate-preview" : ""}">
@@ -421,6 +423,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     ${isPreview ? getPreviewDevStyles() : ""}
     ${isPreview ? getJoinPreviewThemeStyles() : ""}
     ${getMiniAppStyles()}
+    ${getEmbossStyles()}
   </style>
 </head>
 <body class="join-flow mini-app-shell${isPreview ? " join-preview" : ""}">
