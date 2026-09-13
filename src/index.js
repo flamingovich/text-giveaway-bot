@@ -129,6 +129,9 @@ const {
   writeUserProjectProfiles,
   readDelegatedAdmins,
   writeDelegatedAdmins,
+  readDataSnapshot,
+  readUserProjectProfilesSnapshot,
+  readDelegatedAdminsSnapshot,
 } = require("./storage");
 const {
   hasSavedWinnerDepositAddress,
@@ -253,8 +256,11 @@ const sessions = new Map();
 const joinSessions = new Map();
 const winnerVerificationSessions = new Map();
 
+// Called once per participant while the done screen and the results build their
+// lists (shouldHideParticipant), so it reads the shared snapshot rather than
+// parsing the document again for every row.
 function getDelegatedAdminIds() {
-  return (readDelegatedAdmins().admins || []).map((entry) => Number(entry.userId)).filter(Number.isFinite);
+  return (readDelegatedAdminsSnapshot().admins || []).map((entry) => Number(entry.userId)).filter(Number.isFinite);
 }
 
 function addDelegatedAdmin(user, label, addedBy) {
@@ -5016,7 +5022,10 @@ async function ensureUserAvatars(userIds, options = {}) {
   }
 
   const job = async () => {
-    const profiles = readUserProjectProfiles();
+    // Only looks: which of these ids still lack a photo. /live asks this on
+    // every poll, and a fresh parse of the whole profiles document each time
+    // was half of what those polls cost.
+    const profiles = readUserProjectProfilesSnapshot();
     const targets = [...new Set(userIds.map((id) => String(id)))].filter((userKey) => {
       if (!/^\d+$/.test(userKey)) {
         return false;
@@ -11358,6 +11367,8 @@ registerJoinMiniApp(app, {
   BOT_TOKEN,
   WEB_PUBLIC_URL,
   readData,
+  readDataSnapshot,
+  readUserProjectProfilesSnapshot,
   readProjects,
   getProjectById,
   DRAW_STATUS,

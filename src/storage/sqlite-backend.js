@@ -3,8 +3,10 @@ const Database = require("better-sqlite3");
 const { ALL_STORE_KEYS, DOCUMENT_DEFAULTS } = require("./constants");
 const { DATA_DIR, SQLITE_DB_FILE } = require("./paths");
 const { loadDocumentsFromJsonFiles, seedDocuments } = require("./migrate-json");
+const { createDocumentSnapshotCache } = require("../document-snapshot");
 
 let dbInstance = null;
+let snapshotCache = null;
 
 function initSchema(db) {
   db.exec(`
@@ -61,6 +63,7 @@ function closeDb() {
     dbInstance.close();
     dbInstance = null;
   }
+  snapshotCache = null;
 }
 
 function readDocument(key) {
@@ -88,6 +91,27 @@ function writeDocument(key, payload) {
   db.transaction(() => {
     stmt.run(key, JSON.stringify(payload));
   })();
+  if (snapshotCache) {
+    snapshotCache.noteWrite(key);
+  }
+}
+
+// data_version is per connection and ignores this connection's own commits,
+// which writeDocument reports to the cache instead - see document-snapshot.js.
+function getSnapshotCache() {
+  if (!snapshotCache) {
+    const db = getDb();
+    snapshotCache = createDocumentSnapshotCache({
+      readVersion: () => db.pragma("data_version", { simple: true }),
+      readFresh: readDocument,
+    });
+  }
+  return snapshotCache;
+}
+
+// Shared and parsed once per version. Read only: never change what comes back.
+function readDocumentSnapshot(key) {
+  return getSnapshotCache().read(key);
 }
 
 function readAllDocuments() {
@@ -111,6 +135,7 @@ module.exports = {
   getDb,
   closeDb,
   readDocument,
+  readDocumentSnapshot,
   writeDocument,
   readAllDocuments,
   maybeAutoMigrateFromJson,

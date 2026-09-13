@@ -3112,6 +3112,9 @@ function registerJoinMiniApp(app, deps) {
     enrichUserAvatar,
     ensureUserAvatars,
     readUserProjectProfiles,
+    // Shared read-only snapshots (storage/index.js) for the paths that only look.
+    readDataSnapshot = readData,
+    readUserProjectProfilesSnapshot = readUserProjectProfiles,
     getUserProfileBundle,
     getWinnerDisplayName,
     shouldHideParticipant = () => false,
@@ -3366,6 +3369,17 @@ function registerJoinMiniApp(app, deps) {
     return draw;
   }
 
+  // The same draw from the shared snapshot. For handlers that only read it and
+  // write nothing back - the object is shared with every other reader.
+  function getActiveDrawSnapshot(drawId) {
+    const data = readDataSnapshot();
+    const draw = (data.draws || []).find((item) => item.id === drawId);
+    if (!draw || draw.status !== DRAW_STATUS.ACTIVE) {
+      return null;
+    }
+    return draw;
+  }
+
   function buildJoinStepResponse(step, extra = {}) {
     return { step, ...extra };
   }
@@ -3394,7 +3408,9 @@ function registerJoinMiniApp(app, deps) {
   }
 
   function buildJoinDonePayload(draw, userId, extra = {}) {
-    const userProfiles = readUserProjectProfiles();
+    // Read only below. This runs on every /live poll, and parsing the whole
+    // profiles document for each one is what kept the server's core busy.
+    const userProfiles = readUserProjectProfilesSnapshot();
     const participantIds = draw.participantIds || [];
     const chance = computeJoinWinChanceFn
       ? computeJoinWinChanceFn(draw, userId)
@@ -3657,7 +3673,9 @@ function registerJoinMiniApp(app, deps) {
   app.post("/api/join/:drawId/live", requireJoinUser, async (req, res) => {
     const drawId = req.params.drawId;
     const userId = req.telegramUser.id;
-    const draw = getActiveDraw(drawId);
+    // Polled every 2.5 s by each open done screen and writes nothing, so it
+    // shares the parsed snapshot instead of parsing the draws for each poll.
+    const draw = getActiveDrawSnapshot(drawId);
     if (!draw) {
       res.status(404).json({ error: "Розыгрыш недоступен." });
       return;

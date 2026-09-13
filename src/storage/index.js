@@ -35,6 +35,30 @@ function writeDocument(key, payload) {
   getBackend().writeDocument(key, payload);
 }
 
+// A parsed document shared by every reader until it changes (document-snapshot.js).
+// Only for code that reads and never writes back: the object is shared, so a
+// change made to it would show up for everyone else. The JSON backend of the
+// design mode simply reads afresh.
+function readDocumentSnapshot(key) {
+  ensureStorage();
+  const backend = getBackend();
+  return typeof backend.readDocumentSnapshot === "function"
+    ? backend.readDocumentSnapshot(key)
+    : backend.readDocument(key);
+}
+
+function readDataSnapshot() {
+  return readDocumentSnapshot(STORE_KEYS.DRAWS);
+}
+
+function readUserProjectProfilesSnapshot() {
+  return readDocumentSnapshot(STORE_KEYS.USER_PROJECT_PROFILES);
+}
+
+function readDelegatedAdminsSnapshot() {
+  return readDocumentSnapshot(STORE_KEYS.DELEGATED_ADMINS);
+}
+
 function readData() {
   return readDocument(STORE_KEYS.DRAWS);
 }
@@ -98,8 +122,12 @@ module.exports = {
   SQLITE_DB_FILE,
   ensureStorage,
   readDocument,
+  readDocumentSnapshot,
   writeDocument,
   readData,
+  readDataSnapshot,
+  readUserProjectProfilesSnapshot,
+  readDelegatedAdminsSnapshot,
   writeData,
   readArchivedDraws,
   writeArchivedDraws,
