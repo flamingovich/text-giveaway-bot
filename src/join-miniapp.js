@@ -666,6 +666,33 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     const PREVIEW_WALLET_STEP = ${JSON.stringify(previewWalletStep)};
     const tg = window.Telegram?.WebApp;
 
+    // A short buzz on the phone: Telegram's own "error" pattern (a double tap)
+    // when something went wrong, "success" when the person is in. Throttled,
+    // because one failure often shows up in two places at once - a field
+    // status and the message bar. Outside Telegram, Android browsers get a
+    // similar pattern from vibrate(); iOS Safari has neither and stays quiet.
+    let lastHapticAt = 0;
+    function haptic(kind) {
+      const now = Date.now();
+      if (now - lastHapticAt < 400) return;
+      lastHapticAt = now;
+      try {
+        if (tg?.HapticFeedback && (typeof tg.isVersionAtLeast !== "function" || tg.isVersionAtLeast("6.1"))) {
+          tg.HapticFeedback.notificationOccurred(kind);
+          return;
+        }
+        // Chrome refuses vibrate() until the page has been tapped and logs an
+        // error for every attempt, e.g. when a finished join opens straight on
+        // the done step.
+        const activated = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+        if (typeof navigator.vibrate === "function" && activated) {
+          navigator.vibrate(kind === "error" ? [40, 60, 40] : 30);
+        }
+      } catch (_error) {
+        // Decoration only; it must never break a step.
+      }
+    }
+
     function parseStartParamFromInitData(raw) {
       if (!raw) return "";
       try {
@@ -793,6 +820,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         '<span class="join-ref-status-icon" aria-hidden="true">' + icon + "</span>" +
         '<span class="join-ref-status-text">' + message + "</span>";
       status.classList.remove("hidden");
+      if (kind === "error") haptic("error");
     }
 
     function hideRefStatus() {
@@ -942,6 +970,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       el.textContent = text;
       el.className = "msg " + (type || "error");
       el.classList.remove("hidden");
+      if ((type || "error") === "error") haptic("error");
     }
 
     function hideMessage() {
@@ -995,6 +1024,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (!notice) return;
       notice.textContent = String(text || "").trim();
       notice.className = "join-boost-link-notice" + (type === "error" ? " is-error" : " is-ok");
+      if (type === "error") haptic("error");
       notice.classList.remove("hidden");
     }
 
@@ -1142,6 +1172,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (!err) return;
       err.textContent = String(text || "").trim();
       err.classList.toggle("hidden", !err.textContent);
+      if (err.textContent) haptic("error");
     }
 
     function canRequestWriteAccess() {
@@ -1928,6 +1959,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (title) title.textContent = message;
       renderDoneStats(payload);
       showStep("done");
+      // Timed to the disc popping in. Not on "Вы уже участвуете": reopening the
+      // app should not buzz as if something new had happened.
+      if (!payload.alreadyJoined) {
+        setTimeout(() => haptic("success"), 450);
+      }
       startDoneLivePolling(payload);
       updateJoinBoostUi(payload);
       scheduleJoinBoostSheetAutoOpen(payload);
@@ -2258,6 +2294,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       status.textContent = message;
       status.className = "join-field-status join-field-status-" + kind;
       status.classList.remove("hidden");
+      if (kind === "error") haptic("error");
     }
 
     function hideProjectIdStatus() {
