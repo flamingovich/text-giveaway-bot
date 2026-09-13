@@ -2058,33 +2058,218 @@ function getJoinFlowStyles() {
       padding: 8px 4px 4px;
     }
 
-    body.join-flow .join-done-icon-ring {
-      width: 72px;
-      height: 72px;
-      border-radius: 999px;
-      margin: 0 auto 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: radial-gradient(circle, color-mix(in srgb, #2bb566 18%, transparent) 0%, transparent 72%);
-      border: 2px solid color-mix(in srgb, #2bb566 30%, transparent);
-      box-shadow: 0 0 0 6px color-mix(in srgb, #2bb566 8%, transparent);
+    /* The mark on the last step. Without .is-playing it simply stands there
+       finished, which is also what reduced motion gets. With it, once per
+       visit: the disc pops in as the card arrives, the tick draws itself, two
+       rings and a few sparks go out, and the title rises in. Afterwards only a
+       faint halo breathes. Everything sits in one grid cell, so the layers
+       stack on the centre without any absolute offsets. */
+    body.join-flow .join-done-mark {
+      --join-done-green: #25ad5f;
+      --join-done-green-hi: #4ddb8f;
+      display: grid;
+      place-items: center;
+      width: 96px;
+      height: 96px;
+      margin: 0 auto 8px;
     }
 
-    body.join-flow .join-done-icon {
-      width: 44px;
-      height: 44px;
-      border-radius: 999px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: color-mix(in srgb, #2bb566 16%, transparent);
-      color: #2bb566;
+    body.join-flow .join-done-mark > span {
+      grid-area: 1 / 1;
     }
 
-    body.join-flow .join-done-icon svg {
-      width: 24px;
-      height: 24px;
+    body.join-flow .join-done-mark-disc {
+      display: grid;
+      place-items: center;
+      width: 64px;
+      height: 64px;
+      border-radius: 999px;
+      background: linear-gradient(150deg, var(--join-done-green-hi) 0%, var(--join-done-green) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.35),
+        0 10px 24px color-mix(in srgb, var(--join-done-green) 30%, transparent);
+    }
+
+    body.join-flow .join-done-mark-disc svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    body.join-flow .join-done-mark-tick {
+      stroke: #fff;
+      stroke-width: 4.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 1;
+      stroke-dashoffset: 0;
+    }
+
+    body.join-flow .join-done-mark-halo {
+      width: 86px;
+      height: 86px;
+      border-radius: 999px;
+      background: radial-gradient(circle, color-mix(in srgb, var(--join-done-green-hi) 30%, transparent) 0%, transparent 70%);
+      animation: join-done-halo 3.2s ease-in-out infinite alternate;
+    }
+
+    body.join-flow .join-done-mark-wave {
+      width: 64px;
+      height: 64px;
+      box-sizing: border-box;
+      border-radius: 999px;
+      border: 2px solid color-mix(in srgb, var(--join-done-green-hi) 60%, transparent);
+      opacity: 0;
+    }
+
+    /* A zero-size point on the centre; each spark is turned to its own angle
+       and flies out along it. */
+    body.join-flow .join-done-mark-sparks {
+      position: relative;
+      width: 0;
+      height: 0;
+    }
+
+    body.join-flow .join-done-mark-sparks i {
+      position: absolute;
+      left: 0;
+      top: 0;
+    }
+
+    body.join-flow .join-done-mark-sparks i::before {
+      content: "";
+      position: absolute;
+      left: -3px;
+      top: -3px;
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--join-done-green-hi);
+      opacity: 0;
+    }
+
+    body.join-flow .join-done-mark-sparks i:nth-child(even)::before {
+      left: -2px;
+      top: -2px;
+      width: 4px;
+      height: 4px;
+      background: var(--tg-theme-button-color, #325fff);
+    }
+
+    body.join-flow .join-done-mark-sparks i:nth-child(1) { transform: rotate(0deg); }
+    body.join-flow .join-done-mark-sparks i:nth-child(2) { transform: rotate(45deg); }
+    body.join-flow .join-done-mark-sparks i:nth-child(3) { transform: rotate(90deg); }
+    body.join-flow .join-done-mark-sparks i:nth-child(4) { transform: rotate(135deg); }
+    body.join-flow .join-done-mark-sparks i:nth-child(5) { transform: rotate(180deg); }
+    body.join-flow .join-done-mark-sparks i:nth-child(6) { transform: rotate(225deg); }
+    body.join-flow .join-done-mark-sparks i:nth-child(7) { transform: rotate(270deg); }
+    body.join-flow .join-done-mark-sparks i:nth-child(8) { transform: rotate(315deg); }
+
+    body.join-flow .join-done-mark.is-playing .join-done-mark-disc {
+      animation: join-done-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) 0.18s both;
+    }
+
+    body.join-flow .join-done-mark.is-playing .join-done-mark-tick {
+      animation: join-done-draw 0.42s cubic-bezier(0.65, 0, 0.35, 1) 0.5s both;
+    }
+
+    body.join-flow .join-done-mark.is-playing .join-done-mark-wave {
+      animation: join-done-wave 1s cubic-bezier(0.2, 0.6, 0.35, 1) 0.42s both;
+    }
+
+    body.join-flow .join-done-mark.is-playing .join-done-mark-wave-late {
+      animation-delay: 0.64s;
+    }
+
+    body.join-flow .join-done-mark.is-playing .join-done-mark-sparks i::before {
+      animation: join-done-spark 0.8s cubic-bezier(0.2, 0.7, 0.3, 1) 0.52s both;
+    }
+
+    body.join-flow .join-done-mark.is-playing + .join-done-title {
+      animation: join-done-rise 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) 0.6s both;
+    }
+
+    @keyframes join-done-pop {
+      from {
+        opacity: 0;
+        transform: scale(0.3);
+      }
+      60% {
+        opacity: 1;
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    @keyframes join-done-draw {
+      from {
+        stroke-dashoffset: 1;
+      }
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+
+    @keyframes join-done-wave {
+      0% {
+        opacity: 0;
+        transform: scale(1);
+      }
+      12% {
+        opacity: 0.75;
+      }
+      100% {
+        opacity: 0;
+        transform: scale(1.75);
+      }
+    }
+
+    @keyframes join-done-spark {
+      0% {
+        opacity: 0;
+        transform: translateY(-28px) scale(0.4);
+      }
+      25% {
+        opacity: 1;
+      }
+      100% {
+        opacity: 0;
+        transform: translateY(-50px) scale(1);
+      }
+    }
+
+    @keyframes join-done-rise {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: none;
+      }
+    }
+
+    @keyframes join-done-halo {
+      from {
+        opacity: 0.5;
+        transform: scale(0.94);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1.06);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.join-flow .join-done-mark-halo,
+      body.join-flow .join-done-mark.is-playing .join-done-mark-disc,
+      body.join-flow .join-done-mark.is-playing .join-done-mark-tick,
+      body.join-flow .join-done-mark.is-playing .join-done-mark-wave,
+      body.join-flow .join-done-mark.is-playing .join-done-mark-sparks i::before,
+      body.join-flow .join-done-mark.is-playing + .join-done-title {
+        animation: none;
+      }
     }
 
     body.join-flow .join-done-badge {
@@ -3084,14 +3269,9 @@ function getJoinFlowStyles() {
       color: color-mix(in srgb, var(--tg-theme-hint-color, #8b95a8) 78%, var(--tg-theme-bg-color, #141a24));
     }
 
-    body.join-flow.app-theme-dark .join-done-icon-ring {
-      border-color: color-mix(in srgb, #c6ffd6 38%, transparent);
-      box-shadow: 0 0 0 6px color-mix(in srgb, #c6ffd6 10%, transparent);
-    }
-
-    body.join-flow.app-theme-dark .join-done-icon {
-      background: color-mix(in srgb, #c6ffd6 16%, transparent);
-      color: #c6ffd6;
+    body.join-flow.app-theme-dark .join-done-mark {
+      --join-done-green: #22a85c;
+      --join-done-green-hi: #62e6a0;
     }
 
     body.join-flow.app-theme-dark .join-done-title {

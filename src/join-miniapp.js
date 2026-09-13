@@ -542,8 +542,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         3,
         "Готово",
         `<div class="join-done-panel">
-          <div class="join-done-icon-ring">
-            <div class="join-done-icon">${JOIN_STEP_ICONS.done}</div>
+          <div class="join-done-mark" id="joinDoneMark" aria-hidden="true">
+            <span class="join-done-mark-halo"></span>
+            <span class="join-done-mark-wave"></span>
+            <span class="join-done-mark-wave join-done-mark-wave-late"></span>
+            <span class="join-done-mark-sparks"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            <span class="join-done-mark-disc">
+              <svg viewBox="0 0 52 52" fill="none"><path class="join-done-mark-tick" pathLength="1" d="M15 26.5l7.5 7.5L38 19" /></svg>
+            </span>
           </div>
           <h3 id="doneText" class="join-done-title">Вы участвуете!</h3>
           <div id="joinDoneStats" class="join-done-stats hidden">
@@ -1303,6 +1309,16 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       next.classList.add("is-active");
       activeStep = name;
       updateProgress(name);
+      if (name === "done") {
+        // Replayed on every visit, not just the first: the class comes off and
+        // goes back on with a reflow in between, which restarts the animations.
+        const mark = document.getElementById("joinDoneMark");
+        if (mark) {
+          mark.classList.remove("is-playing");
+          void mark.offsetWidth;
+          mark.classList.add("is-playing");
+        }
+      }
     }
 
     async function api(path, body, options = {}) {
