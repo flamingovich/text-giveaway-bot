@@ -107,6 +107,7 @@ const {
   isPrizeHalved,
   isParticipationUnregistered,
 } = require("./unregistered-participation");
+const { getBrandLogoUrls, renderBrandLogoHtml } = require("./brand-logos");
 const {
   getWinnerAddressForfeitureKind: forfeitureKindOf,
   canRequestWinnerAddressAgain: canAskWinnerForAddressAgain,
@@ -6398,9 +6399,11 @@ function renderProjectCard(project) {
   const promoCode = String(project.promoCode || "").trim();
   const isTemplate = isBrandTemplateProject(project);
   const needsSetup = isTemplate && !refLink;
+  const logo = getBrandLogoUrls(project);
   return `
-    <article class="project-card${needsSetup ? " project-card-needs-setup" : ""}">
+    <article class="project-card${needsSetup ? " project-card-needs-setup" : ""}${logo ? " project-card-has-logo" : ""}">
       <div class="project-card-head">
+        ${logo ? `<div class="project-card-brand-logo">${renderBrandLogoHtml(logo)}</div>` : ""}
         <div class="project-card-body">
           <h3 class="project-card-name">${emoji ? `${escapeHtml(emoji)} ` : ""}${escapeHtml(project.name)}</h3>
           ${
@@ -7766,6 +7769,36 @@ ${getPanelFluidTypographyVars()}
     }
     .project-card:not(.channel-card) .project-card-head {
       grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .project-card.project-card-has-logo .project-card-head {
+      grid-template-columns: 76px minmax(0, 1fr) auto;
+    }
+    .project-card-brand-logo {
+      width: 76px;
+      height: 40px;
+      padding: 5px 7px;
+      box-sizing: border-box;
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+    }
+    .project-card-brand-logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .brand-logo-dark {
+      display: none !important;
+    }
+    body.app-theme-dark .brand-logo-light {
+      display: none !important;
+    }
+    body.app-theme-dark .brand-logo-dark {
+      display: block !important;
     }
     .project-card-logo-wrap {
       width: 44px;

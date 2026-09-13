@@ -17,6 +17,7 @@ const {
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
+const { getBrandLogoUrls, renderBrandLogoHtml } = require("./brand-logos");
 const { isParticipationUnregistered } = require("./unregistered-participation");
 const {
   isParticipantAnonymous,
@@ -325,14 +326,14 @@ const JOIN_STEP_ICONS = {
   done: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>`,
 };
 
-function renderJoinStepCard(stepId, stepNum, title, bodyHtml, extraClass = "") {
+function renderJoinStepCard(stepId, stepNum, title, bodyHtml, extraClass = "", headAsideHtml = "") {
   return `<div id="step-${stepId}" class="card join-step-card join-step hidden ${extraClass}" data-step="${stepId}">
     <div class="join-step-head">
-      <div class="join-step-icon">${JOIN_STEP_ICONS[stepId] || ""}</div>
-      <div>
+      <div class="join-step-head-text">
         <div class="join-step-badge">Шаг ${stepNum} из 3</div>
         <h2 class="join-step-title">${title}</h2>
       </div>
+      ${headAsideHtml}
     </div>
     <div class="join-step-body">${bodyHtml}</div>
   </div>`;
@@ -357,6 +358,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
   const botUsername = String(options.botUsername || "").replace(/^@/, "");
   const refLink = escapeHtml(project?.refLink || "");
   const projectName = escapeHtml(project?.name || "проект");
+  const brandLogo = getBrandLogoUrls(project);
   const askProjectIdOnJoin =
     options.askProjectIdOnJoin === true ||
     (Boolean(draw?.projectId) && draw?.askProjectIdOnJoin === true);
@@ -502,6 +504,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <button type="button" class="join-btn join-btn-outline" data-unregistered-open>Я не зарегистрирован</button>
           </div>
         </div>`,
+        "",
+        `<div class="join-brand-logo${brandLogo ? "" : " hidden"}" id="joinBrandLogo">${renderBrandLogoHtml(brandLogo, "join-brand-logo-img")}</div>`,
       )}
 
       ${renderJoinStepCard(
@@ -721,6 +725,19 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         meta?.projectIdGuide || PROJECT_ID_GUIDE_STEPS,
         meta?.projectIdInput || PROJECT_ID_INPUT_CONFIG,
       );
+      const logo = meta?.project?.logo || null;
+      const logoBox = document.getElementById("joinBrandLogo");
+      if (logoBox) {
+        const light = logoBox.querySelector(".brand-logo-light");
+        const dark = logoBox.querySelector(".brand-logo-dark");
+        if (logo && logo.light && logo.dark && light && dark) {
+          light.src = logo.light;
+          dark.src = logo.dark;
+          logoBox.classList.remove("hidden");
+        } else {
+          logoBox.classList.add("hidden");
+        }
+      }
       const refLink = meta?.project?.refLink || "";
       const link = document.getElementById("projectLink");
       if (link) {
@@ -3342,6 +3359,7 @@ function registerJoinMiniApp(app, deps) {
         ? {
             name: project.name || "",
             refLink: project.refLink || "",
+            logo: getBrandLogoUrls(project),
           }
         : null,
     });

@@ -2524,6 +2524,43 @@ function getJoinFlowStyles() {
       border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 38%, transparent);
     }
 
+    body.join-flow .join-step-head-text {
+      min-width: 0;
+    }
+
+    body.join-flow .join-brand-logo {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      align-self: center;
+      flex-shrink: 0;
+      height: 44px;
+      max-width: 132px;
+      margin-left: auto;
+    }
+
+    body.join-flow .join-brand-logo.hidden {
+      display: none !important;
+    }
+
+    body.join-flow .join-brand-logo-img {
+      height: 100%;
+      max-width: 100%;
+      object-fit: contain;
+    }
+
+    .brand-logo-dark {
+      display: none !important;
+    }
+
+    body.app-theme-dark .brand-logo-light {
+      display: none !important;
+    }
+
+    body.app-theme-dark .brand-logo-dark {
+      display: block !important;
+    }
+
     body.join-flow .join-unregistered-actions {
       display: flex;
       flex-direction: column;
