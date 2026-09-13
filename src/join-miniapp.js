@@ -12,6 +12,7 @@ const {
   getJoinPreviewThemeStyles,
   renderThemeToggleButton,
   renderJoinProgressMarkup,
+  renderJoinProgressDot,
   JOIN_FLOW_STEPS,
   getParticipantRowChevronIcon,
 } = require("./miniapp-ui");
@@ -47,6 +48,7 @@ const {
   sleep: projectAccountIdSleep,
 } = require("./project-account-id");
 const { isMegaDraw } = require("./mega-giveaway");
+const { getJoinFlowSteps } = require("./join-flow-steps");
 
 // Share of participants marked "не реф" at join time, which is what decides the
 // payout rate they are later shown. Set to 20% on request (was 35%).
@@ -359,6 +361,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
   const refLink = escapeHtml(project?.refLink || "");
   const projectName = escapeHtml(project?.name || "проект");
   const brandLogo = getBrandLogoUrls(project);
+  // The app mode page is rendered before it knows its draw: it gets all four
+  // stages, hidden, and /meta swaps in the real ones before anything shows.
+  const joinFlowSteps = getJoinFlowSteps(draw, { isMega: isMegaDraw(draw) });
+  const progressDotHtml = Object.fromEntries(
+    JOIN_FLOW_STEPS.map((step) => [step, renderJoinProgressDot(step, "__NUM__")]),
+  );
   const askProjectIdOnJoin =
     options.askProjectIdOnJoin === true ||
     (Boolean(draw?.projectId) && draw?.askProjectIdOnJoin === true);
@@ -422,7 +430,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       <div id="previewNav" class="preview-nav"></div>
       ${isPreview ? renderThemeToggleButton() : ""}
     </div>
-    ${renderJoinProgressMarkup()}
+    ${drawId === "app" ? renderJoinProgressMarkup(JOIN_FLOW_STEPS, { hidden: true }) : renderJoinProgressMarkup(joinFlowSteps)}
     <div id="message" class="msg hidden"></div>
     <div id="loading" class="loading">Загрузка...</div>
     <div id="loadingRetry" class="loading hidden">
@@ -711,6 +719,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     function applyProjectMeta(meta) {
+      applyJoinFlowSteps(meta?.flowSteps);
       projectName = meta?.project?.name || projectName;
       askProjectIdOnJoin = Boolean(meta?.askProjectIdOnJoin);
       if (askProjectIdOnJoin) {
@@ -990,16 +999,61 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       notice.classList.add("hidden");
     }
 
-    const JOIN_STEPS = ${JSON.stringify(JOIN_FLOW_STEPS)};
+    // The stages this draw really has (join-flow-steps.js).
+    let joinFlowSteps = ${JSON.stringify(drawId === "app" ? JOIN_FLOW_STEPS : joinFlowSteps)};
+    const PROGRESS_DOT_HTML = ${JSON.stringify(progressDotHtml)};
     let activeStep = null;
     let stepAnimTimer = null;
     let leavingStepCard = null;
     // The order a person goes through the cards; decides which way a switch
-    // slides. Follows the markup, not JOIN_FLOW_STEPS, which only lists the
-    // steps shown on the progress bar and has no channel or notify.
+    // slides. Follows the markup, not joinFlowSteps, which only lists the
+    // stages on the stepper and has no channel or notify.
     const STEP_SWIPE_ORDER = ["captcha", "channel", "notify", "registration", "trc20", "done"];
     // Matches the 0.34s card transition in getJoinFlowStyles.
     const STEP_SWIPE_MS = 340;
+    // Which stage a card's "Шаг N из M" counts as. The done card has always
+    // repeated the last real step's number.
+    const STEP_STAGE = {
+      captcha: "captcha",
+      channel: "captcha",
+      notify: "captcha",
+      registration: "registration",
+      trc20: "trc20",
+    };
+
+    function renumberStepBadges() {
+      const total = joinFlowSteps.length - 1;
+      document.querySelectorAll(".join-step-card").forEach((card) => {
+        const badge = card.querySelector(".join-step-badge");
+        if (!badge) return;
+        const step = card.dataset.step;
+        const index = step === "done" ? total - 1 : joinFlowSteps.indexOf(STEP_STAGE[step]);
+        // A single step is not a sequence, and "Шаг 1 из 1" only looks broken.
+        const show = total > 1 && index >= 0;
+        badge.classList.toggle("hidden", !show);
+        if (show) badge.textContent = "Шаг " + (index + 1) + " из " + total;
+      });
+    }
+    renumberStepBadges();
+
+    // Swaps in the stages from /meta. Only the app mode page needs it, since it
+    // starts without a draw, but applying the same list twice changes nothing.
+    function applyJoinFlowSteps(steps) {
+      if (!Array.isArray(steps)) return;
+      const known = steps.filter((step) => PROGRESS_DOT_HTML[step]);
+      if (known.length < 2) return;
+      joinFlowSteps = known;
+      const progress = document.getElementById("joinProgress");
+      const dots = document.getElementById("joinProgressDots");
+      if (progress && dots) {
+        progress.style.setProperty("--join-progress-count", String(known.length));
+        dots.innerHTML = known
+          .map((step, i) => PROGRESS_DOT_HTML[step].replace("__NUM__", String(i + 1)))
+          .join("");
+      }
+      renumberStepBadges();
+      updateProgress(activeStep && joinFlowSteps.indexOf(activeStep) >= 0 ? activeStep : joinFlowSteps[0]);
+    }
     let pendingJoinStep = null;
     let writeAccessGranted = false;
     let openedBotForNotify = false;
@@ -1173,15 +1227,21 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     function updateProgress(stepName) {
-      const index = JOIN_STEPS.indexOf(stepName);
+      const index = joinFlowSteps.indexOf(stepName);
       if (index < 0) return;
+      const last = joinFlowSteps.length - 1;
+      document.getElementById("joinProgress")?.classList.remove("hidden");
       const fill = document.getElementById("joinProgressFill");
       if (fill) {
-        fill.style.width = ((index + 1) / JOIN_STEPS.length * 100) + "%";
+        // The track spans centre to centre, so this stops exactly at the
+        // current step's circle.
+        fill.style.width = (index / last * 100) + "%";
       }
       document.querySelectorAll(".join-progress-dot").forEach((dot, i) => {
         dot.classList.toggle("is-active", i === index);
-        dot.classList.toggle("is-done", i < index);
+        // On the last step that step is finished as well, so it gets a tick
+        // rather than a number that looks like it is still waiting.
+        dot.classList.toggle("is-done", i < index || index === last);
       });
     }
 
@@ -3420,6 +3480,7 @@ function registerJoinMiniApp(app, deps) {
       drawId: draw.id,
       prize: draw.prize || "",
       isMega: isMegaDraw(draw),
+      flowSteps: getJoinFlowSteps(draw, { isMega: isMegaDraw(draw) }),
       askProjectIdOnJoin: isMegaDraw(draw) ? false : drawAsksProjectIdOnJoin(draw),
       projectIdGuide: drawAsksProjectIdOnJoin(draw) ? buildProjectIdGuideSteps(project) : null,
       projectIdInput: drawAsksProjectIdOnJoin(draw) ? buildProjectIdInputConfig(project) : null,
@@ -4028,8 +4089,17 @@ function registerJoinMiniApp(app, deps) {
       const previewProject = previewBrands[brandSlug]
         ? { ...mockProject, name: previewBrands[brandSlug], templateSlug: brandSlug }
         : mockProject;
+      // ?flow=nowallet or ?flow=noproject shows the stepper of a draw without
+      // those stages.
+      const flow = String(req.query.flow || "").trim().toLowerCase();
+      const previewDraw =
+        flow === "noproject"
+          ? { ...mockDraw, projectId: null }
+          : flow === "nowallet"
+            ? { ...mockDraw, askWalletOnJoin: false }
+            : mockDraw;
       res.type("html").send(
-        renderJoinPage("preview", mockDraw, previewProject, {
+        renderJoinPage("preview", previewDraw, previewProject, {
           recaptchaSiteKey: RECAPTCHA_SITE_KEY,
           botUsername: BOT_USERNAME,
         }),

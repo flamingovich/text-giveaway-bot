@@ -907,7 +907,7 @@ function getPreviewDevStyles() {
   `;
 }
 
-const JOIN_FLOW_STEPS = ["captcha", "registration", "trc20", "done"];
+const { JOIN_FLOW_STEPS, JOIN_FLOW_STEP_LABELS } = require("./join-flow-steps");
 
 function getJoinFlowStyles() {
   return `
@@ -978,49 +978,207 @@ function getJoinFlowStyles() {
       overflow-x: hidden;
     }
 
+    /* A stepper in the same panel as the cards, so it reads as part of the
+       flow rather than a line floating over the doodles. It has as many
+       columns as the draw has stages (--join-progress-count, set on the
+       element). The track runs from the centre of the first node to the centre
+       of the last: with no column gap each column is 1/count of the content
+       box, so the centres sit half a column in from either side. */
     body.join-flow .join-progress {
-      margin-bottom: 14px;
+      --join-progress-pad-x: 4px;
+      --join-progress-pad-top: 10px;
+      --join-progress-node: 22px;
+      position: relative;
+      margin-bottom: 12px;
+      padding: var(--join-progress-pad-top) var(--join-progress-pad-x) 8px;
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #fff) 80%, transparent);
+      border: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+      box-shadow: 0 8px 24px rgba(27, 45, 94, 0.06);
     }
 
-    body.join-flow .join-progress-bar {
-      height: 4px;
+    body.join-flow .join-progress-track {
+      position: absolute;
+      top: calc(var(--join-progress-pad-top) + var(--join-progress-node) / 2 - 1.5px);
+      left: calc(var(--join-progress-pad-x) + (100% - 2 * var(--join-progress-pad-x)) / (2 * var(--join-progress-count, 4)));
+      right: calc(var(--join-progress-pad-x) + (100% - 2 * var(--join-progress-pad-x)) / (2 * var(--join-progress-count, 4)));
+      height: 3px;
       border-radius: 999px;
-      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 18%, transparent);
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 22%, transparent);
       overflow: hidden;
     }
 
     body.join-flow .join-progress-fill {
+      position: relative;
       height: 100%;
-      width: 25%;
+      width: 0;
       border-radius: inherit;
-      background: linear-gradient(90deg, var(--tg-theme-button-color, #325fff), color-mix(in srgb, var(--tg-theme-button-color, #325fff) 70%, #fff));
-      transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+      background: linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 65%, #fff),
+        var(--tg-theme-button-color, #325fff)
+      );
+      transition: width 0.55s cubic-bezier(0.22, 0.61, 0.36, 1);
+      overflow: hidden;
+    }
+
+    /* A soft highlight running along the filled part now and then. */
+    body.join-flow .join-progress-fill::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 45%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+      transform: translateX(-100%);
+      animation: join-progress-shimmer 3.2s ease-in-out infinite;
+    }
+
+    @keyframes join-progress-shimmer {
+      0% {
+        transform: translateX(-100%);
+      }
+      55%,
+      100% {
+        transform: translateX(225%);
+      }
     }
 
     body.join-flow .join-progress-dots {
+      position: relative;
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 4px;
-      margin-top: 10px;
+      grid-template-columns: repeat(var(--join-progress-count, 4), minmax(0, 1fr));
       width: 100%;
+      margin: 0;
+      padding: 0;
+      list-style: none;
     }
 
     body.join-flow .join-progress-dot {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
       min-width: 0;
-      text-align: center;
-      font-size: 9px;
-      font-weight: 600;
+    }
+
+    /* Opaque, so the track passes behind the circle rather than through it. */
+    body.join-flow .join-progress-node {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: var(--join-progress-node);
+      height: var(--join-progress-node);
+      box-sizing: border-box;
+      border-radius: 999px;
+      background: var(--tg-theme-secondary-bg-color, #fff);
+      border: 1.5px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 40%, transparent);
       color: var(--tg-theme-hint-color, #65708a);
-      line-height: 1.2;
-      transition: color 0.2s ease;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      transition:
+        background-color 0.3s ease,
+        border-color 0.3s ease,
+        color 0.3s ease,
+        box-shadow 0.3s ease,
+        transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    body.join-flow .join-progress-num,
+    body.join-flow .join-progress-check {
+      grid-area: 1 / 1;
+      transition:
+        opacity 0.25s ease,
+        transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    body.join-flow .join-progress-check {
+      width: 12px;
+      height: 12px;
+      opacity: 0;
+      transform: scale(0.4);
+    }
+
+    body.join-flow .join-progress-label {
+      max-width: 100%;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      font-size: 10.5px;
+      font-weight: 600;
+      line-height: 1.25;
+      color: var(--tg-theme-hint-color, #65708a);
+      transition: color 0.3s ease;
     }
 
-    body.join-flow .join-progress-dot.is-active,
-    body.join-flow .join-progress-dot.is-done {
+    body.join-flow .join-progress-dot.is-active .join-progress-node {
+      border-color: var(--tg-theme-button-color, #325fff);
+      background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 16%, var(--tg-theme-secondary-bg-color, #fff));
       color: var(--tg-theme-button-color, #325fff);
+      transform: scale(1.08);
+    }
+
+    /* The current step breathes: a thin ring widening and fading out. */
+    body.join-flow .join-progress-dot.is-active:not(.is-done) .join-progress-node::after {
+      content: "";
+      position: absolute;
+      inset: -4px;
+      border-radius: inherit;
+      border: 1.5px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 60%, transparent);
+      opacity: 0;
+      pointer-events: none;
+      animation: join-progress-pulse 2.4s ease-out infinite;
+    }
+
+    @keyframes join-progress-pulse {
+      0% {
+        opacity: 0.6;
+        transform: scale(0.85);
+      }
+      100% {
+        opacity: 0;
+        transform: scale(1.3);
+      }
+    }
+
+    body.join-flow .join-progress-dot.is-done .join-progress-node {
+      border-color: var(--tg-theme-button-color, #325fff);
+      background: var(--tg-theme-button-color, #325fff);
+      color: var(--tg-theme-button-text-color, #fff);
+      transform: none;
+    }
+
+    body.join-flow .join-progress-dot.is-done .join-progress-num {
+      opacity: 0;
+      transform: scale(0.4);
+    }
+
+    body.join-flow .join-progress-dot.is-done .join-progress-check {
+      opacity: 1;
+      transform: none;
+    }
+
+    body.join-flow .join-progress-dot.is-done .join-progress-label {
+      color: color-mix(in srgb, var(--tg-theme-text-color, #151a2d) 70%, var(--tg-theme-hint-color, #65708a));
+    }
+
+    body.join-flow .join-progress-dot.is-active .join-progress-label {
+      color: var(--tg-theme-text-color, #151a2d);
+      font-weight: 700;
+    }
+
+    body.join-flow.app-theme-dark .join-progress {
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #232f42) 82%, transparent);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.join-flow .join-progress-fill::after,
+      body.join-flow .join-progress-dot.is-active:not(.is-done) .join-progress-node::after {
+        animation: none;
+      }
     }
 
     body.join-flow .join-steps-viewport {
@@ -2946,13 +3104,26 @@ function getJoinFlowStyles() {
   `;
 }
 
-function renderJoinProgressMarkup() {
-  const labels = ["Проверка", "Регистрация", "Кошелёк", "Готово"];
-  return `<div class="join-progress" id="joinProgress">
-    <div class="join-progress-bar"><div class="join-progress-fill" id="joinProgressFill"></div></div>
-    <div class="join-progress-dots">
-      ${labels.map((label, i) => `<span class="join-progress-dot${i === 0 ? " is-active" : ""}" data-step-index="${i}">${label}</span>`).join("")}
-    </div>
+const JOIN_PROGRESS_CHECK = `<svg class="join-progress-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+// One node of the stepper. The client rebuilds the stepper from these when the
+// app mode page learns its draw, so `number` may be a placeholder it fills in.
+function renderJoinProgressDot(step, number) {
+  return `<li class="join-progress-dot" data-step="${step}">
+        <span class="join-progress-node" aria-hidden="true"><span class="join-progress-num">${number}</span>${JOIN_PROGRESS_CHECK}</span>
+        <span class="join-progress-label">${JOIN_FLOW_STEP_LABELS[step] || ""}</span>
+      </li>`;
+}
+
+// `steps` is what getJoinFlowSteps says this draw has. The column count goes
+// into a custom property, which the grid and the track both read.
+function renderJoinProgressMarkup(steps = JOIN_FLOW_STEPS, { hidden = false } = {}) {
+  const dots = steps
+    .map((step, i) => renderJoinProgressDot(step, i + 1).replace('class="join-progress-dot"', `class="join-progress-dot${i === 0 ? " is-active" : ""}"`))
+    .join("");
+  return `<div class="join-progress${hidden ? " hidden" : ""}" id="joinProgress" style="--join-progress-count: ${steps.length}">
+    <div class="join-progress-track" aria-hidden="true"><div class="join-progress-fill" id="joinProgressFill"></div></div>
+    <ol class="join-progress-dots" id="joinProgressDots">${dots}</ol>
   </div>`;
 }
 
@@ -3922,6 +4093,7 @@ module.exports = {
   getGatePageStyles,
   getJoinPreviewThemeStyles,
   renderJoinProgressMarkup,
+  renderJoinProgressDot,
   renderThemeToggleButton,
   JOIN_FLOW_STEPS,
   MINIAPP_VIEWPORT,
