@@ -6110,14 +6110,25 @@ function renderLandingPage() {
       pointer-events: none;
       background-color: #152238;
     }
+    /* Drifts upwards by one tile per loop, like the mini app backgrounds. The
+       strip is centred with translateX, so the animation keeps that. */
     .landing-bg-strip {
+      --landing-tile-h: calc(min(760px, 100vw) * 1280 / 760);
       position: absolute;
       top: 0;
       left: 50%;
       transform: translateX(-50%);
       display: flex;
-      height: 100%;
+      height: calc(100% + var(--landing-tile-h));
       min-width: 100vw;
+      animation: landing-bg-drift 160s linear infinite;
+    }
+    @keyframes landing-bg-drift {
+      from { transform: translate3d(-50%, 0, 0); }
+      to { transform: translate3d(-50%, calc(-1 * var(--landing-tile-h)), 0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .landing-bg-strip { animation: none; }
     }
     .landing-bg-tile {
       --landing-tile-width: min(760px, 100vw);
@@ -7228,10 +7239,16 @@ ${getPanelFluidTypographyVars()}
       touch-action: manipulation;
       -ms-touch-action: manipulation;
     }
+    /* Drifts upwards by one tile per loop, as in the mini apps
+       (getMiniAppStyles): both background images are 760x1280. */
     body::before {
+      --app-bg-tile-h: calc(min(100vw, 760px) * 1280 / 760);
       content: "";
       position: fixed;
-      inset: 0;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: calc(100% + var(--app-bg-tile-h));
       z-index: -1;
       background-color: var(--bg-active, var(--bg));
       background-image: var(--app-bg-active, var(--app-bg-image));
@@ -7239,6 +7256,14 @@ ${getPanelFluidTypographyVars()}
       background-position: center top;
       background-size: min(100vw, 760px) auto;
       pointer-events: none;
+      animation: app-bg-drift 160s linear infinite;
+    }
+    @keyframes app-bg-drift {
+      from { transform: translate3d(0, 0, 0); }
+      to { transform: translate3d(0, calc(-1 * var(--app-bg-tile-h)), 0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      body::before { animation: none; }
     }
     body.app-theme-dark {
       --bg-active: var(--bg-dark);

@@ -240,10 +240,20 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
       position: relative;
     }
 
+    /* The doodle background drifts upwards, very slowly. Each loop moves it by
+       exactly one tile - the tile is min(100vw, 760px) wide and both images are
+       760x1280 - so the jump back to the start lands on the same picture and
+       never shows. The layer is one tile taller than the screen so there is
+       always something to slide into view. transform only: it is composited,
+       with no repaint of a full-screen image on every frame. */
     body.mini-app-shell::before {
+      --app-bg-tile-h: calc(min(100vw, 760px) * 1280 / 760);
       content: "";
       position: fixed;
-      inset: 0;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: calc(100% + var(--app-bg-tile-h));
       z-index: -1;
       background-color: var(--bg-active, var(--bg, #dbe8f8));
       background-image: var(--app-bg-active, var(--app-bg-image, url("/brand/background.jpg")));
@@ -251,6 +261,33 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
       background-position: center top;
       background-size: min(100vw, 760px) auto;
       pointer-events: none;
+      animation: app-bg-drift 160s linear infinite;
+    }
+
+    @keyframes app-bg-drift {
+      from {
+        transform: translate3d(0, 0, 0);
+      }
+      to {
+        transform: translate3d(0, calc(-1 * var(--app-bg-tile-h)), 0);
+      }
+    }
+
+    /* The wide-screen tiled backgrounds centre their strip with translateX,
+       so their drift keeps it. */
+    @keyframes app-bg-drift-strip {
+      from {
+        transform: translate3d(-50%, 0, 0);
+      }
+      to {
+        transform: translate3d(-50%, calc(-1 * var(--app-bg-tile-h)), 0);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.mini-app-shell::before {
+        animation: none;
+      }
     }
 
     body.mini-app-shell.app-theme-dark {
@@ -921,34 +958,6 @@ function getJoinFlowStyles() {
       font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       overflow-x: clip;
       box-sizing: border-box;
-      --join-bg-tile-h: calc(min(100vw, 760px) * 1280 / 760);
-    }
-
-    /* The doodle background drifts upwards, very slowly. Each loop moves it by
-       exactly one tile - the tile is min(100vw, 760px) wide and both images are
-       760x1280 - so the jump back to the start lands on the same picture and
-       never shows. The layer is one tile taller than the screen so there is
-       always something to slide into view. transform only: it is composited,
-       with no repaint of a full-screen image on every frame. */
-    body.join-flow.mini-app-shell::before {
-      bottom: auto;
-      height: calc(100% + var(--join-bg-tile-h));
-      animation: join-bg-drift 160s linear infinite;
-    }
-
-    @keyframes join-bg-drift {
-      from {
-        transform: translate3d(0, 0, 0);
-      }
-      to {
-        transform: translate3d(0, calc(-1 * var(--join-bg-tile-h)), 0);
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      body.join-flow.mini-app-shell::before {
-        animation: none;
-      }
     }
 
     body.join-flow.mini-app-shell h1,
@@ -3874,13 +3883,15 @@ function getWinnersPageStyles() {
       }
 
       body.winners-page .app-desktop-bg-strip {
+        --app-bg-tile-h: calc(min(760px, 100vw) * 1280 / 760);
         position: absolute;
         top: 0;
         left: 50%;
         transform: translateX(-50%);
         display: flex;
-        height: 100%;
+        height: calc(100% + var(--app-bg-tile-h));
         min-width: 100vw;
+        animation: app-bg-drift-strip 160s linear infinite;
       }
 
       body.winners-page .app-desktop-bg-tile {
@@ -3897,6 +3908,12 @@ function getWinnersPageStyles() {
 
       body.winners-page .app-desktop-bg-tile-mirror {
         transform: scaleX(-1);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        body.winners-page .app-desktop-bg-strip {
+          animation: none;
+        }
       }
 
       body.winners-page .app-desktop-bg-overlay {
