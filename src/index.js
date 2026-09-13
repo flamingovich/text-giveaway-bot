@@ -134,6 +134,7 @@ const {
   readDelegatedAdminsSnapshot,
 } = require("./storage");
 const { withFloodRetry } = require("./telegram-flood-retry");
+const { userMetaNeedsWrite } = require("./user-meta-touch");
 const {
   hasSavedWinnerDepositAddress,
   writeDataPreservingLiveWinners,
@@ -4905,6 +4906,14 @@ function setUserProjectProfile(userId, projectId, payload) {
 
 function upsertUserMeta(user) {
   if (!user || !user.id) {
+    return;
+  }
+  // Runs on every authenticated mini app request, /live polls included. The
+  // check reads the shared snapshot, which costs nothing while no write has
+  // happened; the full read-and-rewrite below only runs when there is news
+  // (user-meta-touch.js).
+  const knownMeta = readUserProjectProfilesSnapshot().users?.[String(user.id)]?.meta;
+  if (!userMetaNeedsWrite(knownMeta, user)) {
     return;
   }
   const data = readUserProjectProfiles();
