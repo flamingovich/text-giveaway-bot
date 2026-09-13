@@ -75,7 +75,7 @@ test("the input asks for the right thing and does not show a #", () => {
   const config = buildProjectIdInputConfig(LUCKYBEAR);
   assert.equal(config.kind, "luckybear");
   assert.equal(config.showHashPrefix, false);
-  assert.equal(config.placeholder, REAL_ID);
+  assert.equal(config.placeholder, "Введите ID сюда");
 });
 
 test("the guide has both steps with pictures", () => {
@@ -85,7 +85,7 @@ test("the guide has both steps with pictures", () => {
     assert.ok(step.text, "шаг без текста");
     assert.match(step.imageUrl, /^\/assets\/lb_id_guide\//, "картинка не на месте");
   }
-  assert.match(steps[1].text, /165ba529-04f5/, "пример ID должен быть на виду");
+  assert.match(steps[1].text, /165ba52904f5/, "пример ID должен быть на виду");
 });
 
 test("the other brands are untouched", () => {

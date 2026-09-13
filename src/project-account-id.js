@@ -48,7 +48,7 @@ const LUCKYBEAR_PROJECT_ID_GUIDE_STEPS = [
   },
   {
     num: 2,
-    text: "Скопируйте ID под уровнем — из букв и цифр, например 165ba529-04f5",
+    text: "Скопируйте ID под уровнем — из букв и цифр, например 165ba52904f5",
     imageUrl: "/assets/lb_id_guide/lb_id_2.jpg",
   },
 ];
@@ -182,6 +182,41 @@ function isSequentialBody(body) {
   return false;
 }
 
+// Filler someone types instead of their real id: one character over and over,
+// or a straight run like 12345678 or abcd. Digits wrap past 9 because the long
+// Pokerdom ids make "123456789012345" the obvious thing to type. Nothing
+// stricter on purpose - refusing a real id keeps a person out of a draw (the
+// LuckyBear note in CLAUDE.md), so only shapes no project would ever issue.
+function isFillerProjectAccountId(value) {
+  const body = String(value || "").replace(/-/g, "").toLowerCase();
+  if (body.length < 4) {
+    return false;
+  }
+  if (/^(.)\1+$/.test(body)) {
+    return true;
+  }
+  const isDigits = /^[0-9]+$/.test(body);
+  const isLetters = /^[a-z]+$/.test(body);
+  if (!isDigits && !isLetters) {
+    return false;
+  }
+  for (const step of [1, -1]) {
+    let run = true;
+    for (let i = 1; i < body.length; i += 1) {
+      const previous = body.charCodeAt(i - 1);
+      const expected = isDigits ? 48 + ((previous - 48 + step + 10) % 10) : previous + step;
+      if (body.charCodeAt(i) !== expected) {
+        run = false;
+        break;
+      }
+    }
+    if (run) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function validateRoyalProjectAccountIdFormat(raw) {
   const normalized = normalizeRoyalProjectAccountId(raw);
   if (!normalized) {
@@ -216,6 +251,9 @@ function validatePokerdomProjectAccountIdFormat(raw) {
   if (normalized.length < POKERDOM_PROJECT_ACCOUNT_ID_MIN_LENGTH) {
     return { ok: false, error: "Проверьте верность ID и попробуйте ещё раз." };
   }
+  if (isFillerProjectAccountId(normalized)) {
+    return { ok: false, error: "Такой ID не похож на настоящий. Откройте профиль на проекте." };
+  }
   return { ok: true, normalized };
 }
 
@@ -232,6 +270,9 @@ function validateLuckyBearProjectAccountIdFormat(raw) {
       ok: false,
       error: "ID состоит из букв и цифр. Скопируйте его в профиле на проекте.",
     };
+  }
+  if (isFillerProjectAccountId(normalized)) {
+    return { ok: false, error: "Такой ID не похож на настоящий. Откройте профиль на проекте." };
   }
   return { ok: true, normalized };
 }
@@ -276,9 +317,9 @@ function buildProjectIdInputConfig(project = null) {
     return {
       kind: "luckybear",
       showHashPrefix: false,
-      placeholder: "165ba529-04f5",
+      placeholder: "Введите ID сюда",
       maxlength: LUCKYBEAR_PROJECT_ACCOUNT_ID_MAX_LENGTH,
-      label: "ID на проекте",
+      label: "Мой ID",
     };
   }
   if (getProjectAccountIdKind(project) === "pokerdom") {
@@ -287,15 +328,15 @@ function buildProjectIdInputConfig(project = null) {
       showHashPrefix: false,
       placeholder: "Введите ID сюда",
       maxlength: POKERDOM_PROJECT_ACCOUNT_ID_MAX_LENGTH,
-      label: "ID пользователя",
+      label: "Мой ID",
     };
   }
   return {
     kind: "royal",
     showHashPrefix: true,
-    placeholder: "FJ0UW",
+    placeholder: "Введите ID сюда",
     maxlength: 5,
-    label: "ID на проекте",
+    label: "Мой ID",
   };
 }
 
@@ -468,6 +509,7 @@ async function projectAccountIdVerifyDelayMs() {
 }
 
 module.exports = {
+  isFillerProjectAccountId,
   drawAsksProjectIdOnJoin,
   getProjectAccountIdKind,
   normalizeProjectAccountId,
