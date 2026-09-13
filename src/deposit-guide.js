@@ -136,6 +136,7 @@ function buildJoinWalletStepPayload(project, networkId) {
       fieldLabel: "TRC-20 адрес",
       placeholder: "T...",
       introText: "Отправьте TRC-20 адрес с проекта.",
+      networkLabel: "TRC-20",
       networkWarningHtml: "",
       guideSteps: [
         {
@@ -164,6 +165,7 @@ function buildJoinWalletStepPayload(project, networkId) {
     fieldLabel: `${network.shortLabel} адрес`,
     placeholder: network.addressPrefix === "T" ? "T..." : "0x...",
     introText: `Отправьте ${network.shortLabel} адрес с проекта.`,
+    networkLabel: network.shortLabel,
     networkWarningHtml: buildNetworkForfeitWarningHtml(network.id),
     guideSteps: [
       {

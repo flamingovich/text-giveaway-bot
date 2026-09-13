@@ -130,9 +130,6 @@ function renderUserRow(user, options = {}) {
   const profileAttr = user.profilePageUrl
     ? ` data-profile-url="${escapeHtml(user.profilePageUrl)}"`
     : "";
-  const anonTag = user.anonymous
-    ? `<span class="anon-tag" title="Участник скрыл имя">Аноним</span>`
-    : "";
 
   return `<article class="winners-row${showPrize ? "" : " winners-row-compact"}"${profileAttr}>
     <div class="winners-row-hit">
@@ -141,7 +138,6 @@ function renderUserRow(user, options = {}) {
         <div class="winners-row-identity">
           <span class="winners-row-name-line">
             <span class="winners-row-name${user.anonymous ? " is-anon-name" : ""}">${escapeHtml(user.displayName)}</span>
-            ${anonTag}
             <span class="winners-row-chevron hidden" aria-hidden="true">${getParticipantRowChevronIcon()}</span>
           </span>
         </div>

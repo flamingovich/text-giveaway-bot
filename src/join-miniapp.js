@@ -477,29 +477,31 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         "registration",
         2,
         "Регистрация",
-        `<p class="join-step-text" id="registrationLeadText">Зарегистрируйтесь на проекте, затем вернитесь сюда и подтвердите.</p>
-        <div class="join-actions">
+        `<div class="join-actions">
           <a class="join-btn join-btn-secondary" id="projectLink" href="${refLink}" target="_blank" rel="noopener">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
             <span class="join-btn-label">Перейти на ${projectName}</span>
           </a>
-          <button type="button" class="join-guide-link hidden" id="projectIdGuideOpenBtn" aria-expanded="false">Как узнать ID</button>
           <div id="registrationRefMode" class="join-step-stack">
             <button type="button" class="join-btn join-btn-primary join-btn-locked" id="refConfirmBtn" disabled><span class="join-btn-label">Подтвердить статус реферала</span></button>
             <div id="refConfirmStatus" class="join-ref-status hidden" role="status"></div>
+            <div class="join-stack-divider" aria-hidden="true"></div>
             <button type="button" class="join-btn join-btn-outline" id="registrationNonRefBtn">Я не реферал</button>
             <button type="button" class="join-btn join-btn-outline" data-unregistered-open>Я не зарегистрирован</button>
           </div>
           <div id="registrationProjectIdMode" class="join-step-stack hidden">
             <div class="join-trc20-field join-trc20-field-compact">
-              <label class="join-field-label" for="projectAccountIdInput">ID на проекте</label>
+              <label class="join-field-label" for="projectAccountIdInput">Мой ID</label>
               <div class="join-id-input-row">
                 <span class="join-id-prefix" aria-hidden="true">#</span>
-                <input class="join-input join-input-id" id="projectAccountIdInput" placeholder="FJ0UW" autocomplete="off" maxlength="5" inputmode="text" autocapitalize="characters" />
+                <input class="join-input join-input-id" id="projectAccountIdInput" placeholder="Введите ID сюда" autocomplete="off" maxlength="5" inputmode="text" autocapitalize="characters" />
+                <button type="button" class="join-id-paste-btn" id="projectAccountIdPasteBtn" title="Вставить" aria-label="Вставить">${JOIN_BTN_PASTE}</button>
               </div>
             </div>
+            <button type="button" class="join-guide-link hidden" id="projectIdGuideOpenBtn" aria-expanded="false">Как узнать ID</button>
             <button type="button" class="join-btn join-btn-primary" id="projectAccountIdVerifyBtn"><span class="join-btn-label">Проверить ID</span></button>
             <div id="projectAccountIdStatus" class="join-field-status hidden" role="status"></div>
+            <div class="join-stack-divider" aria-hidden="true"></div>
             <button type="button" class="join-btn join-btn-outline" id="registrationProjectIdNonRefBtn">Я не реферал</button>
             <button type="button" class="join-btn join-btn-outline" data-unregistered-open>Я не зарегистрирован</button>
           </div>
@@ -523,11 +525,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         </div>
         <div class="join-step-stack join-wallet-actions">
         <button type="button" class="join-btn join-btn-primary join-trc20-submit" id="trc20SubmitBtn">Участвовать</button>
-        <button type="button" class="join-btn join-btn-guide" id="walletGuideToggleBtn" aria-expanded="false">
-          ${JOIN_GUIDE_BTN_ICON}
-          <span class="join-btn-label">Как узнать адрес</span>
-        </button>
-        <div class="join-guide hidden" id="walletGuideSteps"></div>
+        <button type="button" class="join-guide-link" id="walletGuideToggleBtn" aria-expanded="false"><span class="join-btn-label">Как узнать адрес</span></button>
         </div>`,
       )}
 
@@ -539,9 +537,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           <div class="join-done-icon-ring">
             <div class="join-done-icon">${JOIN_STEP_ICONS.done}</div>
           </div>
-          <p class="join-done-badge">Участие принято</p>
           <h3 id="doneText" class="join-done-title">Вы участвуете!</h3>
-          <p class="join-done-sub">Ждём результатов розыгрыша.</p>
           <div id="joinDoneStats" class="join-done-stats hidden">
             <div class="join-done-stat-col">
               <strong id="joinDoneCount" class="join-done-stat-value">0</strong>
@@ -997,6 +993,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     const JOIN_STEPS = ${JSON.stringify(JOIN_FLOW_STEPS)};
     let activeStep = null;
     let stepAnimTimer = null;
+    let leavingStepCard = null;
+    // The order a person goes through the cards; decides which way a switch
+    // slides. Follows the markup, not JOIN_FLOW_STEPS, which only lists the
+    // steps shown on the progress bar and has no channel or notify.
+    const STEP_SWIPE_ORDER = ["captcha", "channel", "notify", "registration", "trc20", "done"];
+    // Matches the 0.34s card transition in getJoinFlowStyles.
+    const STEP_SWIPE_MS = 340;
     let pendingJoinStep = null;
     let writeAccessGranted = false;
     let openedBotForNotify = false;
@@ -1203,20 +1206,41 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
 
       const current = activeStep ? document.getElementById("step-" + activeStep) : null;
+      const viewport = document.getElementById("joinStepsViewport");
+      // Forward slides left, back slides right, the very first card only fades in.
+      const fromIndex = STEP_SWIPE_ORDER.indexOf(activeStep);
+      const toIndex = STEP_SWIPE_ORDER.indexOf(name);
+      const direction = !current ? 0 : toIndex < fromIndex ? -1 : 1;
+      if (viewport) {
+        viewport.style.setProperty("--join-step-dir", String(direction));
+      }
+
+      // A card still sliding out from a switch a moment ago is finished off
+      // now. Clearing its timer alone, as before, left it stuck half-way:
+      // invisible, but still laid out on top of the new card.
+      clearTimeout(stepAnimTimer);
+      if (leavingStepCard && leavingStepCard !== next) {
+        leavingStepCard.classList.add("hidden");
+        leavingStepCard.classList.remove("is-leaving");
+      }
+      leavingStepCard = null;
+
       if (current && current !== next) {
         current.classList.add("is-leaving");
         current.classList.remove("is-active");
-        clearTimeout(stepAnimTimer);
+        leavingStepCard = current;
         stepAnimTimer = setTimeout(() => {
           current.classList.add("hidden");
           current.classList.remove("is-leaving");
-        }, 220);
+          if (leavingStepCard === current) leavingStepCard = null;
+        }, STEP_SWIPE_MS);
       }
 
-      next.classList.remove("hidden");
-      requestAnimationFrame(() => {
-        next.classList.add("is-active");
-      });
+      next.classList.remove("hidden", "is-leaving");
+      // Commit the off-to-the-side start position before switching the card
+      // on; otherwise the browser folds both states into one and it just pops in.
+      void next.offsetWidth;
+      next.classList.add("is-active");
       activeStep = name;
       updateProgress(name);
     }
@@ -1452,11 +1476,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         nameEl.classList.toggle("is-anon-name", Boolean(participant.anonymous));
       }
 
-      const anonTagEl = row.querySelector(".anon-tag");
-      if (anonTagEl) {
-        anonTagEl.classList.toggle("hidden", !participant.anonymous);
-      }
-
       const handleEl = row.querySelector(".join-done-row-handle");
       if (handleEl) {
         handleEl.classList.toggle("is-anon-handle", Boolean(participant.anonymous));
@@ -1517,12 +1536,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const nameEl = document.createElement("span");
       nameEl.className = "join-done-row-name";
       nameLine.appendChild(nameEl);
-
-      const anonTagEl = document.createElement("span");
-      anonTagEl.className = "anon-tag hidden";
-      anonTagEl.title = "Участник скрыл имя";
-      anonTagEl.textContent = "Аноним";
-      nameLine.appendChild(anonTagEl);
 
       const chevronEl = document.createElement("span");
       chevronEl.className = "join-done-row-chevron hidden";
@@ -1835,23 +1848,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     function showDoneStep(payload) {
       lastDonePayload = payload || {};
       const title = document.getElementById("doneText");
-      const badge = document.querySelector(".join-done-badge");
-      const sub = document.querySelector(".join-done-sub");
       const message = payload.message || "Вы участвуете!";
       if (title) title.textContent = message;
-      if (payload.alreadyJoined) {
-        if (badge) badge.classList.add("hidden");
-        if (sub) sub.classList.add("hidden");
-      } else {
-        if (badge) {
-          badge.classList.remove("hidden");
-          badge.textContent = "Участие принято";
-        }
-        if (sub) {
-          sub.classList.remove("hidden");
-          sub.textContent = "Ждём результатов розыгрыша.";
-        }
-      }
       renderDoneStats(payload);
       showStep("done");
       startDoneLivePolling(payload);
@@ -1935,12 +1933,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       backdrop?.addEventListener("click", closeModal);
     })();
 
-    let projectIdGuideOpen = false;
-    let walletGuideOpen = false;
+    // One bottom sheet serves both guides. guideSheetKind says which guide it
+    // is showing, so leaving a step closes only that step's own guide.
+    let guideSheetKind = null;
+    let guideSheetOpenBtn = null;
     let walletGuideStepsCache = null;
     let projectIdGuideStepsCache = PROJECT_ID_GUIDE_STEPS;
     let projectIdInputConfig = PROJECT_ID_INPUT_CONFIG;
-    let projectIdGuideCloseTimer = null;
+    let guideSheetCloseTimer = null;
     const JOIN_GUIDE_SHEET_ANIM_MS = 340;
 
     function renderGuideStepsContent(container, steps) {
@@ -1975,17 +1975,17 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
-    function getProjectIdGuideElements() {
+    function getGuideSheetElements() {
       return {
         backdrop: document.getElementById("joinGuideBackdrop"),
         sheet: document.getElementById("joinGuideSheet"),
+        title: document.getElementById("joinGuideSheetTitle"),
         content: document.getElementById("projectIdGuideSteps"),
-        openBtn: document.getElementById("projectIdGuideOpenBtn"),
       };
     }
 
-    function hideProjectIdGuideElements() {
-      const { backdrop, sheet } = getProjectIdGuideElements();
+    function hideGuideSheetElements() {
+      const { backdrop, sheet } = getGuideSheetElements();
       if (!backdrop || !sheet) return;
       backdrop.classList.add("hidden");
       sheet.classList.add("hidden");
@@ -1994,79 +1994,85 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       backdrop.setAttribute("aria-hidden", "true");
     }
 
-    function clearProjectIdGuideCloseTimer() {
-      if (projectIdGuideCloseTimer) {
-        clearTimeout(projectIdGuideCloseTimer);
-        projectIdGuideCloseTimer = null;
+    function clearGuideSheetCloseTimer() {
+      if (guideSheetCloseTimer) {
+        clearTimeout(guideSheetCloseTimer);
+        guideSheetCloseTimer = null;
       }
     }
 
-    function openProjectIdGuideSheet(steps) {
-      if (Array.isArray(steps)) {
-        projectIdGuideStepsCache = steps;
-      }
-      const { backdrop, sheet, content, openBtn } = getProjectIdGuideElements();
-      if (!backdrop || !sheet || !content) return;
-      if (projectIdGuideOpen) return;
+    function openGuideSheet(kind, title, steps, openBtn) {
+      const { backdrop, sheet, title: titleEl, content } = getGuideSheetElements();
+      if (!backdrop || !sheet || !content || !Array.isArray(steps)) return;
+      if (guideSheetKind) return;
 
-      renderGuideStepsContent(content, projectIdGuideStepsCache);
-      projectIdGuideOpen = true;
+      // Now that two buttons share the sheet, it can be reopened while the
+      // last close is still sliding out; that close's timer would then hide
+      // the sheet that was just opened.
+      clearGuideSheetCloseTimer();
+      if (titleEl) titleEl.textContent = title;
+      renderGuideStepsContent(content, steps);
+      content.scrollTop = 0;
+      guideSheetKind = kind;
+      guideSheetOpenBtn = openBtn || null;
       backdrop.classList.remove("hidden");
       sheet.classList.remove("hidden");
       backdrop.classList.remove("is-open");
       sheet.classList.remove("is-open");
       backdrop.setAttribute("aria-hidden", "false");
-      openBtn?.setAttribute("aria-expanded", "true");
+      guideSheetOpenBtn?.setAttribute("aria-expanded", "true");
 
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          if (!projectIdGuideOpen) return;
+          if (guideSheetKind !== kind) return;
           backdrop.classList.add("is-open");
           sheet.classList.add("is-open");
         });
       });
     }
 
-    function closeProjectIdGuideSheet() {
-      clearProjectIdGuideCloseTimer();
-      const { backdrop, sheet, openBtn } = getProjectIdGuideElements();
+    function closeGuideSheet() {
+      clearGuideSheetCloseTimer();
+      const { backdrop, sheet } = getGuideSheetElements();
       if (!backdrop || !sheet) return;
 
-      projectIdGuideOpen = false;
-      openBtn?.setAttribute("aria-expanded", "false");
+      guideSheetKind = null;
+      guideSheetOpenBtn?.setAttribute("aria-expanded", "false");
+      guideSheetOpenBtn = null;
       backdrop.classList.remove("is-open");
       sheet.classList.remove("is-open");
       backdrop.setAttribute("aria-hidden", "true");
 
-      projectIdGuideCloseTimer = setTimeout(() => {
-        projectIdGuideCloseTimer = null;
-        hideProjectIdGuideElements();
+      guideSheetCloseTimer = setTimeout(() => {
+        guideSheetCloseTimer = null;
+        hideGuideSheetElements();
       }, JOIN_GUIDE_SHEET_ANIM_MS);
     }
 
-    function renderGuideSteps(containerId, steps) {
-      const guide = document.getElementById(containerId);
-      renderGuideStepsContent(guide, steps);
+    function openProjectIdGuideSheet() {
+      openGuideSheet(
+        "project_id",
+        "Как узнать ID",
+        projectIdGuideStepsCache,
+        document.getElementById("projectIdGuideOpenBtn"),
+      );
     }
 
-    function setGuidePanelOpen(containerId, toggleBtnId, open, steps) {
-      const guide = document.getElementById(containerId);
-      const btn = document.getElementById(toggleBtnId);
-      if (!guide) return;
-      if (open && steps) {
-        renderGuideSteps(containerId, steps);
-      }
-      guide.classList.toggle("hidden", !open);
-      if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+    function openWalletGuideSheet() {
+      openGuideSheet(
+        "wallet",
+        "Как узнать адрес",
+        walletGuideStepsCache,
+        document.getElementById("walletGuideToggleBtn"),
+      );
     }
 
     function hideProjectIdGuide() {
-      closeProjectIdGuideSheet();
+      if (guideSheetKind === "project_id") closeGuideSheet();
     }
 
     function hideWalletGuide() {
-      walletGuideOpen = false;
-      setGuidePanelOpen("walletGuideSteps", "walletGuideToggleBtn", false);
+      if (guideSheetKind === "wallet") closeGuideSheet();
     }
 
     function syncProjectIdGuideLinkVisibility() {
@@ -2076,22 +2082,31 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     }
 
-    function toggleWalletGuide() {
-      walletGuideOpen = !walletGuideOpen;
-      setGuidePanelOpen(
-        "walletGuideSteps",
-        "walletGuideToggleBtn",
-        walletGuideOpen,
-        walletGuideStepsCache,
-      );
-    }
 
     function applyWalletStep(walletStep) {
       if (!walletStep) return;
       const titleEl = document.querySelector("#step-trc20 .join-step-title");
       if (titleEl) titleEl.textContent = walletStep.stepTitle || "Адрес депозита";
       const intro = document.getElementById("walletIntroText");
-      if (intro) intro.textContent = walletStep.introText || "";
+      if (intro) {
+        const introText = walletStep.introText || "";
+        const networkLabel = walletStep.networkLabel || "";
+        const at = networkLabel ? introText.indexOf(networkLabel) : -1;
+        // The network is the one thing on this step people get wrong, so it is
+        // bold. Built from text nodes, not innerHTML: the wording comes from the
+        // server and must never be parsed as markup.
+        if (at >= 0) {
+          const strong = document.createElement("b");
+          strong.textContent = networkLabel;
+          intro.replaceChildren(
+            document.createTextNode(introText.slice(0, at)),
+            strong,
+            document.createTextNode(introText.slice(at + networkLabel.length)),
+          );
+        } else {
+          intro.textContent = introText;
+        }
+      }
       const warning = document.getElementById("walletNetworkWarning");
       if (warning) {
         if (walletStep.networkWarningHtml) {
@@ -2135,7 +2150,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         input.classList.toggle("join-input-id-pokerdom", !projectIdInputConfig.showHashPrefix);
       }
       if (label) {
-        label.textContent = projectIdInputConfig.label || "ID на проекте";
+        label.textContent = projectIdInputConfig.label || "Мой ID";
       }
     }
 
@@ -2143,7 +2158,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       registrationMode = mode === "project_id" ? "project_id" : "referral";
       const refMode = document.getElementById("registrationRefMode");
       const idMode = document.getElementById("registrationProjectIdMode");
-      const lead = document.getElementById("registrationLeadText");
       if (registrationMode === "project_id") {
         refMode?.classList.add("hidden");
         idMode?.classList.remove("hidden");
@@ -2151,23 +2165,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           projectIdGuideStepsCache = guideSteps;
         }
         applyProjectIdInputConfig(inputConfig || projectIdInputConfig);
-        if (lead) {
-          lead.textContent =
-            projectIdInputConfig?.kind === "pokerdom"
-              ? "Зарегистрируйтесь на Pokerdom, найдите ID в личной информации и введите его здесь."
-              : projectIdInputConfig?.kind === "luckybear"
-                ? "Зарегистрируйтесь на LuckyBear, откройте профиль и введите ID под уровнем."
-                : "Зарегистрируйтесь на проекте, найдите ID в профиле и введите его здесь.";
-        }
         syncProjectIdGuideLinkVisibility();
         hideProjectIdGuide();
         setProjectIdVerifyLocked(false);
       } else {
         refMode?.classList.remove("hidden");
         idMode?.classList.add("hidden");
-        if (lead) {
-          lead.textContent = "Зарегистрируйтесь на проекте, затем вернитесь сюда и подтвердите.";
-        }
         syncProjectIdGuideLinkVisibility();
         hideProjectIdGuide();
       }
@@ -2262,15 +2265,15 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     bindClick("joinGuideSheetCloseBtn", () => {
-      closeProjectIdGuideSheet();
+      closeGuideSheet();
     });
 
     document.getElementById("joinGuideBackdrop")?.addEventListener("click", () => {
-      closeProjectIdGuideSheet();
+      closeGuideSheet();
     });
 
     bindClick("walletGuideToggleBtn", () => {
-      toggleWalletGuide();
+      openWalletGuideSheet();
     });
 
     function handleStep(step, payload) {
@@ -2539,6 +2542,24 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
     });
 
+    bindClick("projectAccountIdPasteBtn", async () => {
+      const input = document.getElementById("projectAccountIdInput");
+      if (!input) return;
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          input.value = text.trim();
+          // The field cleans what is typed (drops "#", spaces, fixes case) in
+          // its input listener. Setting value directly skips that, so a pasted
+          // "#fj0uw" would stay as pasted without this.
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.focus();
+        }
+      } catch (error) {
+        showMessage("Не удалось вставить из буфера обмена.");
+      }
+    });
+
     bindClick("trc20SubmitBtn", async () => {
       const address = document.getElementById("trc20Input").value.trim();
       try {
@@ -2666,6 +2687,47 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         document.getElementById("loading").classList.add("hidden");
         document.getElementById("previewToolbar").classList.remove("hidden");
         const nav = document.getElementById("previewNav");
+        // "Рег.+ID PD" and "Рег.+ID LB" preview another brand's id step, so they
+        // swap the logo and the link label as well - otherwise the Pokerdom
+        // guide would sit under whatever brand the page was opened with.
+        const PREVIEW_BRANDS = {
+          registration_id_pd: {
+            name: "Pokerdom",
+            logo: ${JSON.stringify(getBrandLogoUrls({ templateSlug: "pokerdom" }))},
+            guide: ${JSON.stringify(buildProjectIdGuideSteps({ name: "Pokerdom", templateSlug: "pokerdom" }))},
+            input: ${JSON.stringify(buildProjectIdInputConfig({ name: "Pokerdom", templateSlug: "pokerdom" }))},
+          },
+          registration_id_lb: {
+            name: "LuckyBear",
+            logo: ${JSON.stringify(getBrandLogoUrls({ templateSlug: "luckybear" }))},
+            guide: ${JSON.stringify(buildProjectIdGuideSteps({ name: "LuckyBear", templateSlug: "luckybear" }))},
+            input: ${JSON.stringify(buildProjectIdInputConfig({ name: "LuckyBear", templateSlug: "luckybear" }))},
+          },
+        };
+        const previewLogoBox = document.getElementById("joinBrandLogo");
+        const previewLinkLabel = document.querySelector("#projectLink .join-btn-label");
+        const pageBrand = {
+          label: previewLinkLabel ? previewLinkLabel.textContent : "",
+          light: previewLogoBox?.querySelector(".brand-logo-light")?.getAttribute("src") || "",
+          dark: previewLogoBox?.querySelector(".brand-logo-dark")?.getAttribute("src") || "",
+        };
+        function applyPreviewBrand(brand) {
+          if (previewLinkLabel) {
+            previewLinkLabel.textContent = brand ? "Перейти на " + brand.name : pageBrand.label;
+          }
+          if (!previewLogoBox) return;
+          const light = previewLogoBox.querySelector(".brand-logo-light");
+          const dark = previewLogoBox.querySelector(".brand-logo-dark");
+          const lightSrc = brand ? brand.logo && brand.logo.light : pageBrand.light;
+          const darkSrc = brand ? brand.logo && brand.logo.dark : pageBrand.dark;
+          if (lightSrc && darkSrc && light && dark) {
+            light.setAttribute("src", lightSrc);
+            dark.setAttribute("src", darkSrc);
+            previewLogoBox.classList.remove("hidden");
+          } else {
+            previewLogoBox.classList.add("hidden");
+          }
+        }
         const steps = [
           { id: "captcha", label: "Капча" },
           { id: "channel", label: "Канал" },
@@ -2673,6 +2735,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           { id: "registration", label: "Рег." },
           { id: "registration_id", label: "Рег.+ID" },
           { id: "registration_id_pd", label: "Рег.+ID PD" },
+          { id: "registration_id_lb", label: "Рег.+ID LB" },
           { id: "trc20", label: "Кошелёк" },
           { id: "done", label: "Готово" },
           { id: "profile", label: "Профиль" },
@@ -2687,14 +2750,19 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             if (id === "captcha") {
               renderCaptcha();
             }
-            if (id === "registration" || id === "registration_id" || id === "registration_id_pd") {
+            if (
+              id === "registration" ||
+              id === "registration_id" ||
+              id === "registration_id_pd" ||
+              id === "registration_id_lb"
+            ) {
               const mode = id === "registration" ? "referral" : "project_id";
-              const pdGuide = ${JSON.stringify(buildProjectIdGuideSteps({ name: "Pokerdom", templateSlug: "pokerdom" }))};
-              const pdInput = ${JSON.stringify(buildProjectIdInputConfig({ name: "Pokerdom", templateSlug: "pokerdom" }))};
+              const brandPreview = PREVIEW_BRANDS[id] || null;
+              applyPreviewBrand(brandPreview);
               applyRegistrationMode(
                 mode,
-                id === "registration_id_pd" ? pdGuide : PROJECT_ID_GUIDE_STEPS,
-                id === "registration_id_pd" ? pdInput : PROJECT_ID_INPUT_CONFIG,
+                brandPreview ? brandPreview.guide : PROJECT_ID_GUIDE_STEPS,
+                brandPreview ? brandPreview.input : PROJECT_ID_INPUT_CONFIG,
               );
               if (mode === "project_id") {
                 resetProjectIdUi();
@@ -3947,9 +4015,21 @@ function registerJoinMiniApp(app, deps) {
       refLink: "https://example.com/ref",
     };
 
-    app.get("/dev/preview/join", (_req, res) => {
+    app.get("/dev/preview/join", (req, res) => {
+      // ?brand=fugu shows the registration step with that brand's logo.
+      const previewBrands = {
+        pokerdom: "Pokerdom",
+        beef: "BEEF",
+        fugu: "FUGU",
+        iris: "IRIS",
+        luckybear: "LuckyBear",
+      };
+      const brandSlug = String(req.query.brand || "").trim().toLowerCase();
+      const previewProject = previewBrands[brandSlug]
+        ? { ...mockProject, name: previewBrands[brandSlug], templateSlug: brandSlug }
+        : mockProject;
       res.type("html").send(
-        renderJoinPage("preview", mockDraw, mockProject, {
+        renderJoinPage("preview", mockDraw, previewProject, {
           recaptchaSiteKey: RECAPTCHA_SITE_KEY,
           botUsername: BOT_USERNAME,
         }),

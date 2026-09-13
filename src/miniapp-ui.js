@@ -1001,7 +1001,11 @@ function getJoinFlowStyles() {
       width: 100%;
       max-width: 100%;
       min-width: 0;
+      /* clip, not hidden: hidden turns the viewport into a vertical scroll box,
+         and a taller card sliding out would flash a scrollbar mid-swipe.
+         hidden stays first as the fallback for engines without clip. */
       overflow-x: hidden;
+      overflow-x: clip;
     }
 
     body.join-flow .join-step-card {
@@ -1010,9 +1014,13 @@ function getJoinFlowStyles() {
       border-radius: 16px;
       padding: 16px;
       box-shadow: 0 8px 24px rgba(27, 45, 94, 0.06);
-      opacity: 1;
-      transform: none;
-      transition: opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+      /* A card waits off to the side it will arrive from. --join-step-dir is
+         set by showStep: 1 going forward, -1 going back, 0 on the first show. */
+      opacity: 0;
+      transform: translateX(calc(28% * var(--join-step-dir, 1)));
+      transition:
+        opacity 0.34s cubic-bezier(0.22, 0.61, 0.36, 1),
+        transform 0.34s cubic-bezier(0.22, 0.61, 0.36, 1);
       pointer-events: none;
       visibility: hidden;
       position: absolute;
@@ -1034,11 +1042,140 @@ function getJoinFlowStyles() {
 
     body.join-flow .join-step-card.is-leaving {
       opacity: 0;
-      transform: translateX(-4px);
+      /* Visible while it slides out. The base rule hides cards outright, which
+         is why the old 4px nudge here was never actually seen by anyone. */
+      visibility: visible;
+      transform: translateX(calc(-28% * var(--join-step-dir, 1)));
       position: absolute;
       top: 0;
       left: 0;
       right: 0;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.join-flow .join-step-card,
+      body.join-flow .join-step-card.is-leaving {
+        transition: none;
+        transform: none;
+      }
+    }
+
+    /* A faint light in the top-right corner of every card. It lives on a
+       pseudo-element behind the content (isolation keeps z-index -1 inside the
+       card) and only its opacity moves, so it is composited rather than
+       repainted and never reaches outside the card. No overflow: hidden on the
+       card - that would clip the fixed chance modal and the focus rings. */
+    body.join-flow .join-step-card {
+      isolation: isolate;
+    }
+
+    body.join-flow .join-step-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      pointer-events: none;
+      background: radial-gradient(
+        120% 90% at 100% 0%,
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 14%, transparent) 0%,
+        transparent 62%
+      );
+      animation: join-card-light 9s ease-in-out infinite alternate;
+    }
+
+    body.join-flow.app-theme-dark .join-step-card::before {
+      background: radial-gradient(
+        120% 90% at 100% 0%,
+        rgba(150, 180, 255, 0.16) 0%,
+        transparent 62%
+      );
+    }
+
+    /* Opacity only. It used to scale from the corner as well, but a transformed
+       pseudo-element counts towards scrollable overflow even where it is fully
+       transparent: on the last button it reached past the bottom of
+       .join-step-body, which scrolls (overflow-y: auto), and a scrollbar
+       appeared down the right side of the card. */
+    @keyframes join-card-light {
+      from {
+        opacity: 0.7;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.join-flow .join-step-card::before {
+        animation: none;
+      }
+    }
+
+    /* The same corner light on buttons, fainter still. On the blue buttons the
+       spot is a deeper blue, since a pale light on a pale button would not
+       show; on the dark ones it is brighter. Gradient and disabled buttons keep
+       their own look. position: relative anchors the pseudo-element to the
+       button, and without offsets it does not move the button at all. */
+    body.join-flow .join-btn-primary:not(:disabled):not(.join-btn-locked),
+    body.join-flow .join-btn-secondary,
+    body.join-flow .join-btn-outline {
+      position: relative;
+      isolation: isolate;
+    }
+
+    body.join-flow .join-btn-primary:not(:disabled):not(.join-btn-locked)::before,
+    body.join-flow .join-btn-secondary::before,
+    body.join-flow .join-btn-outline::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      pointer-events: none;
+      animation: join-card-light 7s ease-in-out infinite alternate;
+    }
+
+    body.join-flow .join-btn-primary:not(:disabled):not(.join-btn-locked)::before {
+      background: radial-gradient(90% 140% at 100% 0%, rgba(20, 45, 150, 0.22) 0%, transparent 60%);
+    }
+
+    body.join-flow .join-btn-secondary::before,
+    body.join-flow .join-btn-outline::before {
+      background: radial-gradient(
+        90% 140% at 100% 0%,
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 10%, transparent) 0%,
+        transparent 60%
+      );
+    }
+
+    body.join-flow.app-theme-dark .join-btn-secondary::before,
+    body.join-flow.app-theme-dark .join-btn-outline::before {
+      background: radial-gradient(90% 140% at 100% 0%, rgba(170, 195, 255, 0.14) 0%, transparent 60%);
+    }
+
+    /* The outline answers ("Я не реферал", "Я не зарегистрирован", "Продолжить")
+       sit below the main action and should not draw the eye like it does, so
+       their light is roughly half as strong. Declared after the shared rules
+       above, at the same specificity, so these win. */
+    body.join-flow .join-btn-outline::before {
+      background: radial-gradient(
+        90% 140% at 100% 0%,
+        color-mix(in srgb, var(--tg-theme-button-color, #325fff) 6%, transparent) 0%,
+        transparent 60%
+      );
+    }
+
+    body.join-flow.app-theme-dark .join-btn-outline::before {
+      background: radial-gradient(90% 140% at 100% 0%, rgba(170, 195, 255, 0.08) 0%, transparent 60%);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.join-flow .join-btn-primary::before,
+      body.join-flow .join-btn-secondary::before,
+      body.join-flow .join-btn-outline::before {
+        animation: none;
+      }
     }
 
     body.join-flow .join-step-head {
@@ -1046,6 +1183,26 @@ function getJoinFlowStyles() {
       align-items: flex-start;
       gap: 12px;
       margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+    }
+
+    /* The hint colour Telegram hands a dark theme is too close to the card to
+       show at 14%; a lighter grey keeps the divider faint but actually there. */
+    body.join-flow.app-theme-dark .join-step-head {
+      border-bottom-color: color-mix(in srgb, #9aa6bd 16%, transparent);
+    }
+
+    /* Sets the two "not me" answers apart from the main action above them,
+       with the same faint rule as under the card header. */
+    body.join-flow .join-stack-divider {
+      height: 1px;
+      margin: 2px 0;
+      background: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 14%, transparent);
+    }
+
+    body.join-flow.app-theme-dark .join-stack-divider {
+      background: color-mix(in srgb, #9aa6bd 16%, transparent);
     }
 
     body.join-flow .join-step-icon {
@@ -1068,7 +1225,7 @@ function getJoinFlowStyles() {
 
     body.join-flow .join-step-badge {
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 400;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--tg-theme-hint-color, #65708a);
@@ -1088,6 +1245,20 @@ function getJoinFlowStyles() {
       font-size: 14px;
       line-height: 1.55;
       color: var(--tg-theme-hint-color, #65708a);
+    }
+
+    /* The main text colour rather than literal white: white is what it looks
+       like on a dark card, and it would vanish on a light one. */
+    body.join-flow #walletIntroText {
+      color: var(--tg-theme-text-color, #151a2d);
+    }
+
+    body.join-flow.app-theme-dark #walletIntroText {
+      color: var(--tg-theme-text-color, #eef1f7);
+    }
+
+    body.join-flow #walletIntroText b {
+      font-weight: 800;
     }
 
     body.join-flow .join-actions {
@@ -1127,7 +1298,7 @@ function getJoinFlowStyles() {
     body.join-flow .join-btn-outline {
       background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #fff) 88%, var(--tg-theme-hint-color, #65708a));
       color: var(--tg-theme-text-color, #151a2d);
-      border: 1.5px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 34%, transparent);
+      border: 1.5px solid color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 60%, transparent);
       font-weight: 600;
     }
 
@@ -1155,6 +1326,67 @@ function getJoinFlowStyles() {
 
     body.join-flow .join-guide-link:active {
       opacity: 0.82;
+    }
+
+    /* Between the id field and "Проверить ID" now. The negative top margin was
+       for sitting under the project link and would overlap the field here. */
+    body.join-flow #registrationProjectIdMode .join-guide-link {
+      /* Pulls up against the field: its 12px bottom margin still applies here
+         (.join-trc20-field is declared after the compact override and wins),
+         and the stack adds its own 10px gap on top of that. */
+      margin: -18px 0 6px;
+      padding: 2px 0 4px;
+    }
+
+    /* "ID на проекте: [поле]" on one line. Scoped to the id step so the wallet
+       field keeps its label above. The colon comes from CSS because the label
+       text is swapped per brand by applyProjectIdInputConfig and none of the
+       texts carry one - this way every brand gets exactly one. */
+    body.join-flow #registrationProjectIdMode .join-trc20-field-compact {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    body.join-flow #registrationProjectIdMode .join-field-label {
+      margin: 0;
+      flex-shrink: 0;
+      white-space: nowrap;
+      font-size: 16px;
+    }
+
+    body.join-flow #registrationProjectIdMode .join-field-label::after {
+      content: ":";
+    }
+
+    body.join-flow #registrationProjectIdMode .join-id-input-row {
+      flex: 1;
+      width: auto;
+      min-width: 0;
+    }
+
+    /* A plain flex item inside the bordered row, not an overlay: the input
+       shrinks to make room, so a long pasted id never runs under the icon. */
+    body.join-flow .join-id-paste-btn {
+      flex: 0 0 44px;
+      width: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--tg-theme-link-color, #325fff);
+      cursor: pointer;
+    }
+
+    body.join-flow .join-id-paste-btn svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    body.join-flow .join-id-paste-btn:active {
+      opacity: 0.7;
     }
 
     body.join-flow .join-btn-ghost:active {
@@ -1224,6 +1456,19 @@ function getJoinFlowStyles() {
 
     body.join-flow .join-input.join-input-id:focus {
       box-shadow: none;
+    }
+
+    /* Every brand now hints "Введите ID сюда". The #XXXXX field types its
+       value bold and spaced; the hint must not be, or it reads as an id. */
+    body.join-flow .join-input.join-input-id::placeholder {
+      font-weight: 400;
+      letter-spacing: normal;
+      color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 72%, var(--tg-theme-text-color, #151a2d));
+      opacity: 1;
+    }
+
+    body.join-flow.app-theme-dark .join-input.join-input-id::placeholder {
+      color: color-mix(in srgb, var(--tg-theme-hint-color, #8b95a8) 78%, var(--tg-theme-bg-color, #141a24));
     }
 
     body.join-flow .join-id-input-row-no-prefix .join-input.join-input-id {
@@ -1304,7 +1549,7 @@ function getJoinFlowStyles() {
     body.join-flow .join-btn-primary:not(:disabled) {
       background: linear-gradient(135deg, color-mix(in srgb, var(--tg-theme-button-color, #325fff) 88%, #fff) 0%, var(--tg-theme-button-color, #325fff) 100%);
       color: var(--tg-theme-button-text-color, #fff);
-      box-shadow: 0 8px 22px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 32%, transparent);
+      box-shadow: none;
       border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 55%, transparent);
     }
 
@@ -1483,14 +1728,16 @@ function getJoinFlowStyles() {
 
     body.join-flow .join-network-warning {
       margin: 0 0 12px;
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid #fca5a5;
-      background: #fef2f2;
-      color: #991b1b;
+      color: #c0262d;
       font-size: 13px;
       font-weight: 600;
       line-height: 1.45;
+    }
+
+    /* Without its pale plate the warning sits straight on the card, where the
+       light-theme red is unreadable on a dark background. */
+    body.join-flow.app-theme-dark .join-network-warning {
+      color: #ff8f8f;
     }
 
     body.join-flow .join-network-warning b {
@@ -1563,13 +1810,19 @@ function getJoinFlowStyles() {
       overflow: hidden;
     }
 
+    /* The main text colour, not the hint grey: these lines are the
+       instructions themselves, and grey was hard to read on the dark sheet. */
     body.join-flow .join-guide-step {
       display: flex;
       align-items: center;
       gap: 8px;
       font-size: 13px;
-      color: var(--tg-theme-hint-color, #65708a);
+      color: var(--tg-theme-text-color, #151a2d);
       margin: 0 0 8px;
+    }
+
+    body.join-flow.app-theme-dark .join-guide-step {
+      color: var(--tg-theme-text-color, #eef1f7);
     }
 
     body.join-flow .join-guide-step-num {
@@ -1627,9 +1880,9 @@ function getJoinFlowStyles() {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: radial-gradient(circle, color-mix(in srgb, #1f6a3c 18%, transparent) 0%, transparent 72%);
-      border: 2px solid color-mix(in srgb, #1f6a3c 28%, transparent);
-      box-shadow: 0 0 0 6px color-mix(in srgb, #1f6a3c 8%, transparent);
+      background: radial-gradient(circle, color-mix(in srgb, #2bb566 18%, transparent) 0%, transparent 72%);
+      border: 2px solid color-mix(in srgb, #2bb566 30%, transparent);
+      box-shadow: 0 0 0 6px color-mix(in srgb, #2bb566 8%, transparent);
     }
 
     body.join-flow .join-done-icon {
@@ -1639,8 +1892,8 @@ function getJoinFlowStyles() {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: color-mix(in srgb, #1f6a3c 16%, transparent);
-      color: #1f6a3c;
+      background: color-mix(in srgb, #2bb566 16%, transparent);
+      color: #2bb566;
     }
 
     body.join-flow .join-done-icon svg {
@@ -1658,7 +1911,7 @@ function getJoinFlowStyles() {
     }
 
     body.join-flow .join-done-title {
-      margin: 0 0 6px;
+      margin: 0 0 16px;
       font-size: 22px;
       line-height: 1.25;
       font-weight: 800;
@@ -2521,7 +2774,25 @@ function getJoinFlowStyles() {
     body.join-flow.app-theme-dark .join-btn-outline {
       background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #232f42) 92%, #000);
       color: var(--tg-theme-text-color, #eef1f7);
-      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 38%, transparent);
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #8f9ab0) 42%, transparent);
+    }
+    /* The outline never actually showed: "body.join-flow .join-btn" further down
+       sets border: none at the same specificity and wins on source order. These
+       rules only restore the border, one class stronger, and leave the button
+       backgrounds alone. :not(.is-on) keeps the anonymous toggle's own colour. */
+    body.join-flow .join-btn.join-btn-outline {
+      border-style: solid;
+      border-width: 1.5px;
+    }
+
+    body.join-flow .join-btn.join-btn-outline:not(.is-on) {
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #65708a) 60%, transparent);
+    }
+
+    /* Dimmer than the light theme's: on the dark card a pale border was the
+       brightest line on screen and pulled the eye off the main action. */
+    body.join-flow.app-theme-dark .join-btn.join-btn-outline:not(.is-on) {
+      border-color: color-mix(in srgb, var(--tg-theme-hint-color, #8f9ab0) 42%, transparent);
     }
 
     body.join-flow .join-step-head-text {
@@ -2628,13 +2899,13 @@ function getJoinFlowStyles() {
     }
 
     body.join-flow.app-theme-dark .join-done-icon-ring {
-      border-color: color-mix(in srgb, #9dffb8 35%, transparent);
-      box-shadow: 0 0 0 6px color-mix(in srgb, #9dffb8 10%, transparent);
+      border-color: color-mix(in srgb, #c6ffd6 38%, transparent);
+      box-shadow: 0 0 0 6px color-mix(in srgb, #c6ffd6 10%, transparent);
     }
 
     body.join-flow.app-theme-dark .join-done-icon {
-      background: color-mix(in srgb, #9dffb8 14%, transparent);
-      color: #9dffb8;
+      background: color-mix(in srgb, #c6ffd6 16%, transparent);
+      color: #c6ffd6;
     }
 
     body.join-flow.app-theme-dark .join-done-title {
@@ -2897,9 +3168,7 @@ function getWinnersPageStyles() {
     body.winners-page .winners-stat-btn.is-active {
       border-color: var(--tg-theme-button-color, #325fff);
       background: color-mix(in srgb, var(--tg-theme-button-color, #325fff) 18%, var(--tg-theme-secondary-bg-color, #fff));
-      box-shadow:
-        0 0 0 1px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 28%, transparent),
-        0 4px 14px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 16%, transparent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 28%, transparent);
     }
 
     body.winners-page .winners-stat-btn.is-active .winners-stat-value {
@@ -3515,7 +3784,7 @@ function getGatePageStyles() {
         color-mix(in srgb, var(--tg-theme-button-color, #325fff) 88%, #fff) 0%,
         var(--tg-theme-button-color, #325fff) 100%
       );
-      box-shadow: 0 10px 26px color-mix(in srgb, var(--tg-theme-button-color, #325fff) 34%, transparent);
+      box-shadow: none;
       border: 1px solid color-mix(in srgb, var(--tg-theme-button-color, #325fff) 55%, transparent);
       transition: transform 0.18s ease, filter 0.18s ease;
     }
@@ -3601,27 +3870,6 @@ function getAnonymousIdentityStyles() {
     .is-anon-handle {
       font-style: italic;
       opacity: 0.7;
-    }
-    .anon-tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
-      margin-left: 6px;
-      padding: 1px 7px;
-      border-radius: 999px;
-      font-size: 10px;
-      font-weight: 700;
-      font-style: normal;
-      letter-spacing: 0.02em;
-      white-space: nowrap;
-      color: #6b3fa0;
-      background: #f3ecff;
-      border: 1px solid #d3bdf0;
-    }
-    body.app-theme-dark .anon-tag {
-      color: #c9a9ff;
-      background: color-mix(in srgb, #a97bff 18%, transparent);
-      border-color: color-mix(in srgb, #a97bff 32%, transparent);
     }
     @media (prefers-reduced-motion: reduce) {
       .is-anon-name { filter: blur(3px); }
