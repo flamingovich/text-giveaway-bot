@@ -9796,6 +9796,173 @@ ${getPanelFluidTypographyVars()}
     }
     ${getMiniAppStyles()}
     ${getEmojiPickerStyles()}
+
+    /* Emboss ("тиснение"), as in the mini apps (getEmbossStyles in
+       miniapp-ui.js): a lit top edge and a shaded bottom edge inside surfaces
+       and buttons, pressed buttons pushed in, fields as grooves.
+
+       Only box-shadow is touched, with !important on purpose: panel rules set
+       box-shadow at every specificity and this layer has to win over all of
+       them. The drop shadows those rules cast are restated per theme. The
+       filled-button rule repeats the :not() list of the panel's own primary
+       button rule, minus the secondary and danger buttons that list lets
+       through, so exactly the blue buttons get the filled look. Disabled
+       buttons, checkboxes, the sheet close button, emoji cells and avatars
+       stay as they are. */
+    body {
+      --pemb-hi: rgba(255, 255, 255, 0.9);
+      --pemb-lo: rgba(22, 40, 90, 0.08);
+      --pemb-inner-hi: rgba(255, 255, 255, 0.7);
+      --pemb-inner-lo: rgba(22, 40, 90, 0.05);
+      --pemb-fill-hi: rgba(255, 255, 255, 0.3);
+      --pemb-fill-lo: rgba(0, 0, 0, 0.16);
+      --pemb-press: inset 0 2px 3px rgba(22, 40, 90, 0.16);
+      --pemb-groove: inset 0 1px 2px rgba(22, 40, 90, 0.1);
+      --pemb-drop-header: 0 2px 10px rgba(27, 45, 94, 0.06);
+      --pemb-drop-card: 0 8px 24px rgba(27, 45, 94, 0.06);
+      --pemb-drop-sheet: 0 -12px 40px rgba(0, 0, 0, 0.22);
+    }
+    body.app-theme-dark {
+      --pemb-hi: rgba(255, 255, 255, 0.07);
+      --pemb-lo: rgba(0, 0, 0, 0.32);
+      --pemb-inner-hi: rgba(255, 255, 255, 0.05);
+      --pemb-inner-lo: rgba(0, 0, 0, 0.24);
+      --pemb-fill-hi: rgba(255, 255, 255, 0.24);
+      --pemb-fill-lo: rgba(0, 0, 0, 0.22);
+      --pemb-press: inset 0 2px 4px rgba(0, 0, 0, 0.38);
+      --pemb-groove: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+      --pemb-drop-header: 0 2px 10px rgba(0, 0, 0, 0.18);
+      --pemb-drop-card: 0 0 #0000;
+      --pemb-drop-sheet: 0 -12px 40px rgba(0, 0, 0, 0.48);
+    }
+    /* Inside Telegram the cards had no drop shadow in either theme. */
+    body.mini-app-shell {
+      --pemb-drop-card: 0 0 #0000;
+    }
+
+    .site-header {
+      box-shadow: inset 0 -1px 0 var(--pemb-lo), var(--pemb-drop-header) !important;
+    }
+    .card {
+      box-shadow: inset 0 1px 0 var(--pemb-hi), inset 0 -1px 0 var(--pemb-lo), var(--pemb-drop-card) !important;
+    }
+    .card-dark {
+      box-shadow: inset 0 1px 0 var(--pemb-fill-hi), inset 0 -2px 0 var(--pemb-fill-lo), var(--pemb-drop-card) !important;
+    }
+    .create-panel {
+      box-shadow: inset 0 1px 0 var(--pemb-hi), inset 0 -1px 0 var(--pemb-lo), 0 4px 16px rgba(27, 45, 94, 0.06) !important;
+    }
+    .panel-sheet-root .create-panel:not(.panel-hidden) {
+      box-shadow: inset 0 1px 0 var(--pemb-hi), inset 0 -1px 0 var(--pemb-lo) !important;
+    }
+    .panel-sheet {
+      box-shadow: inset 0 1px 0 var(--pemb-hi), var(--pemb-drop-sheet) !important;
+    }
+    .panel-bottom-bar {
+      box-shadow: inset 0 1px 0 var(--pemb-hi), 0 -6px 20px rgba(0, 0, 0, 0.24) !important;
+    }
+    .emoji-pop {
+      box-shadow: inset 0 1px 0 var(--pemb-hi), inset 0 -1px 0 var(--pemb-lo), 0 14px 40px rgba(0, 0, 0, 0.28) !important;
+    }
+    .draw-image-preview-wrap {
+      box-shadow: inset 0 1px 0 var(--pemb-inner-hi), inset 0 -1px 0 var(--pemb-inner-lo), 0 8px 20px rgba(27, 45, 94, 0.08) !important;
+    }
+
+    .project-card,
+    .projects-empty,
+    .access-empty,
+    .access-card,
+    .stat-card,
+    .history-card,
+    .history-time-row,
+    .history-chip,
+    .history-details,
+    .draw-block,
+    .winner-card,
+    .winner-item,
+    .remind-draw-item,
+    .paste-box,
+    .form-section-card,
+    .emoji-tabs,
+    .msg,
+    .badge,
+    .access-badge,
+    .winner-badge,
+    .status-active,
+    .status-scheduled,
+    .status-finished,
+    .status-paid {
+      box-shadow: inset 0 1px 0 var(--pemb-inner-hi), inset 0 -1px 0 var(--pemb-inner-lo) !important;
+    }
+
+    .header-icon-btn:not(.header-icon-btn-active),
+    .theme-toggle-btn,
+    .settings-action-btn,
+    .project-icon-btn,
+    .draw-paste-btn,
+    .draw-file-btn,
+    .draw-link-btn,
+    .btn-secondary,
+    .btn-danger,
+    .winner-profile-btn,
+    .winner-copy-btn,
+    .winner-action-btn.winner-action-secondary:not(:disabled) {
+      box-shadow: inset 0 1px 0 var(--pemb-hi), inset 0 -1px 0 var(--pemb-lo) !important;
+    }
+
+    .header-icon-btn.header-icon-btn-active,
+    .draw-submit:not(:disabled),
+    .winner-action-btn:not(.winner-action-secondary):not(:disabled),
+    .history-action-btn:not(:disabled),
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):not(.btn-secondary):not(.btn-danger):not(:disabled) {
+      box-shadow: inset 0 1px 0 var(--pemb-fill-hi), inset 0 -2px 0 var(--pemb-fill-lo) !important;
+    }
+
+    .panel-bottom-bar .quick-action {
+      box-shadow:
+        inset 0 1px 0 var(--pemb-fill-hi),
+        inset 0 -2px 0 var(--pemb-fill-lo),
+        0 2px 10px color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 28%, transparent) !important;
+    }
+    .panel-bottom-bar .quick-action.qa-bar-active {
+      box-shadow:
+        inset 0 1px 0 var(--pemb-fill-hi),
+        inset 0 -2px 0 var(--pemb-fill-lo),
+        0 2px 12px color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 34%, transparent) !important;
+    }
+
+    .draw-input,
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),
+    select,
+    textarea {
+      box-shadow: var(--pemb-groove) !important;
+    }
+    .draw-input:focus {
+      box-shadow:
+        var(--pemb-groove),
+        0 0 0 2px color-mix(in srgb, var(--tg-theme-button-color, var(--primary)) 18%, transparent) !important;
+    }
+
+    /* Pressed, last. The primary button needs the whole :not() chain again to
+       outrank its raised rule. */
+    .header-icon-btn:active,
+    .theme-toggle-btn:active,
+    .settings-action-btn:active,
+    .project-icon-btn:active,
+    .draw-paste-btn:active,
+    .draw-file-btn:active,
+    .draw-link-btn:active,
+    .btn-secondary:active,
+    .btn-danger:active,
+    .winner-profile-btn:active,
+    .winner-copy-btn:active,
+    .draw-submit:not(:disabled):active,
+    .winner-action-btn:not(:disabled):active,
+    .history-action-btn:not(:disabled):active,
+    .panel-bottom-bar .quick-action:active,
+    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):not(.btn-secondary):not(.btn-danger):not(:disabled):active {
+      box-shadow: var(--pemb-press) !important;
+    }
   </style>
 </head>
 <body>
