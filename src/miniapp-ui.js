@@ -2398,6 +2398,56 @@ function getJoinFlowStyles() {
       color: var(--tg-theme-link-color, #2d49cc);
     }
 
+    /* The chance figure in blues that slowly flow through it. The gradient
+       reads c0 c1 c2 c1 c0, so one tile ends on the colour the next begins
+       with, and sliding it by a whole tile per loop never shows a seam. Only
+       one short line of text is repainted. Without background-clip: text the
+       plain link colour above stays. */
+    @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+      body.join-flow .join-done-stat-value-accent {
+        background-image: linear-gradient(
+          100deg,
+          #2d5bff 0%,
+          #1da1f2 25%,
+          #5b7cff 50%,
+          #1da1f2 75%,
+          #2d5bff 100%
+        );
+        background-size: 200% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        color: transparent;
+        animation: join-chance-flow 4.5s linear infinite;
+      }
+
+      body.join-flow.app-theme-dark .join-done-stat-value-accent {
+        background-image: linear-gradient(
+          100deg,
+          #6f9bff 0%,
+          #8fe3ff 25%,
+          #b3c3ff 50%,
+          #8fe3ff 75%,
+          #6f9bff 100%
+        );
+      }
+    }
+
+    @keyframes join-chance-flow {
+      from {
+        background-position: 0% 50%;
+      }
+      to {
+        background-position: 200% 50%;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.join-flow .join-done-stat-value-accent {
+        animation: none;
+      }
+    }
+
     body.join-flow .join-done-stat-value-timer {
       color: var(--tg-theme-text-color, #151a2d);
       font-variant-numeric: tabular-nums;
