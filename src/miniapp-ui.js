@@ -1073,12 +1073,18 @@ function getJoinFlowStyles() {
     }
 
     /* Opaque, so the track passes behind the circle rather than through it. */
+    /* flex: none and the min sizes are not decoration. On phones (WebKit) the
+       node in this column flexbox was shrunk by a pixel or two to fit the grid
+       row, and the circle came out cut flat at the bottom. */
     body.join-flow .join-progress-node {
       position: relative;
       display: grid;
       place-items: center;
+      flex: none;
       width: var(--join-progress-node);
       height: var(--join-progress-node);
+      min-width: var(--join-progress-node);
+      min-height: var(--join-progress-node);
       box-sizing: border-box;
       border-radius: 999px;
       background: var(--tg-theme-secondary-bg-color, #fff);
@@ -1111,6 +1117,7 @@ function getJoinFlowStyles() {
     }
 
     body.join-flow .join-progress-label {
+      flex: none;
       max-width: 100%;
       overflow: hidden;
       text-overflow: ellipsis;
