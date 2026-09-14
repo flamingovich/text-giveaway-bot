@@ -6618,12 +6618,19 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const forfeitedDeliveryReason = getWinnerForfeitedDeliveryReason(notifyInfo);
   const refBadge = getWinnerReferralBadgeHtml(winnerId, draw, userProfiles);
   // "Выплачено" leads: the card no longer has a separate "Выплачено:" row.
+  // A burnt prize shows only its reason: "Нет адреса", "Отписка", "Блок". An
+  // anti-fraud burn has no reason of its own - its badges beside this one say
+  // why - and "Приз сгорел" is left for a prize that burnt for none of these.
+  const forfeitLabel =
+    forfeitedDeliveryReason ||
+    (isAwaitingAddress && isDepositAddressExpired(notifyInfo) ? "Нет адреса" : "") ||
+    (antiFraud.labels.length ? "" : "Приз сгорел");
   const statusBadge = isPaid
     ? `<span class="winner-badge winner-badge-ok">Выплачено</span>`
     : isPrizeForfeited
-    ? `<span class="winner-badge winner-badge-danger">Приз сгорел${
-        forfeitedDeliveryReason ? ` (${escapeHtml(forfeitedDeliveryReason)})` : ""
-      }</span>`
+    ? forfeitLabel
+      ? `<span class="winner-badge winner-badge-danger">${escapeHtml(forfeitLabel)}</span>`
+      : ""
     : isPaymentDenied
       ? `<span class="winner-badge winner-badge-danger">Отказано в выплате</span>`
     : isAwaitingAddress
@@ -6663,7 +6670,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     : `<div class="pl-pay pl-pay-text">${escapeHtml(draw.prize || "—")}</div>`;
   const walletHtml = trcDisplay.copyable
     ? `<div class="pl-wal"><code style="--len:${trcAddress.length}">${escapeHtml(trcAddress)}</code><button type="button" class="winner-copy-btn pl-copy" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button></div>`
-    : `<div class="pl-wal pl-wal-note">${escapeHtml(trcAddress)}</div>`;
+    : "";
   const canMarkPaid =
     !isPayoutResolved &&
     !isExpired &&

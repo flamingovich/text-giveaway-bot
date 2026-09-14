@@ -449,7 +449,7 @@ function getPanelLookStyles() {
       line-height: 1.35;
       white-space: nowrap;
     }
-    .pl-wal-note { padding-right: 10px; font-size: 12.5px; font-weight: 600; color: var(--pl-hint); }
+
     :root body button.pl-copy {
       flex: none;
       width: 28px;
