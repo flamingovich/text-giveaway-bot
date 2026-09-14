@@ -1264,9 +1264,8 @@ function getJoinFlowStyles() {
 
     /* A faint light in the top-right corner of every card. It lives on a
        pseudo-element behind the content (isolation keeps z-index -1 inside the
-       card) and only its opacity moves, so it is composited rather than
-       repainted and never reaches outside the card. No overflow: hidden on the
-       card - that would clip the fixed chance modal and the focus rings. */
+       card) and never reaches outside it. No overflow: hidden on the card - that
+       would clip the fixed chance modal and the focus rings. */
     body.join-flow .join-step-card {
       isolation: isolate;
     }
@@ -1283,7 +1282,7 @@ function getJoinFlowStyles() {
         color-mix(in srgb, var(--tg-theme-button-color, #325fff) 14%, transparent) 0%,
         transparent 62%
       );
-      animation: join-card-light 9s ease-in-out infinite alternate;
+      opacity: 0.85;
     }
 
     body.join-flow.app-theme-dark .join-step-card::before {
@@ -1294,25 +1293,12 @@ function getJoinFlowStyles() {
       );
     }
 
-    /* Opacity only. It used to scale from the corner as well, but a transformed
-       pseudo-element counts towards scrollable overflow even where it is fully
-       transparent: on the last button it reached past the bottom of
-       .join-step-body, which scrolls (overflow-y: auto), and a scrollbar
-       appeared down the right side of the card. */
-    @keyframes join-card-light {
-      from {
-        opacity: 0.7;
-      }
-      to {
-        opacity: 1;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      body.join-flow .join-step-card::before {
-        animation: none;
-      }
-    }
+    /* The light stands still. It used to breathe on every card and button, which
+       kept them animating for as long as the page was open and warmed the phone.
+       Never transform it either: a transformed pseudo-element counts towards
+       scrollable overflow even where it is transparent, and on the last button it
+       reached past the bottom of .join-step-body, which scrolls, and a scrollbar
+       appeared down the side of the card. */
 
     /* The same corner light on buttons, fainter still. On the blue buttons the
        spot is a deeper blue, since a pale light on a pale button would not
@@ -1335,7 +1321,7 @@ function getJoinFlowStyles() {
       z-index: -1;
       border-radius: inherit;
       pointer-events: none;
-      animation: join-card-light 7s ease-in-out infinite alternate;
+      opacity: 0.85;
     }
 
     body.join-flow .join-btn-primary:not(:disabled):not(.join-btn-locked)::before {
@@ -1370,14 +1356,6 @@ function getJoinFlowStyles() {
 
     body.join-flow.app-theme-dark .join-btn-outline::before {
       background: radial-gradient(90% 140% at 100% 0%, rgba(170, 195, 255, 0.08) 0%, transparent 60%);
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      body.join-flow .join-btn-primary::before,
-      body.join-flow .join-btn-secondary::before,
-      body.join-flow .join-btn-outline::before {
-        animation: none;
-      }
     }
 
     body.join-flow .join-step-head {

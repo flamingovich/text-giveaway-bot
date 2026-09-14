@@ -575,8 +575,10 @@ function getPanelLookStyles() {
     /* Corner light, as on the join mini app's cards and buttons, at half its
        strength there: a list of cards repeated the lit corner down the screen.
        It lives on a pseudo-element behind the content (isolation keeps z-index -1
-       inside its element) and only its opacity breathes; a moving one used to
-       widen the join card's scroll area. */
+       inside its element) and stands still: breathing on every card and button
+       kept dozens of layers animating for as long as the page was open and
+       warmed the phone. Never transform it - a moved pseudo-element counts
+       towards scrollable overflow even where it is transparent. */
     :root body :is(.pl-card, .pl-queue-list > .pl-win, .draw-block, .panel-sheet, .pl-seg, .pl-fold > summary, .pl-more .history-more-btn, .history-panel-action-btn, .pl-acts .history-action-btn, .pl-win-acts .winner-action-btn, .draw-file-btn, .draw-submit, .panel-bottom-bar .quick-action)::before {
       content: "";
       position: absolute;
@@ -584,7 +586,7 @@ function getPanelLookStyles() {
       z-index: -1;
       border-radius: inherit;
       pointer-events: none;
-      animation: pl-corner-light 9s ease-in-out infinite alternate;
+      opacity: 0.85;
     }
     :root body :is(.history-panel-action-btn, .pl-acts .history-action-btn, .pl-win-acts .winner-action-btn) { position: relative; isolation: isolate; }
     :root body .panel-sheet { isolation: isolate; }
@@ -595,14 +597,10 @@ function getPanelLookStyles() {
        a short panel button and read as no light at all. */
     :root body :is(.history-panel-action-btn, .pl-acts .history-action-btn, .pl-win-acts .winner-action-btn, .draw-submit, .panel-bottom-bar .quick-action)::before {
       background: radial-gradient(90% 140% at 100% 0%, rgba(255, 255, 255, 0.24) 0%, transparent 60%);
-      animation-duration: 7s;
     }
     :root body :is(.pl-seg, .pl-fold > summary, .pl-more .history-more-btn, .pl-win-acts .winner-action-btn.pl-btn-secondary, .draw-file-btn)::before {
       background: radial-gradient(90% 140% at 100% 0%, var(--pl-light-tone) 0%, transparent 60%);
-      animation-duration: 7s;
     }
-    @keyframes pl-corner-light { from { opacity: 0.7; } to { opacity: 1; } }
-
     /* ---------- motion ---------- */
     /* Sheets. The root turned invisible the moment it closed, so the slide down
        played unseen: visibility now waits for the slide. The dimming stays painted
@@ -888,48 +886,59 @@ function getPanelLookScript({ panelBase }) {
         }).finished.then(reset, reset);
       }
 
-      // "Победители и выплаты". <details> has no transition of its own: opening
-      // renders the content at full height at once and closing removes it at once.
-      // Open first and grow from 0; shrink first and close at the end.
+      // "Победители и выплаты". <details> has no transition of its own, and
+      // animating its height made the phone lay out the whole page on every frame
+      // of it. So the card changes size once, its content is revealed with a clip,
+      // and everything below glides from where it was with a transform: work the
+      // compositor does without touching layout. On closing the cards below slide
+      // up over it first, and the card shrinks under them at the very end, in the
+      // same frame the transforms are dropped, so nothing visibly moves.
       function setupFolds() {
         document.addEventListener("click", (event) => {
           const summary = event.target.closest(".pl-fold > summary");
           if (!summary) return;
           const fold = summary.parentElement;
           const body = fold.querySelector(".pl-fold-anim");
-          if (!body || reduceMotion || typeof body.animate !== "function") return;
+          const card = fold.closest(".pl-card");
+          if (!body || !card || reduceMotion || typeof body.animate !== "function") return;
           event.preventDefault();
           if (fold.dataset.animating === "1") return;
           fold.dataset.animating = "1";
-          const done = () => {
+          const movers = [];
+          for (let el = card.nextElementSibling; el; el = el.nextElementSibling) movers.push(el);
+          const controls = document.getElementById("panelHistoryControls");
+          if (controls && card.parentElement && card.parentElement.id === "panelHistoryList") movers.push(controls);
+          const opening = !fold.open;
+          if (opening) fold.open = true;
+          else fold.classList.add("is-closing");
+          const shift = body.offsetHeight;
+          const hidden = "inset(0 0 100% 0)";
+          const shown = "inset(0 0 0 0)";
+          const up = "translateY(" + -shift + "px)";
+          const timing = { duration: 300, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "forwards" };
+          const animations = [
+            body.animate(
+              opening
+                ? [{ clipPath: hidden, opacity: 0 }, { clipPath: shown, opacity: 1 }]
+                : [{ clipPath: shown, opacity: 1 }, { clipPath: hidden, opacity: 0 }],
+              timing,
+            ),
+          ];
+          movers.forEach((el) => {
+            animations.push(
+              el.animate(
+                opening ? [{ transform: up }, { transform: "translateY(0)" }] : [{ transform: "translateY(0)" }, { transform: up }],
+                timing,
+              ),
+            );
+          });
+          const finish = () => {
+            if (!opening) fold.open = false;
+            animations.forEach((animation) => animation.cancel());
             fold.dataset.animating = "";
             fold.classList.remove("is-closing");
           };
-          if (!fold.open) {
-            fold.open = true;
-            const height = body.scrollHeight;
-            body
-              .animate([{ height: "0px", opacity: 0 }, { height: height + "px", opacity: 1 }], {
-                duration: 320,
-                easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-              })
-              .finished.then(done, done);
-            return;
-          }
-          fold.classList.add("is-closing");
-          const shrink = body.animate([{ height: body.offsetHeight + "px", opacity: 1 }, { height: "0px", opacity: 0 }], {
-            duration: 240,
-            easing: "cubic-bezier(0.4, 0, 1, 1)",
-            fill: "forwards",
-          });
-          shrink.finished.then(
-            () => {
-              fold.open = false;
-              shrink.cancel();
-              done();
-            },
-            done,
-          );
+          animations[0].finished.then(finish, finish);
         });
       }
 
