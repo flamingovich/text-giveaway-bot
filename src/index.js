@@ -6056,7 +6056,9 @@ function renderReturnPanelField(returnPanel) {
 }
 
 function redirectWithMessage(res, message, options = {}) {
-  const params = new URLSearchParams({ msg: message });
+  // With the build tag already in the address, the head script of renderWebPage
+  // no longer reloads the page a second time to add it.
+  const params = new URLSearchParams({ v: PANEL_PAGE_BUILD, msg: message });
   if (options.openBot) {
     params.set("openBot", "1");
   }
@@ -6668,6 +6670,8 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
         draw.prizeType === "money_rub" ? ` title="${escapeHtml(formatRubAmount(payoutAmount))}"` : ""
       }><span class="pl-pay-amt">${PANEL_ICONS.usdt}<b>${escapeHtml(formatUsdStat(payoutUsdt))}</b></span>${networkHtml}</div>`
     : `<div class="pl-pay pl-pay-text">${escapeHtml(draw.prize || "—")}</div>`;
+  // A prize that pays nothing - burnt, or flagged by anti-fraud - shows no "$0" block.
+  const payBlockHtml = isMoneyPrizeType(draw.prizeType) && payoutUsdt <= 0 ? "" : payHtml;
   const walletHtml = trcDisplay.copyable
     ? `<div class="pl-wal"><code style="--len:${trcAddress.length}">${escapeHtml(trcAddress)}</code><button type="button" class="winner-copy-btn pl-copy" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button></div>`
     : "";
@@ -6735,7 +6739,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
       </div>
       <div class="pl-win-row">
         <div class="pl-badges">${refBadge}${statusBadge}${anonymousBadge}${antiFraudBadges}</div>
-        ${payHtml}
+        ${payBlockHtml}
       </div>
       ${walletHtml}
       ${actionsHtml}
@@ -10809,24 +10813,42 @@ ${getPanelFluidTypographyVars()}
         }
       }
 
+      let sheetCloseTimer = null;
+
+      // The panels stay laid out until the sheet has slid down. Hiding them at
+      // once emptied the sheet before it moved, and the slide played on nothing.
       function closeSheet() {
         sheetRoot.classList.remove("is-open");
         sheetRoot.setAttribute("aria-hidden", "true");
         document.body.classList.remove("panel-sheet-open");
-        for (const item of getAllPanels()) {
-          item.panel.classList.add("panel-hidden");
-        }
         setActiveTab(null);
+        window.clearTimeout(sheetCloseTimer);
+        sheetCloseTimer = window.setTimeout(() => {
+          if (sheetRoot.classList.contains("is-open")) return;
+          for (const item of getAllPanels()) {
+            item.panel.classList.add("panel-hidden");
+          }
+        }, 320);
       }
 
+      // The panel is laid out first and the slide starts two frames later, so the
+      // first frames of the slide are not spent building what it carries.
       function openSheet(panel, btn, isHeaderBtn = false) {
+        window.clearTimeout(sheetCloseTimer);
+        const wasOpen = sheetRoot.classList.contains("is-open");
         closeOtherPanels(panel);
         panel.classList.remove("panel-hidden");
         setActiveTab(btn, isHeaderBtn);
-        sheetRoot.classList.add("is-open");
         sheetRoot.setAttribute("aria-hidden", "false");
         document.body.classList.add("panel-sheet-open");
-        if (window.plPlacePills) window.requestAnimationFrame(() => window.plPlacePills(panel, true));
+        if (window.plPlacePills) window.plPlacePills(panel, true);
+        if (wasOpen) return;
+        void panel.offsetHeight;
+        window.requestAnimationFrame(() =>
+          window.requestAnimationFrame(() => {
+            if (!panel.classList.contains("panel-hidden")) sheetRoot.classList.add("is-open");
+          }),
+        );
       }
 
       function togglePanel(panel, btn, isHeaderBtn = false) {
@@ -11038,13 +11060,33 @@ ${getPanelFluidTypographyVars()}
       true,
     );
 
+    // The message fades and folds the space it took, so the page under it glides
+    // up instead of jumping by its height.
     function setupFlashMessages() {
       document.querySelectorAll(".msg").forEach((el) => {
         window.setTimeout(() => {
-          el.classList.add("msg-hide");
-          const removeEl = () => el.remove();
-          el.addEventListener("transitionend", removeEl, { once: true });
-          window.setTimeout(removeEl, 800);
+          const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          if (reduceMotion || typeof el.animate !== "function") {
+            el.remove();
+            return;
+          }
+          const style = getComputedStyle(el);
+          el.style.overflow = "hidden";
+          el.animate(
+            [
+              {
+                opacity: 1,
+                height: el.offsetHeight + "px",
+                marginBottom: style.marginBottom,
+                paddingTop: style.paddingTop,
+                paddingBottom: style.paddingBottom,
+                borderTopWidth: style.borderTopWidth,
+                borderBottomWidth: style.borderBottomWidth,
+              },
+              { opacity: 0, height: "0px", marginBottom: "0px", paddingTop: "0px", paddingBottom: "0px", borderTopWidth: "0px", borderBottomWidth: "0px" },
+            ],
+            { duration: 420, easing: "cubic-bezier(0.4, 0, 0.2, 1)", fill: "forwards" },
+          ).finished.then(() => el.remove(), () => el.remove());
         }, 10000);
       });
     }

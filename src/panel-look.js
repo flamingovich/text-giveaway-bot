@@ -169,7 +169,7 @@ function getPanelLookStyles() {
       transform: none;
       filter: none;
       cursor: pointer;
-      transition: color 0.25s;
+      transition: color 0.25s, transform 0.14s ease;
     }
     :root body button.pl-seg-btn[aria-pressed="true"] { color: var(--pl-btn-ink); }
     .pl-seg-btn em { font-style: normal; font-variant-numeric: tabular-nums; opacity: 0.75; }
@@ -190,15 +190,15 @@ function getPanelLookStyles() {
        starting offset in the scrollable width of whatever holds the cards. */
     .pl-list.pl-entering > .pl-card, .pl-card.pl-enter {
       animation: pl-rise 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
-      animation-delay: calc(min(var(--i, 0), 8) * 45ms);
+      animation-delay: calc(min(var(--i, 0), 6) * 40ms);
     }
     .pl-list[data-dir="next"] > .pl-card, .pl-queue-list[data-dir="next"] > .pl-win {
       animation: pl-from-right 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
-      animation-delay: calc(min(var(--i, 0), 8) * 45ms);
+      animation-delay: calc(min(var(--i, 0), 6) * 40ms);
     }
     .pl-list[data-dir="prev"] > .pl-card, .pl-queue-list[data-dir="prev"] > .pl-win {
       animation: pl-from-left 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
-      animation-delay: calc(min(var(--i, 0), 8) * 45ms);
+      animation-delay: calc(min(var(--i, 0), 6) * 40ms);
     }
     @keyframes pl-rise { from { opacity: 0.001; transform: translateY(10px); } }
     @keyframes pl-from-right { from { opacity: 0.001; transform: translateX(24px); } }
@@ -226,7 +226,7 @@ function getPanelLookStyles() {
     .pl-draw-gift svg { width: 19px; height: 19px; display: block; }
     /* A 336px phone leaves the title ~20px short beside the logo; it takes a
        second line rather than turning into "Розыгры…". */
-    .pl-draw-title { min-width: 0; margin-right: auto; font-size: 15px; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
+    .pl-draw-title { min-width: 0; margin-right: auto; font-size: 17px; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
     .pl-status {
       flex: none;
       display: inline-flex;
@@ -257,7 +257,7 @@ function getPanelLookStyles() {
       background: transparent;
       color: var(--pl-trash);
       box-shadow: none !important;
-      transition: background-color 0.2s;
+      transition: background-color 0.2s, transform 0.14s ease;
     }
     :root body button.pl-del:hover { background: var(--pl-bad-bg); }
     :root body button.pl-del svg { width: 17px; height: 17px; }
@@ -329,11 +329,12 @@ function getPanelLookStyles() {
       cursor: pointer;
     }
     .pl-fold > summary::-webkit-details-marker { display: none; }
-    .pl-fold > summary svg { width: 16px; height: 16px; flex: none; color: var(--pl-hint); transition: transform 0.25s; }
-    .pl-fold[open] > summary svg { transform: rotate(180deg); }
-    .pl-fold-anim { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.3s ease; }
-    .pl-fold[open] .pl-fold-anim { grid-template-rows: 1fr; }
-    .pl-fold-anim > div { min-height: 0; overflow: hidden; }
+    .pl-fold > summary svg { width: 16px; height: 16px; flex: none; color: var(--pl-hint); transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    /* <details> shows and hides its content with no transition at all, so the
+       script grows and shrinks this body. The chevron turns back as soon as
+       closing starts. */
+    .pl-fold[open]:not(.is-closing) > summary svg { transform: rotate(180deg); }
+    .pl-fold-anim { overflow: hidden; }
     .pl-fold-in { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding-top: 8px; }
     .pl-fold-empty { margin: 0; font-size: 12px; color: var(--pl-hint); }
 
@@ -465,6 +466,7 @@ function getPanelLookStyles() {
       background: transparent;
       color: var(--pl-btn);
       box-shadow: none !important;
+      transition: color 0.2s ease, transform 0.14s ease;
     }
     :root body button.pl-copy svg { width: 15px; height: 15px; }
     .pl-win-acts { container-type: inline-size; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
@@ -557,7 +559,12 @@ function getPanelLookStyles() {
     :root body input.draw-check:active { transform: scale(0.88); }
     :root body input.draw-check:disabled { opacity: 0.5; cursor: not-allowed; }
     :root body input.draw-check:focus-visible { outline: 2px solid color-mix(in srgb, var(--pl-btn) 55%, transparent); outline-offset: 2px; }
-    :root body .anim-collapse { transition: max-height 0.32s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.25s ease; }
+    /* Folding form fields change only a class; the script animates the height
+       between the two states. The old max-height caps (220px for ~70px of
+       content) made the fold rush open and pause before closing. */
+    :root body .anim-collapse,
+    :root body .draw-timing-row .anim-collapse.anim-collapse-open { max-height: none; transition: none; }
+    :root body .anim-collapse:not(.anim-collapse-open) { height: 0; }
 
     /* bottom bar: icon beside the label, a lower bar */
     :root body .panel-bottom-bar .quick-action { position: relative; isolation: isolate; flex-direction: row; gap: 8px; min-height: 52px; padding: 10px 8px; border-radius: 14px; }
@@ -596,12 +603,73 @@ function getPanelLookStyles() {
     }
     @keyframes pl-corner-light { from { opacity: 0.7; } to { opacity: 1; } }
 
+    /* ---------- motion ---------- */
+    /* Sheets. The root turned invisible the moment it closed, so the slide down
+       played unseen: visibility now waits for the slide. The dimming stays painted
+       and only its opacity moves, the bottom bar drops and fades instead of
+       popping, and a panel swapped in fades up. */
+    :root body .panel-sheet-root { transition: visibility 0s linear 0.3s; }
+    :root body .panel-sheet-root.is-open { transition: visibility 0s; }
+    :root body .panel-sheet { transition: transform 0.34s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    :root body .panel-sheet-root:not(.is-open) .panel-sheet { transition: transform 0.26s cubic-bezier(0.4, 0, 1, 1); }
+    :root body .panel-sheet-backdrop,
+    :root body button.panel-sheet-backdrop:hover { background: rgba(0, 0, 0, 0.55) !important; transition: opacity 0.28s ease; }
+    :root body .panel-bottom-bar { transition: opacity 0.22s ease, transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    :root body.panel-sheet-open .panel-bottom-bar { transform: translateY(18px); }
+    :root body .panel-sheet-root.is-open .create-panel:not(.panel-hidden) { animation: pl-fade-up 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+
+    /* What appears by losing display: none or a hidden class gets a short fade. */
+    :root body #moneyPrizeFields, :root body #customPrizeFields { animation: pl-fade 0.22s ease backwards; }
+    :root body #remindProjectLinksWrap:not(.panel-hidden),
+    :root body #addProjectWrap:not(.panel-hidden) { animation: pl-fade-up 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+    :root body .msg { animation: pl-fade-down 0.36s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+    @keyframes pl-fade { from { opacity: 0.001; } }
+    @keyframes pl-fade-up { from { opacity: 0.001; transform: translateY(8px); } }
+    @keyframes pl-fade-down { from { opacity: 0.001; transform: translateY(-8px); } }
+
+    /* While a filter fetches, the cards it replaces dim: the tap is answered at once. */
+    .pl-list > .pl-card { transition: opacity 0.2s ease; }
+    .pl-list.pl-pending > .pl-card { opacity: 0.45; }
+
+    /* Touch. Every button answers a press with a small squeeze, and hover looks
+       meant for a mouse are cancelled on touch screens, where they stayed lit
+       after the finger lifted. */
+    :root body :is(.history-panel-action-btn, .pl-acts .history-action-btn, .pl-more .history-more-btn, .pl-win-acts .winner-action-btn, .draw-submit, .draw-file-btn, .draw-paste-btn, .winner-profile-btn, button.pl-copy, button.pl-del, button.pl-seg-btn, .pl-fold > summary, .header-icon-btn, .theme-toggle-btn, .panel-bottom-bar .quick-action) {
+      -webkit-tap-highlight-color: transparent;
+    }
+    :root body :is(.history-panel-action-btn, .pl-acts .history-action-btn, .pl-more .history-more-btn, .pl-win-acts .winner-action-btn, .draw-submit, .pl-fold > summary) {
+      transition: transform 0.14s ease, opacity 0.2s ease;
+    }
+    :root body :is(.winner-profile-btn, .header-icon-btn, .theme-toggle-btn) {
+      transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.14s ease;
+    }
+    :root body :is(.history-panel-action-btn, .pl-acts .history-action-btn, .pl-more .history-more-btn, .pl-win-acts .winner-action-btn, .draw-submit, .pl-fold > summary):active:not(:disabled) { transform: scale(0.97); }
+    :root body :is(button.pl-copy, button.pl-del, .winner-profile-btn, .header-icon-btn, .theme-toggle-btn):active { transform: scale(0.9); }
+    :root body button.pl-seg-btn:active { transform: scale(0.95); }
+    :root body .panel-bottom-bar .quick-action:active { transform: scale(0.97) !important; }
+    @media (hover: none) {
+      :root body :is(.draw-submit, .winner-action-btn, .history-action-btn, .header-icon-btn, .theme-toggle-btn, .winner-profile-btn, .winner-copy-btn, .project-icon-btn):hover { filter: none !important; }
+      :root body :is(.draw-submit, .winner-action-btn, .history-action-btn, .winner-profile-btn, .winner-copy-btn, .project-icon-btn):hover:not(:active) { transform: none; }
+      :root body .panel-bottom-bar .quick-action:not(.qa-bar-active):hover { filter: none !important; }
+      :root body button.pl-del:hover { background: transparent; }
+    }
+    :root body button.pl-copy.pl-copied { color: var(--pl-ok); animation: pl-pop 0.32s cubic-bezier(0.3, 1.6, 0.5, 1); }
+    @keyframes pl-pop { 50% { transform: scale(1.18); } }
+
+    /* Theme switch: surfaces cross-fade their colours for a moment instead of
+       snapping. The script sets the class only for the switch. */
+    :root.pl-theme-fade :is(body, .site-header, .pl-card, .pl-stat, .pl-chip, .pl-period, .pl-seg, .pl-win, .pl-pay, .pl-wal, .pl-status, .winner-badge, .pl-fold > summary, .panel-sheet, .panel-bottom-bar, .quick-action, .draw-block, .draw-input, .draw-file-btn, .draw-paste-btn, .history-action-btn, .winner-action-btn, .header-icon-btn, .theme-toggle-btn) {
+      transition: background-color 0.35s ease, color 0.35s ease, border-color 0.35s ease !important;
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .pl-list > .pl-card, .pl-card.pl-enter, .pl-queue-list > .pl-win, .pl-chip-v.pl-bump,
+      .msg, #moneyPrizeFields, #customPrizeFields, #remindProjectLinksWrap, #addProjectWrap, .panel-sheet-root .create-panel, button.pl-copy.pl-copied,
       :root body :is(.pl-card, .pl-queue-list > .pl-win, .draw-block, .panel-sheet, .pl-seg, .pl-fold > summary, .pl-more .history-more-btn, .history-panel-action-btn, .pl-acts .history-action-btn, .pl-win-acts .winner-action-btn, .draw-file-btn, .draw-submit, .panel-bottom-bar .quick-action)::before {
         animation: none !important;
       }
-      .pl-seg-ind, .pl-fold-anim, :root body input.draw-check, :root body input.draw-check::after, :root body .anim-collapse { transition: none !important; }
+      .pl-seg-ind, .pl-fold-anim, .pl-list > .pl-card, :root body input.draw-check, :root body input.draw-check::after, :root body .anim-collapse,
+      :root body .panel-sheet-root, :root body .panel-bottom-bar { transition: none !important; }
     }
   `;
 }
@@ -726,6 +794,8 @@ function getPanelLookScript({ panelBase }) {
           const previousBtn = bar.querySelector('.pl-seg-btn[data-filter="' + current + '"]');
           pressOnly(bar, btn);
           root.setAttribute("data-filter", next);
+          const pendingList = document.getElementById("panelHistoryList");
+          if (pendingList) pendingList.classList.add("pl-pending");
           const requestId = ++filterRequest;
           fetch("${panelBase}/history?offset=0&filter=" + encodeURIComponent(next), {
             credentials: "same-origin",
@@ -737,8 +807,11 @@ function getPanelLookScript({ panelBase }) {
               if (!data) throw new Error("history_failed");
               const list = document.getElementById("panelHistoryList");
               if (list) {
+                const from = list.offsetHeight;
+                list.classList.remove("pl-pending");
                 list.innerHTML = data.html || "";
                 slideIn(list, FILTER_ORDER.indexOf(next) > FILTER_ORDER.indexOf(current) ? "next" : "prev");
+                tweenHeight(list, from);
               }
               replaceHistoryControls(data.controlsHtml || "");
               if (data.counts) {
@@ -754,6 +827,7 @@ function getPanelLookScript({ panelBase }) {
             })
             .catch(() => {
               if (requestId !== filterRequest || !previousBtn) return;
+              document.getElementById("panelHistoryList")?.classList.remove("pl-pending");
               root.setAttribute("data-filter", current);
               pressOnly(bar, previousBtn);
             });
@@ -774,6 +848,7 @@ function getPanelLookScript({ panelBase }) {
           if (!next || next === current) return;
           queue.setAttribute("data-net", next);
           pressOnly(btn.closest(".pl-seg"), btn);
+          const from = list.offsetHeight;
           let shown = 0;
           list.querySelectorAll(":scope > .pl-win").forEach((card) => {
             const match = next === "all" || card.getAttribute("data-net") === next;
@@ -786,7 +861,133 @@ function getPanelLookScript({ panelBase }) {
           const empty = queue.querySelector(".pl-queue-empty");
           if (empty) empty.hidden = shown > 0;
           slideIn(list, NET_ORDER.indexOf(next) > NET_ORDER.indexOf(current) ? "next" : "prev");
+          tweenHeight(list, from);
         });
+      }
+
+      // Ticks land just after each whole second. An interval started at an
+      // arbitrary moment drifts against the clock and now and then shows a second
+      // for two ticks or skips one.
+      function scheduleTick() {
+        tickCountdowns();
+        window.setTimeout(scheduleTick, 1000 - (Date.now() % 1000) + 20);
+      }
+
+      // Height from what it was to what it is now, for lists whose content was just
+      // swapped. Clipped while it runs, so incoming cards do not spill.
+      function tweenHeight(el, from) {
+        const to = el.offsetHeight;
+        if (reduceMotion || typeof el.animate !== "function" || Math.abs(to - from) < 2) return;
+        el.style.overflow = "hidden";
+        const reset = () => {
+          el.style.overflow = "";
+        };
+        el.animate([{ height: from + "px" }, { height: to + "px" }], {
+          duration: 320,
+          easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        }).finished.then(reset, reset);
+      }
+
+      // "Победители и выплаты". <details> has no transition of its own: opening
+      // renders the content at full height at once and closing removes it at once.
+      // Open first and grow from 0; shrink first and close at the end.
+      function setupFolds() {
+        document.addEventListener("click", (event) => {
+          const summary = event.target.closest(".pl-fold > summary");
+          if (!summary) return;
+          const fold = summary.parentElement;
+          const body = fold.querySelector(".pl-fold-anim");
+          if (!body || reduceMotion || typeof body.animate !== "function") return;
+          event.preventDefault();
+          if (fold.dataset.animating === "1") return;
+          fold.dataset.animating = "1";
+          const done = () => {
+            fold.dataset.animating = "";
+            fold.classList.remove("is-closing");
+          };
+          if (!fold.open) {
+            fold.open = true;
+            const height = body.scrollHeight;
+            body
+              .animate([{ height: "0px", opacity: 0 }, { height: height + "px", opacity: 1 }], {
+                duration: 320,
+                easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+              })
+              .finished.then(done, done);
+            return;
+          }
+          fold.classList.add("is-closing");
+          const shrink = body.animate([{ height: body.offsetHeight + "px", opacity: 1 }, { height: "0px", opacity: 0 }], {
+            duration: 240,
+            easing: "cubic-bezier(0.4, 0, 1, 1)",
+            fill: "forwards",
+          });
+          shrink.finished.then(
+            () => {
+              fold.open = false;
+              shrink.cancel();
+              done();
+            },
+            done,
+          );
+        });
+      }
+
+      // Form fields that fold (publish time, duration, confirmation time) change
+      // only a class; the height is animated here. When the class has just been
+      // removed the field already measures 0 tall, but scrollHeight still reports
+      // its content, which is where the closing starts from.
+      function setupCollapses() {
+        const fields = document.querySelectorAll(".anim-collapse");
+        if (!fields.length || typeof MutationObserver !== "function") return;
+        const observer = new MutationObserver((records) => {
+          records.forEach((record) => {
+            const el = record.target;
+            const wasOpen = String(record.oldValue || "").split(" ").includes("anim-collapse-open");
+            const isOpen = el.classList.contains("anim-collapse-open");
+            if (wasOpen === isOpen || reduceMotion || typeof el.animate !== "function") return;
+            const height = el.scrollHeight;
+            el.animate(
+              isOpen
+                ? [{ height: "0px", opacity: 0 }, { height: height + "px", opacity: 1 }]
+                : [{ height: height + "px", opacity: 1 }, { height: "0px", opacity: 0 }],
+              {
+                duration: isOpen ? 300 : 220,
+                easing: isOpen ? "cubic-bezier(0.2, 0.8, 0.2, 1)" : "cubic-bezier(0.4, 0, 1, 1)",
+              },
+            );
+          });
+        });
+        fields.forEach((el) => observer.observe(el, { attributes: true, attributeFilter: ["class"], attributeOldValue: true }));
+      }
+
+      function setupCopyFeedback() {
+        document.addEventListener("click", (event) => {
+          const btn = event.target.closest("button.pl-copy");
+          if (!btn) return;
+          btn.classList.remove("pl-copied");
+          void btn.offsetWidth;
+          btn.classList.add("pl-copied");
+          window.clearTimeout(btn.plCopiedTimer);
+          btn.plCopiedTimer = window.setTimeout(() => btn.classList.remove("pl-copied"), 1200);
+        });
+      }
+
+      // Registered in the capture phase so the class is on before the theme
+      // itself switches in the button's own handler.
+      function setupThemeFade() {
+        const btn = document.getElementById("themeToggleBtn");
+        if (!btn || reduceMotion) return;
+        btn.addEventListener(
+          "click",
+          () => {
+            const root = document.documentElement;
+            root.classList.add("pl-theme-fade");
+            window.clearTimeout(root.plThemeFadeTimer);
+            root.plThemeFadeTimer = window.setTimeout(() => root.classList.remove("pl-theme-fade"), 450);
+          },
+          true,
+        );
       }
 
       // A row is refitted whenever its width changes, which includes a sheet
@@ -816,7 +1017,10 @@ function getPanelLookScript({ panelBase }) {
       new MutationObserver((records) => {
         records.forEach((record) => {
           record.addedNodes.forEach((node) => {
-            if (node.nodeType === 1) watchWinnerRows(node, true);
+            if (node.nodeType !== 1) return;
+            watchWinnerRows(node, true);
+            // The server drew their clock a round trip ago.
+            if (node.querySelector("[data-countdown]")) tickCountdowns();
           });
           record.removedNodes.forEach((node) => {
             if (node.nodeType === 1) watchWinnerRows(node, false);
@@ -827,10 +1031,13 @@ function getPanelLookScript({ panelBase }) {
       placePills(document, true);
       countUpStats();
       settleEntrance();
-      tickCountdowns();
-      window.setInterval(tickCountdowns, 1000);
+      scheduleTick();
       setupHistoryFilter();
       setupQueueNetworkFilter();
+      setupFolds();
+      setupCollapses();
+      setupCopyFeedback();
+      setupThemeFade();
       if (document.fonts && document.fonts.ready) {
         document.fonts.ready.then(() => {
           placePills(document, true);
