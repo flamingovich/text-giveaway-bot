@@ -2013,11 +2013,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (title) title.textContent = message;
       renderDoneStats(payload);
       showStep("done");
-      // Not on "Вы уже участвуете": reopening the app should not buzz as if
-      // something new had happened.
-      if (!payload.alreadyJoined) {
-        playDoneHaptics();
-      }
+      // On "Вы уже участвуете" as well: the mark plays its entrance on every
+      // visit, and the taps belong to that animation, not to the news.
+      playDoneHaptics();
       startDoneLivePolling(payload);
       updateJoinBoostUi(payload);
       scheduleJoinBoostSheetAutoOpen(payload);
