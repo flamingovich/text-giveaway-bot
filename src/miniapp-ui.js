@@ -2858,28 +2858,42 @@ function getJoinFlowStyles() {
       color: #d9c2ff;
     }
 
-    @keyframes join-btn-gradient-shift {
-      0% { background-position: 0% 50%; }
-      50% { background-position: 100% 50%; }
-      100% { background-position: 0% 50%; }
+    /* The pink-to-blue colours flow slowly one way and never turn back. The old
+       animation swung the gradient right and back left with easing, so the
+       colours sloshed from side to side. The tile reads pink - lilac - blue -
+       lilac - pink and moves by exactly one tile per loop (200% of a 200% wide
+       background), so the loop has no seam. The "+50%" badge shares it. */
+    @keyframes join-gradient-flow {
+      from {
+        background-position: 0% 50%;
+      }
+      to {
+        background-position: 200% 50%;
+      }
     }
 
     body.join-flow .join-btn-gradient:not(:disabled) {
       background: linear-gradient(
         90deg,
         #ff6b9d 0%,
-        #e07da8 18%,
-        #b88ae8 42%,
-        #5b7cfa 62%,
-        #8b9cf5 82%,
+        #b88ae8 25%,
+        #5b7cfa 50%,
+        #b88ae8 75%,
         #ff6b9d 100%
       );
-      background-size: 220% 100%;
-      animation: join-btn-gradient-shift 3.2s ease-in-out infinite;
+      background-size: 200% 100%;
+      animation: join-gradient-flow 7s linear infinite;
       color: #fff;
       border: none;
       border-radius: 999px;
       box-shadow: none;
+      /* Both gradient buttons start with "✨ ", and the box centred the emoji and
+         the words together, so the words sat 12 px right of centre (measured:
+         the emoji and its space are 24 px at 15 px type). Moving 0.8em of the
+         side padding from left to right puts the words in the middle. A pixel
+         also moves from top to bottom: the emboss darkens the bottom 2 px, and
+         the letters sat below the centre of what reads as the button. */
+      padding: 13px calc(16px + 0.8em) 15px calc(16px - 0.8em);
     }
 
     body.join-flow .join-btn-gradient:not(:disabled):active {
@@ -2992,8 +3006,16 @@ function getJoinFlowStyles() {
       font-size: 15px;
       font-weight: 800;
       color: #fff;
-      background: linear-gradient(135deg, #ff6b9d, #5b7cfa);
+      background: linear-gradient(90deg, #ff6b9d 0%, #b88ae8 25%, #5b7cfa 50%, #b88ae8 75%, #ff6b9d 100%);
+      background-size: 200% 100%;
+      animation: join-gradient-flow 7s linear infinite;
       box-shadow: 0 4px 14px rgba(91, 124, 250, 0.35);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body.join-flow .join-boost-badge {
+        animation: none;
+      }
     }
 
     body.join-flow .join-boost-badge-icon {
