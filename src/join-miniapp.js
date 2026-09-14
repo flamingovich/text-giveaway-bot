@@ -50,6 +50,7 @@ const {
 } = require("./project-account-id");
 const { isMegaDraw } = require("./mega-giveaway");
 const { getJoinFlowSteps } = require("./join-flow-steps");
+const { decideJoinEntry } = require("./join-entry-decision");
 
 // Share of participants marked "не реф" at join time, which is what decides the
 // payout rate they are later shown. Set to 20% on request (was 35%).
@@ -3539,7 +3540,9 @@ function registerJoinMiniApp(app, deps) {
     );
   }
 
-  function resolveJoinEntry(draw, userId, participationMeta = null) {
+  // canReachUser: only /session knows it (the others are reached after the
+  // client's DM-access step), so it defaults to true. See join-entry-decision.js.
+  function resolveJoinEntry(draw, userId, participationMeta = null, { canReachUser = true } = {}) {
     if (drawHasParticipant(draw, userId)) {
       clearJoinApiSession(userId, draw.id);
       scheduleParticipantAvatars(draw, userId);
@@ -3557,9 +3560,18 @@ function registerJoinMiniApp(app, deps) {
       (draw.projectId &&
         userParticipatedInProject(userId, draw.projectId, draw.id) &&
         !projectIdStepPending);
-    const autoJoin = canSkip;
+    const decision = decideJoinEntry({
+      alreadyParticipant: false,
+      canSkipRegistration: canSkip,
+      canReachUser,
+    });
+    if (canSkip && decision !== "auto_join") {
+      console.log(
+        `[join] автоучастие отложено до доступа в личку: user=${userId} draw=${draw.id}`,
+      );
+    }
 
-    if (autoJoin) {
+    if (decision === "auto_join") {
       ensureCrossOrganizerProjectProfile(userId, draw, joinCtx, setUserProjectProfile);
       if (!drawHasParticipant(draw, userId)) {
         queueAddUserToDraw(draw.id, userId, participationMeta);
@@ -3711,10 +3723,14 @@ function registerJoinMiniApp(app, deps) {
     // The client reports allows_write_to_pm, and that flag can say yes while no
     // chat with the bot exists at all: one person joined twelve draws that way
     // and could never have been told they had won any of them. Only the server
-    // can settle it, so its verdict rides along on whatever step comes back.
+    // can settle it, so its verdict rides along on whatever step comes back -
+    // and it also stops auto-entry below, which would otherwise add the person
+    // before the client ever showed that step.
+    let canReachUser = true;
     if (typeof canMessageUser === "function") {
       try {
         if (!(await canMessageUser(req.telegramUser.id))) {
+          canReachUser = false;
           const sendJson = res.json.bind(res);
           res.json = (body) => sendJson({ ...(body || {}), needsWriteAccess: true });
           console.log(
@@ -3735,7 +3751,7 @@ function registerJoinMiniApp(app, deps) {
         return;
       }
 
-      const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+      const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta, { canReachUser });
       if (entry) {
         if (enrichUserAvatar) {
           void enrichUserAvatar(userId);
