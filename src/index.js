@@ -6627,7 +6627,10 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     forfeitedDeliveryReason ||
     (isAwaitingAddress && isDepositAddressExpired(notifyInfo) ? "Нет адреса" : "") ||
     (antiFraud.labels.length ? "" : "Приз сгорел");
-  const statusBadge = isPaid
+  // An anti-fraud flag outranks a payment mark: multi-accounts are never paid, so
+  // a "Выплачено" stored for one is a mistake the card must not repeat. The flag
+  // is worked out on every render and can appear after the payment was marked.
+  const statusBadge = isPaid && !antiFraud.hasFraudFlag
     ? `<span class="winner-badge winner-badge-ok">Выплачено</span>`
     : isPrizeForfeited
     ? forfeitLabel
@@ -6672,7 +6675,8 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     : `<div class="pl-pay pl-pay-text">${escapeHtml(draw.prize || "—")}</div>`;
   // A prize that pays nothing - burnt, or flagged by anti-fraud - shows no "$0" block.
   const payBlockHtml = isMoneyPrizeType(draw.prizeType) && payoutUsdt <= 0 ? "" : payHtml;
-  const walletHtml = trcDisplay.copyable
+  // A burnt prize, anti-fraud included, is not paid out, so its address is no use here.
+  const walletHtml = trcDisplay.copyable && !isPrizeForfeited
     ? `<div class="pl-wal"><code style="--len:${trcAddress.length}">${escapeHtml(trcAddress)}</code><button type="button" class="winner-copy-btn pl-copy" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button></div>`
     : "";
   const canMarkPaid =
