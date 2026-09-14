@@ -2269,7 +2269,9 @@ function registerAdminDashboard(app, deps) {
 
   app.get("/admin/avatar/:userId", requireAuth, async (req, res) => {
     const userId = String(req.params.userId || "").trim();
-    const fileId = deps.readUserProjectProfiles()?.users?.[userId]?.meta?.avatarFileId;
+    // One request per picture: the shared snapshot when index.js passes it.
+    const readProfiles = deps.readUserProjectProfilesSnapshot || deps.readUserProjectProfiles;
+    const fileId = readProfiles()?.users?.[userId]?.meta?.avatarFileId;
     if (!fileId || !deps.resolveAvatarUrl) {
       res.status(404).end();
       return;

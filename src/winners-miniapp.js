@@ -455,6 +455,8 @@ function registerWinnersMiniApp(app, deps) {
     readData,
     DRAW_STATUS,
     readUserProjectProfiles,
+    // Shared read-only snapshot (storage/index.js). Everything on this page only reads.
+    readUserProjectProfilesSnapshot = readUserProjectProfiles,
     getUserProfileBundle,
     getWinnerDisplayName,
     getPerWinnerPrizeText,
@@ -469,7 +471,8 @@ function registerWinnersMiniApp(app, deps) {
   } = deps;
 
   const viewDeps = {
-    readUserProjectProfiles,
+    // buildUserViewModel asks for this once per row of the list.
+    readUserProjectProfiles: readUserProjectProfilesSnapshot,
     getUserProfileBundle,
     getWinnerDisplayName,
     getPerWinnerPrizeText,
@@ -504,7 +507,8 @@ function registerWinnersMiniApp(app, deps) {
   }
 
   app.get("/winners/avatar/:userId", async (req, res) => {
-    const userProfiles = readUserProjectProfiles();
+    // One request per picture as a list renders: the snapshot, not a full parse each.
+    const userProfiles = readUserProjectProfilesSnapshot();
     const fileId = userProfiles.users?.[String(req.params.userId)]?.meta?.avatarFileId;
     if (!fileId || !bot) {
       res.status(404).send("No avatar");

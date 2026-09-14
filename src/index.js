@@ -135,6 +135,7 @@ const {
 } = require("./storage");
 const { withFloodRetry } = require("./telegram-flood-retry");
 const { userMetaNeedsWrite } = require("./user-meta-touch");
+const { isAvatarCheckFresh, pickAvatarCheckTargets, avatarJobKey } = require("./avatar-freshness");
 const {
   hasSavedWinnerDepositAddress,
   writeDataPreservingLiveWinners,
@@ -4969,13 +4970,12 @@ function getWinnerMentionHtml(userProfiles, winnerId) {
 // getUserProfilePhotos call per join for a picture that had not changed.
 const AVATAR_TTL_MS = Number(process.env.AVATAR_TTL_MS || 7 * 24 * 60 * 60 * 1000);
 
+// Only reads one date, so it uses the shared snapshot. It used to parse the
+// whole profiles document for each person it was asked about (avatar-freshness.js).
+// The write in enrichUserAvatar still reads a private copy after the network call.
 function avatarIsFresh(userId) {
-  const meta = readUserProjectProfiles().users?.[String(userId)]?.meta;
-  if (!meta?.avatarUpdatedAt) {
-    return false;
-  }
-  const checkedAt = Date.parse(meta.avatarUpdatedAt);
-  return Number.isFinite(checkedAt) && Date.now() - checkedAt < AVATAR_TTL_MS;
+  const meta = readUserProjectProfilesSnapshot().users?.[String(userId)]?.meta;
+  return isAvatarCheckFresh(meta, Date.now(), AVATAR_TTL_MS);
 }
 
 async function enrichUserAvatar(userId, options = {}) {
@@ -5026,6 +5026,9 @@ async function enrichUserAvatar(userId, options = {}) {
 }
 
 let avatarEnrichChain = Promise.resolve();
+// Lists already queued and not yet started (avatarJobKey). /live asks for the
+// same list every 2.5 s per open screen; one queued job per list is enough.
+const pendingAvatarJobs = new Set();
 
 function runSerializedAvatarTask(task) {
   const run = avatarEnrichChain.then(task, task);
@@ -5039,22 +5042,25 @@ async function ensureUserAvatars(userIds, options = {}) {
     return;
   }
 
-  const job = async () => {
-    // Only looks: which of these ids still lack a photo. /live asks this on
-    // every poll, and a fresh parse of the whole profiles document each time
-    // was half of what those polls cost.
-    const profiles = readUserProjectProfilesSnapshot();
-    const targets = [...new Set(userIds.map((id) => String(id)))].filter((userKey) => {
-      if (!/^\d+$/.test(userKey)) {
-        return false;
-      }
-      if (!onlyMissing) {
-        return true;
-      }
-      return !profiles.users?.[userKey]?.meta?.avatarFileId;
-    });
+  const key = avatarJobKey(userIds, { limit, onlyMissing });
+  if (!wait && pendingAvatarJobs.has(key)) {
+    return;
+  }
 
-    for (const userKey of targets.slice(0, limit)) {
+  const job = async () => {
+    // Taken off the pending list as it starts, so a poll arriving while it runs
+    // can queue the next round.
+    pendingAvatarJobs.delete(key);
+    // Only looks, so the shared snapshot: who has no photo on file and was not
+    // asked about within AVATAR_TTL_MS. People checked recently no longer take
+    // the limit's slots on every poll.
+    const targets = pickAvatarCheckTargets(userIds, readUserProjectProfilesSnapshot(), {
+      limit,
+      onlyMissing,
+      now: Date.now(),
+      ttlMs: AVATAR_TTL_MS,
+    });
+    for (const userKey of targets) {
       await enrichUserAvatar(Number(userKey));
     }
   };
@@ -5064,6 +5070,7 @@ async function ensureUserAvatars(userIds, options = {}) {
     return;
   }
 
+  pendingAvatarJobs.add(key);
   void runSerializedAvatarTask(job);
 }
 
@@ -11420,6 +11427,7 @@ registerWinnersMiniApp(app, {
   readData,
   DRAW_STATUS,
   readUserProjectProfiles,
+  readUserProjectProfilesSnapshot,
   getUserProfileBundle,
   getWinnerDisplayName,
   getPerWinnerPrizeText,
@@ -11637,7 +11645,8 @@ panelRouter.get("/qr", webAuth.requireAuth, requireOrganizer, async (req, res) =
 
 panelRouter.get("/avatar/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
   const userId = req.params.userId;
-  const userProfiles = readUserProjectProfiles();
+  // One lookup per picture in a list: the snapshot, not a full parse each.
+  const userProfiles = readUserProjectProfilesSnapshot();
   const fileId = userProfiles.users?.[String(userId)]?.meta?.avatarFileId;
   if (!fileId) {
     res.status(404).send("No avatar");
@@ -12529,6 +12538,7 @@ registerAdminDashboard(app, {
   readData,
   readArchivedDraws,
   readUserProjectProfiles,
+  readUserProjectProfilesSnapshot,
   readProjects,
   readKnownChannels,
   readDelegatedAdmins,
