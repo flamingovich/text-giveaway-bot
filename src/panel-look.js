@@ -372,9 +372,20 @@ function getPanelLookStyles() {
     .pl-win-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 500; color: var(--pl-hint); }
     .pl-win-logo { flex: none; margin-left: auto; line-height: 0; }
     :root body .pl-win-logo img { width: 60px; height: 30px; max-width: none; object-fit: contain; object-position: right center; }
-    .pl-win-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; min-width: 0; }
-    .pl-badges { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+    /* Badges and the payout block always share one line. When the badges would be
+       cut, the script adds pl-tight and the network's name goes, its logo stays;
+       only past that do the badges end in "…". */
+    .pl-win-row { display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+    .pl-badges { flex: 1 1 auto; display: flex; flex-wrap: nowrap; gap: 5px; min-width: 0; overflow: hidden; }
+    :root body .pl-badges .winner-badge:first-child { flex-shrink: 0; }
+    .pl-win-row.pl-tight .pl-pay-net > span { display: none; }
+    .pl-win-row.pl-tight .pl-pay-net { padding-left: 6px; }
     :root body .pl-win .winner-badge {
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       margin: 0;
       padding: 2px 8px;
       border-radius: 999px;
@@ -393,6 +404,7 @@ function getPanelLookStyles() {
        label to cap height and baseline, so flex centring puts the digits and the
        capitals on the middle of their logos without per-font nudges. */
     .pl-pay {
+      flex: none;
       display: flex;
       align-items: center;
       gap: 7px;
@@ -455,24 +467,32 @@ function getPanelLookStyles() {
       box-shadow: none !important;
     }
     :root body button.pl-copy svg { width: 15px; height: 15px; }
-    .pl-win-acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .pl-win-acts { container-type: inline-size; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
     .pl-win-acts form { display: grid; min-width: 0; margin: 0; }
     .pl-win-acts form.pl-wide { grid-column: 1 / -1; }
     :root body .pl-win-acts .winner-action-btn {
       width: 100%;
       min-height: 34px;
       margin: 0;
-      padding: 7px 8px;
+      padding: 7px 6px;
       border: 0;
       border-radius: 8px;
       background: var(--pl-btn);
       color: #fff;
-      font-size: 13px;
+      font-size: 13px !important;
       font-weight: 800;
       line-height: 1.2;
       text-align: center;
-      white-space: normal;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+    /* One line, always: "Отказано в / выплате" wrapped and made both buttons of the
+       row taller. The size needs !important because the shell's button chain sets
+       14px at a specificity no ordinary rule reaches. Two buttons share a row, and
+       the longest label, "Отказано в выплате", is 10.23em in Inter 800: the size is
+       what fits half the row less the gap and padding, from 10px to 13px. */
+    :root body .pl-win-acts form:not(.pl-wide) .winner-action-btn { font-size: clamp(10px, calc((50cqw - 15px) / 10.4), 13px) !important; }
     :root body .pl-win-acts .winner-action-btn.pl-btn-success { background: var(--pl-green); }
     :root body .pl-win-acts .winner-action-btn.pl-btn-danger { background: var(--pl-red); }
     :root body .pl-win-acts .winner-action-btn.pl-btn-secondary { border: 1px solid var(--pl-line-soft); background: var(--pl-bg); color: var(--pl-text); }
@@ -769,6 +789,41 @@ function getPanelLookScript({ panelBase }) {
         });
       }
 
+      // A row is refitted whenever its width changes, which includes a sheet
+      // opening or a fold unfolding, and when cards arrive from the filter,
+      // "Показать ещё" or the live refresh.
+      function fitWinnerRow(row) {
+        if (!row.offsetWidth) return;
+        const badges = Array.from(row.querySelectorAll(".winner-badge"));
+        const isCut = () => badges.some((badge) => badge.scrollWidth > badge.clientWidth + 1);
+        row.classList.remove("pl-tight");
+        if (isCut()) row.classList.add("pl-tight");
+        badges.forEach((badge) => {
+          if (badge.scrollWidth > badge.clientWidth + 1) badge.title = badge.textContent.trim();
+          else badge.removeAttribute("title");
+        });
+      }
+      const rowObserver =
+        "ResizeObserver" in window ? new ResizeObserver((entries) => entries.forEach((entry) => fitWinnerRow(entry.target))) : null;
+      function watchWinnerRows(root, watch) {
+        root.querySelectorAll(".pl-win-row").forEach((row) => {
+          if (!rowObserver) fitWinnerRow(row);
+          else if (watch) rowObserver.observe(row);
+          else rowObserver.unobserve(row);
+        });
+      }
+      watchWinnerRows(document, true);
+      new MutationObserver((records) => {
+        records.forEach((record) => {
+          record.addedNodes.forEach((node) => {
+            if (node.nodeType === 1) watchWinnerRows(node, true);
+          });
+          record.removedNodes.forEach((node) => {
+            if (node.nodeType === 1) watchWinnerRows(node, false);
+          });
+        });
+      }).observe(document.body, { childList: true, subtree: true });
+
       placePills(document, true);
       countUpStats();
       settleEntrance();
@@ -776,7 +831,12 @@ function getPanelLookScript({ panelBase }) {
       window.setInterval(tickCountdowns, 1000);
       setupHistoryFilter();
       setupQueueNetworkFilter();
-      if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => placePills(document, true));
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(() => {
+          placePills(document, true);
+          document.querySelectorAll(".pl-win-row").forEach(fitWinnerRow);
+        });
+      }
       window.addEventListener("resize", () => placePills(document, true));
     })();
   `;
