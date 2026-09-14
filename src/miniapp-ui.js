@@ -480,7 +480,7 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
     body.mini-app-shell img:not(.join-guide-img):not(.winners-avatar-img),
     body.mini-app-shell input,
     body.mini-app-shell select,
-    body.mini-app-shell button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.join-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.draw-submit):not(.draw-file-btn):not(.draw-paste-btn):not(.quick-action),
+    body.mini-app-shell button:not(.pl-seg-btn):not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.join-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.draw-submit):not(.draw-file-btn):not(.draw-paste-btn):not(.quick-action),
     body.mini-app-shell .history-list,
     body.mini-app-shell .history-card {
       max-width: 100%;
@@ -629,7 +629,7 @@ ${PANEL_FLUID_TYPOGRAPHY_VARS}
       flex-shrink: 0;
     }
 
-    body.mini-app-shell button:not(.settings-action-btn):not(.join-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.draw-submit):not(.draw-file-btn):not(.draw-paste-btn):not(.quick-action) {
+    body.mini-app-shell button:not(.pl-seg-btn):not(.settings-action-btn):not(.join-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.draw-submit):not(.draw-file-btn):not(.draw-paste-btn):not(.quick-action) {
       font-size: 14px;
     }
 

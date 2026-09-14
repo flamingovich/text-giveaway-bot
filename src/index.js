@@ -109,6 +109,17 @@ const {
 } = require("./unregistered-participation");
 const { getBrandLogoUrls, renderBrandLogoHtml } = require("./brand-logos");
 const {
+  PANEL_HISTORY_FILTERS,
+  PANEL_DEPOSIT_NETWORKS,
+  formatUsdStat,
+  formatCountdownClock,
+  formatCardDateShort,
+  normalizePanelHistoryFilter,
+  filterPanelHistoryDraws,
+  countDepositNetworks,
+} = require("./panel-format");
+const { PANEL_ICONS, getPanelLookStyles, getPanelLookScript } = require("./panel-look");
+const {
   getWinnerAddressForfeitureKind: forfeitureKindOf,
   canRequestWinnerAddressAgain: canAskWinnerForAddressAgain,
   clearWinnerAddressForRerequest: clearWinnerAddressBeforeRerequest,
@@ -877,33 +888,6 @@ function formatDateTime(isoString) {
   return dt.toFormat("dd.MM.yyyy HH:mm");
 }
 
-const RU_MONTHS_SHORT = {
-  1: "янв.",
-  2: "февр.",
-  3: "мар.",
-  4: "апр.",
-  5: "мая",
-  6: "июня",
-  7: "июля",
-  8: "авг.",
-  9: "сент.",
-  10: "окт.",
-  11: "нояб.",
-  12: "дек.",
-};
-
-function formatCardDateTime(isoString) {
-  if (!isoString) {
-    return "вручную";
-  }
-  const dt = DateTime.fromISO(isoString, { zone: TIMEZONE });
-  if (!dt.isValid) {
-    return "не задано";
-  }
-  const month = RU_MONTHS_SHORT[dt.month] || dt.toFormat("LLL");
-  return `${dt.day} ${month} ${dt.year}, ${dt.toFormat("HH:mm")}`;
-}
-
 function formatDateTimeForInput(isoString) {
   if (!isoString) {
     return "";
@@ -1489,19 +1473,34 @@ function renderPayoutQueueContent(draws, userProfiles, panelContext = null) {
     </div>`;
   }
 
+  const counts = countDepositNetworks(
+    entries.map(({ draw, winnerId }) => getWinnerPanelNetworkId(draw, winnerId, userProfiles)),
+  );
+  const networkNames = { all: "Все", trc20: "TRC-20", erc20: "ERC-20", bep20: "BEP-20" };
+  const filterButtons = ["all", ...PANEL_DEPOSIT_NETWORKS]
+    .map(
+      (key) =>
+        `<button type="button" class="pl-seg-btn" data-net="${key}" aria-pressed="${key === "all"}">${
+          key === "all" ? "" : PANEL_ICONS[key]
+        }${networkNames[key]}<em>(${counts[key]})</em></button>`,
+    )
+    .join("");
   const winnerRows = entries
-    .map(({ draw, winnerId, antiFraudSignals }) => {
-      const winnerNotifications = draw.winnerNotifications || {};
-      return renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals, {
+    .map(({ draw, winnerId, antiFraudSignals }, index) =>
+      renderWinnerCard(draw, winnerId, userProfiles, draw.winnerNotifications || {}, antiFraudSignals, {
         showProject: true,
         returnPanel: "payoutQueue",
-      });
-    })
+        index,
+      }),
+    )
     .join("");
 
-  return `<div class="winner-details-content payout-queue-list">${winnerRows}</div>`;
+  return `<div class="pl-queue" data-net="all">
+      <div class="pl-seg pl-net-filter" role="group" aria-label="Сеть выплаты"><i class="pl-seg-ind" aria-hidden="true"></i>${filterButtons}</div>
+      <div class="pl-queue-list">${winnerRows}</div>
+      <div class="pl-card pl-empty pl-queue-empty" hidden>В этой сети выплат нет</div>
+    </div>`;
 }
-
 function isDrawPayoutComplete(draw, userProfiles, panelContext = null) {
   if (draw.status !== DRAW_STATUS.FINISHED) {
     return false;
@@ -1571,9 +1570,12 @@ function computeDrawStats(draws, userProfiles, _panelContext = null) {
   return {
     total: draws.length,
     totalRaffledUsdt: formatUsdtStatDisplay(totalRaffledUsdt),
+    totalRaffledUsdtValue: totalRaffledUsdt,
     monthLabel,
     paidThisMonth: formatPaidStatDisplay(paidThisMonthUsdt),
+    paidThisMonthUsdtValue: paidThisMonthUsdt,
     paidAllTime: formatPaidStatDisplay(paidAllTimeUsdt),
+    paidAllTimeUsdtValue: paidAllTimeUsdt,
   };
 }
 
@@ -1611,66 +1613,6 @@ function getWinnerPayoutText(draw, projectData, options = {}) {
 
   const amount = getWinnerPayoutAmount(draw, projectData, options);
   return formatMoneyAmount(amount, draw.prizeType) || base || draw.prize || "—";
-}
-
-function getWinnerPayoutPanelHtml(draw, projectData, options = {}) {
-  const payoutText = getWinnerPayoutText(draw, projectData, options);
-  if (draw.prizeType !== "money_rub") {
-    return escapeHtml(payoutText);
-  }
-
-  const amount = getWinnerPayoutAmount(draw, projectData, options);
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return escapeHtml(payoutText);
-  }
-
-  const usdtText = convertRubToUsdt(amount).toFixed(2);
-  return `${escapeHtml(payoutText)} <span class="winner-payout-usdt">(${escapeHtml(usdtText)} USDT)</span>`;
-}
-
-function getWinnerPayoutRowHtml(
-  draw,
-  projectData,
-  { isPaid, isPaymentDenied, isExpired, hasFraudFlag = false, winnerId = null },
-) {
-  if (isPaid) {
-    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag, winnerId });
-    return {
-      icon: "check",
-      iconClass: " winner-card-row-icon-paid",
-      rowClass: " winner-card-row-paid",
-      labelHtml: `<strong class="winner-payout-paid-label">Выплачено:</strong> ${payoutHtml}`,
-    };
-  }
-
-  if (isPaymentDenied) {
-    const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag, winnerId });
-    return {
-      icon: "close",
-      iconClass: " winner-card-row-icon-denied",
-      rowClass: " winner-card-row-denied",
-      labelHtml: `<strong class="winner-payout-denied-label">Отказано в выплате:</strong> ${payoutHtml}`,
-    };
-  }
-
-  if (isExpired) {
-    const zeroAmount =
-      draw.prizeType === "money_usd" ? formatUsdAmount(0) : formatRubAmount(0);
-    return {
-      icon: "prize",
-      iconClass: "",
-      rowClass: "",
-      labelHtml: `<strong>К выплате:</strong> ${escapeHtml(zeroAmount)}`,
-    };
-  }
-
-  const payoutHtml = getWinnerPayoutPanelHtml(draw, projectData, { hasFraudFlag, winnerId });
-  return {
-    icon: "prize",
-    iconClass: "",
-    rowClass: "",
-    labelHtml: `<strong>К выплате:</strong> ${payoutHtml}`,
-  };
 }
 
 const DEFAULT_WINNER_CONFIRM_MINUTES = 30;
@@ -1995,6 +1937,29 @@ function getWinnerPanelNetworkDisplay(draw, notifyInfo, projectData, project, ad
   }
 
   return null;
+}
+
+const PANEL_NETWORK_ID_BY_LABEL = { "TRC-20": "trc20", "ERC-20": "erc20", "BEP-20": "bep20" };
+
+// The payout queue filters by network. "ERC-20 или BEP-20" is not one of them
+// and shows only under "Все".
+function getPanelNetworkIdFromLabel(label) {
+  return PANEL_NETWORK_ID_BY_LABEL[label] || null;
+}
+
+function getWinnerPanelNetworkId(draw, winnerId, userProfiles) {
+  const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+  const notifyInfo = draw.winnerNotifications?.[String(winnerId)];
+  const trcDisplay = getWinnerPanelTrcDisplay(draw, notifyInfo, projectData);
+  const project = draw.projectId ? getProjectById(draw.projectId, draw.ownerId) : null;
+  const display = getWinnerPanelNetworkDisplay(
+    draw,
+    notifyInfo,
+    projectData,
+    project,
+    trcDisplay.copyable ? trcDisplay.text : "",
+  );
+  return getPanelNetworkIdFromLabel(display?.label);
 }
 
 function formatWinnerDeliveryFailureReason(errorMessage) {
@@ -6617,14 +6582,14 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const displayName = fullName || (meta.username ? `@${meta.username}` : `ID ${winnerId}`);
   const usernameLine = meta.username ? `@${meta.username}` : "без username";
   const usernameMetaHtml = fullName
-    ? `<div class="winner-card-meta">${escapeHtml(usernameLine)}</div>`
+    ? `<span class="pl-win-meta">${escapeHtml(usernameLine)}</span>`
     : !meta.username
-      ? `<div class="winner-card-meta">без username</div>`
+      ? `<span class="pl-win-meta">без username</span>`
       : "";
   const initial = (fullName || meta.username || String(winnerId)).charAt(0).toUpperCase() || "?";
   const avatar = meta.avatarFileId
-    ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="winner-card-avatar" />`
-    : `<div class="winner-card-avatar winner-card-avatar-fallback" style="${getAvatarFallbackStyle(winnerId)}">${escapeHtml(initial)}</div>`;
+    ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="pl-av" />`
+    : `<span class="pl-av" style="${getAvatarFallbackStyle(winnerId)}">${escapeHtml(initial)}</span>`;
   const notifyInfo = winnerNotifications[String(winnerId)];
   const trcDisplay = getWinnerPanelTrcDisplay(draw, notifyInfo, projectData);
   const trcAddress = trcDisplay.text;
@@ -6636,6 +6601,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     project,
     trcDisplay.copyable ? trcAddress : "",
   );
+  const networkId = getPanelNetworkIdFromLabel(networkDisplay?.label);
   const isPaid = Boolean(notifyInfo?.paidAt);
   const isPaymentDenied = Boolean(notifyInfo?.paymentDeniedAt);
   const isPayoutResolved = isPaid || isPaymentDenied;
@@ -6650,19 +6616,11 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
   const isPrizeForfeited = isWinnerPrizeForfeited(notifyInfo, antiFraud);
   const forfeitedDeliveryReason = getWinnerForfeitedDeliveryReason(notifyInfo);
-  const payoutRow = getWinnerPayoutRowHtml(draw, projectData, {
-    winnerId,
-    isPaid,
-    isPaymentDenied,
-    isExpired: isExpired || notifyInfo?.forfeitureReason === "address_timeout",
-    hasFraudFlag: isPrizeForfeited,
-  });
   const refBadge = getWinnerReferralBadgeHtml(winnerId, draw, userProfiles);
-  const victoryDateHtml = `<div class="winner-card-meta winner-card-victory-date">Дата победы: ${escapeHtml(formatWinnerVictoryDate(draw))}</div>`;
-  const projectLabelHtml = options.showProject
-    ? `<div class="winner-card-meta winner-card-project">Проект: ${escapeHtml(project?.name || "не указан")}</div>`
-    : "";
-  const statusBadge = isPrizeForfeited
+  // "Выплачено" leads: the card no longer has a separate "Выплачено:" row.
+  const statusBadge = isPaid
+    ? `<span class="winner-badge winner-badge-ok">Выплачено</span>`
+    : isPrizeForfeited
     ? `<span class="winner-badge winner-badge-danger">Приз сгорел${
         forfeitedDeliveryReason ? ` (${escapeHtml(forfeitedDeliveryReason)})` : ""
       }</span>`
@@ -6687,9 +6645,25 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const antiFraudBadges = antiFraud.labels
     .map((label) => `<span class="winner-badge winner-badge-danger">${escapeHtml(label)}</span>`)
     .join("");
-  const copyBtn = trcDisplay.copyable
-      ? `<button type="button" class="winner-copy-btn" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button>`
-      : "";
+  // Nothing is owed for a winner who never confirmed or whose address never came.
+  const payoutIsVoid = isExpired || notifyInfo?.forfeitureReason === "address_timeout";
+  const payoutAmount = payoutIsVoid
+    ? 0
+    : getWinnerPayoutAmount(draw, projectData, { hasFraudFlag: isPrizeForfeited, winnerId });
+  const payoutUsdt = draw.prizeType === "money_usd" ? payoutAmount : convertRubToUsdt(payoutAmount);
+  const networkHtml = networkDisplay
+    ? `<span class="pl-pay-net" title="${escapeHtml(networkDisplay.title)}">${
+        networkId ? PANEL_ICONS[networkId] : ""
+      }<span>${escapeHtml(networkDisplay.label)}</span></span>`
+    : "";
+  const payHtml = isMoneyPrizeType(draw.prizeType)
+    ? `<div class="pl-pay"${
+        draw.prizeType === "money_rub" ? ` title="${escapeHtml(formatRubAmount(payoutAmount))}"` : ""
+      }><span class="pl-pay-amt">${PANEL_ICONS.usdt}<b>${escapeHtml(formatUsdStat(payoutUsdt))}</b></span>${networkHtml}</div>`
+    : `<div class="pl-pay pl-pay-text">${escapeHtml(draw.prize || "—")}</div>`;
+  const walletHtml = trcDisplay.copyable
+    ? `<div class="pl-wal"><code style="--len:${trcAddress.length}">${escapeHtml(trcAddress)}</code><button type="button" class="winner-copy-btn pl-copy" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button></div>`
+    : `<div class="pl-wal pl-wal-note">${escapeHtml(trcAddress)}</div>`;
   const canMarkPaid =
     !isPayoutResolved &&
     !isExpired &&
@@ -6697,79 +6671,70 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     !isDeliveryFailed &&
     !isAwaitingAddress &&
     (!drawAsksWinnerDepositAddress(draw) || trcDisplay.copyable);
-  const winnerActionForm = (action, label, extraClass = "") =>
-    `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/${action}/${encodeURIComponent(String(winnerId))}">
-        ${returnPanelField}
-        <button type="submit" class="winner-action-btn${extraClass}">${label}</button>
-      </form>`;
   const canAskAddressAgain = canRequestWinnerAddressAgain(draw, notifyInfo, antiFraud);
-  const winnerActionList = [];
+  const actions = [];
   if (canResendNotification) {
-    winnerActionList.push(winnerActionForm("notify", "Оповестить заново"));
+    actions.push(["notify", "Оповестить заново", " pl-btn-primary"]);
   } else if (canMarkPaid) {
-    winnerActionList.push(winnerActionForm("pay", "Оплатил"));
+    actions.push(["pay", "Оплатил", " pl-btn-success"]);
+  }
+  if (canMarkPaid) {
+    actions.push(["deny-pay", "Отказано в выплате", " pl-btn-danger"]);
   }
   // Offered next to "Оплатил" on purpose: the address turning out to be wrong
   // is discovered at the moment of paying, not before it.
   if (canAskAddressAgain) {
-    winnerActionList.push(
-      winnerActionForm(
-        "request-address",
-        "Запросить адрес повторно",
-        " winner-action-secondary winner-request-address-btn",
-      ),
-    );
+    actions.push([
+      "request-address",
+      "Запросить адрес повторно",
+      " winner-action-secondary winner-request-address-btn pl-btn-secondary",
+    ]);
   }
-  if (canMarkPaid) {
-    winnerActionList.push(
-      winnerActionForm("deny-pay", "Отказано в выплате", " winner-action-secondary"),
-    );
-  }
-  const winnerActionButtons = winnerActionList.join("");
-  const winnerActionsHtml = winnerActionButtons
-    ? `<div class="winner-card-actions${winnerActionList.length > 1 ? " winner-card-actions-stack" : ""}">${winnerActionButtons}</div>`
+  const actionsHtml = actions.length
+    ? `<div class="pl-win-acts">${actions
+        .map(([action, label, extraClass], position) => {
+          // An odd one out takes the whole row instead of leaving a gap beside it.
+          const wide = position === actions.length - 1 && actions.length % 2 === 1;
+          return `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/${action}/${encodeURIComponent(String(winnerId))}"${wide ? ' class="pl-wide"' : ""}>
+        ${returnPanelField}
+        <button type="submit" class="winner-action-btn${extraClass}">${label}</button>
+      </form>`;
+        })
+        .join("")}</div>`
     : "";
   const profileUrl = buildParticipantProfileUrl(winnerId, PANEL_BASE);
   const profileBtn = `<a href="${escapeHtml(profileUrl)}" class="winner-profile-btn" title="Профиль участника" aria-label="Профиль участника">${renderFormIcon("user")}</a>`;
+  // In the payout queue the brand logo says which project the money is for; a
+  // project without a logo keeps its name in words.
+  const logoUrls = options.showProject ? getBrandLogoUrls(project) : null;
+  const projectLogoHtml = logoUrls ? `<span class="pl-win-logo">${renderBrandLogoHtml(logoUrls)}</span>` : "";
+  const projectLineHtml =
+    options.showProject && !logoUrls
+      ? `<span class="pl-win-meta">Проект: ${escapeHtml(project?.name || "не указан")}</span>`
+      : "";
+  const victoryDateHtml = options.showProject
+    ? `<span class="pl-win-meta">Дата победы: ${escapeHtml(formatWinnerVictoryDate(draw))}</span>`
+    : "";
 
   return `
-    <article class="winner-card">
-      <div class="winner-card-head">
+    <article class="pl-win" data-net="${networkId || ""}" style="--i:${Number(options.index) || 0}">
+      <div class="pl-win-top">
         ${avatar}
-        <div class="winner-card-body">
-          <div class="winner-card-name-row">
-            <div class="winner-card-name">${escapeHtml(displayName)}</div>
-            ${profileBtn}
-          </div>
-          ${usernameMetaHtml}
-          ${projectLabelHtml}
-          ${victoryDateHtml}
-          <div class="winner-card-badges">${refBadge}${statusBadge}${anonymousBadge}${antiFraudBadges}</div>
+        <div class="pl-win-name">
+          <span class="pl-win-name-row"><b>${escapeHtml(displayName)}</b>${profileBtn}</span>
+          ${usernameMetaHtml}${projectLineHtml}${victoryDateHtml}
         </div>
+        ${projectLogoHtml}
       </div>
-      <div class="winner-card-row${payoutRow.rowClass}">
-        <span class="draw-ico${payoutRow.iconClass}">${renderFormIcon(payoutRow.icon)}</span>
-        <span class="winner-card-row-text">${payoutRow.labelHtml}</span>
+      <div class="pl-win-row">
+        <div class="pl-badges">${refBadge}${statusBadge}${anonymousBadge}${antiFraudBadges}</div>
+        ${payHtml}
       </div>
-      ${
-        networkDisplay
-          ? `<div class="winner-card-row winner-card-network-row">
-        <span class="draw-ico">${renderFormIcon("link")}</span>
-        <span class="winner-card-row-text">Сеть: <b>${escapeHtml(networkDisplay.label)}</b></span>
-      </div>`
-          : ""
-      }
-      <div class="winner-card-row winner-card-address-row">
-        <div class="winner-address-wrap">
-          <span class="winner-address-text">${escapeHtml(trcAddress)}</span>
-          ${copyBtn}
-        </div>
-      </div>
-      ${winnerActionsHtml}
+      ${walletHtml}
+      ${actionsHtml}
     </article>
   `;
 }
-
 function getOwnerProjects(ownerId) {
   return filterByOwner(readProjects().projects || [], ownerId).sort((a, b) => {
     const order = new Map(BRAND_PROJECT_TEMPLATES.map((item, index) => [item.templateSlug, index]));
@@ -6801,24 +6766,39 @@ function buildPanelLiveResponse(ownerId) {
   };
 }
 
-function buildPanelHistoryChunk(ownerId, offset, limit) {
+function buildPanelHistoryChunk(ownerId, offset, limit, filter) {
   const historyDraws = getOwnerDraws(ownerId);
+  const statsDraws = getOwnerDrawsForStats(ownerId);
   const { userProfiles, panelContext, projects } = getPanelRenderContext(ownerId);
+  const safeFilter = normalizePanelHistoryFilter(filter);
+  const { lists, counts } = buildPanelHistoryLists(historyDraws, statsDraws, userProfiles, panelContext);
+  const draws = lists[safeFilter];
   const safeOffset = Math.max(0, Number(offset) || 0);
   const safeLimit = Math.max(1, Number(limit) || PANEL_HISTORY_PAGE_SIZE);
-  const visibleDraws = historyDraws.slice(safeOffset, safeOffset + safeLimit);
-  const html = renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext);
-  const shownTotal = Math.min(safeOffset + visibleDraws.length, historyDraws.length);
-  const hasMore = shownTotal < historyDraws.length;
+  const visibleDraws = draws.slice(safeOffset, safeOffset + safeLimit);
+  let html = "";
+  if (visibleDraws.length) {
+    html = renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext);
+  } else if (safeOffset === 0) {
+    html = renderPanelHistoryEmpty(safeFilter);
+  }
+  const shownTotal = Math.min(safeOffset + visibleDraws.length, draws.length);
+  const hasMore = shownTotal < draws.length;
   const controlsHtml = renderHistoryPaginationControls({
-    total: historyDraws.length,
-    shownTotal,
+    total: draws.length,
     nextOffset: shownTotal,
     limit: safeLimit,
   });
-  return { html, controlsHtml, moreHtml: controlsHtml, hasMore, nextOffset: shownTotal };
+  return {
+    html,
+    controlsHtml,
+    moreHtml: controlsHtml,
+    hasMore,
+    nextOffset: shownTotal,
+    filter: safeFilter,
+    counts,
+  };
 }
-
 function getOwnerDraws(ownerId) {
   const data = readData();
   return filterByOwner(data.draws, ownerId).sort(
@@ -6839,6 +6819,65 @@ function getPanelLiveDraws(draws) {
       draw.status === DRAW_STATUS.SCHEDULED ||
       (draw.awaitingChannelPost && !draw.messageId),
   );
+}
+
+// The history filter's three lists. "К выплате" reads the archive too, as the
+// payout queue does, so the filter never shows fewer draws than the queue has
+// winners for.
+function buildPanelHistoryLists(historyDraws, statsDraws, userProfiles, panelContext = null) {
+  const isDue = (draw) =>
+    draw.status === DRAW_STATUS.FINISHED &&
+    isMoneyPrizeType(draw.prizeType) &&
+    !isDrawPayoutComplete(draw, userProfiles, panelContext);
+  const lists = {
+    all: historyDraws,
+    active: filterPanelHistoryDraws(historyDraws, "active", { isDue }),
+    due: filterPanelHistoryDraws(statsDraws, "due", { isDue }).sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+    ),
+  };
+  return {
+    lists,
+    counts: { all: lists.all.length, active: lists.active.length, due: lists.due.length },
+  };
+}
+
+function renderPanelHistoryEmpty(filter) {
+  const text =
+    filter === "active"
+      ? "Активных розыгрышей нет"
+      : filter === "due"
+        ? "Все выплаты сделаны"
+        : "Розыгрышей пока нет";
+  return `<div class="pl-card pl-empty">${text}</div>`;
+}
+
+// Third chip of a draw card: time left while the draw runs or waits to start,
+// the number of winners once it is over. The page ticks the clock every second.
+function renderDrawTimerChip(draw, nowMs) {
+  const chip = (label, valueHtml) =>
+    `<span class="pl-chip"><span class="pl-chip-l">${label}</span>${valueHtml}</span>`;
+  const countdown = (isoString, doneLabel) => {
+    const clock = formatCountdownClock(Date.parse(isoString) - nowMs);
+    return `<span class="pl-chip-v" data-countdown="${escapeHtml(isoString)}" data-countdown-done="${doneLabel}">${escapeHtml(
+      clock || doneLabel,
+    )}</span>`;
+  };
+  if (draw.status === DRAW_STATUS.ACTIVE) {
+    return chip(
+      "Осталось",
+      draw.endMode !== "manual" && draw.endAt
+        ? countdown(draw.endAt, "итоги…")
+        : `<span class="pl-chip-v">вручную</span>`,
+    );
+  }
+  if (draw.status === DRAW_STATUS.SCHEDULED) {
+    return chip(
+      "До старта",
+      draw.publishAt ? countdown(draw.publishAt, "старт…") : `<span class="pl-chip-v">—</span>`,
+    );
+  }
+  return chip("Победителей", `<span class="pl-chip-v">${(draw.winnerIds || []).length}</span>`);
 }
 
 function runDrawArchiveMaintenance() {
@@ -6910,8 +6949,9 @@ function buildPanelLiveFingerprint(draws, userProfiles, panelContext = null) {
 }
 
 function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = null) {
+  const nowMs = Date.now();
   return draws
-    .map((draw) => {
+    .map((draw, index) => {
       const project = projects.find((item) => item.id === draw.projectId);
       const panelStatus = getDrawPanelStatusInfo(draw, userProfiles, panelContext);
       const needsChannelPost = drawNeedsChannelRepost(draw);
@@ -6920,105 +6960,76 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = n
       const canRemindNow = canSendDrawReminder(draw);
       const winnerNotifications = draw.winnerNotifications || {};
       const antiFraudSignals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
-      const coverPreview = renderHistoryCoverSide(draw.imagePath);
       const winnerRows = (draw.winnerIds || [])
         .map((winnerId) =>
           renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals)
         )
         .join("");
+      const drawPath = `${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}`;
+      // The brand logo stands for the project; a project without one gets the gift.
+      const logoUrls = getBrandLogoUrls(project);
+      const markHtml = logoUrls
+        ? `<span class="pl-draw-logo">${renderBrandLogoHtml(logoUrls)}</span>`
+        : `<span class="pl-draw-gift">${renderHistoryGiftIcon()}</span>`;
+      const actions = [];
+      if (canPublishNow) {
+        actions.push(
+          `<form method="post" action="${drawPath}/publish-now"><button type="submit" class="history-action-btn">${needsChannelPost ? "Опубликовать пост заново" : "Опубликовать сейчас"}</button></form>`,
+        );
+      }
+      if (canRemindNow) {
+        actions.push(
+          `<form method="post" action="${drawPath}/remind"><button type="submit" class="history-action-btn">Напомнить</button></form>`,
+        );
+      }
+      if (canFinishNow) {
+        actions.push(
+          `<form method="post" action="${drawPath}/finish-now"><button type="submit" class="history-action-btn pl-btn-danger">Завершить сейчас</button></form>`,
+        );
+      }
+      const actionsHtml = actions.length
+        ? `<div class="pl-acts${actions.length > 1 ? " pl-acts-2" : ""}">${actions.join("")}</div>`
+        : "";
+      const foldHtml =
+        draw.status === DRAW_STATUS.FINISHED
+          ? `<div class="pl-div" aria-hidden="true"></div>
+          <details class="pl-fold" data-details-key="winners-${escapeHtml(draw.id)}">
+            <summary><span>Победители и выплаты</span>${PANEL_ICONS.chevron}</summary>
+            <div class="pl-fold-anim"><div><div class="pl-fold-in">${
+              winnerRows || '<p class="pl-fold-empty">Победителей нет.</p>'
+            }</div></div></div>
+          </details>`
+          : "";
 
       return `
-        <article class="history-card${draw.status === DRAW_STATUS.ACTIVE ? " history-card-active" : ""}" data-draw-id="${escapeHtml(draw.id)}">
-          <div class="history-card-head">
-            <div class="history-head-top">
-              <div class="history-title-row">
-                <span class="history-title-icon">${renderHistoryGiftIcon()}</span>
-                <div class="history-title-text">
-                  <div class="history-title">Розыгрыш ${escapeHtml(draw.prize)}</div>
-                  <div class="history-subtitle">Проект: ${escapeHtml(project?.name || "не указан")}</div>
-                </div>
-              </div>
-              <div class="history-head-actions">
-                <span class="history-status status-${escapeHtml(panelStatus.cssClass)}">${escapeHtml(panelStatus.label)}</span>
-                <form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/delete" class="project-delete-form draw-delete-form">
-                  <button
-                    type="submit"
-                    class="project-icon-btn project-delete-btn draw-delete-btn"
-                    title="Удалить розыгрыш"
-                    data-draw-prize="${escapeHtml(draw.prize)}"
-                    data-draw-status="${escapeHtml(draw.status)}"
-                  >${renderFormIcon("delete")}</button>
-                </form>
-              </div>
-            </div>
-            <div class="history-divider" aria-hidden="true"></div>
+        <article class="pl-card pl-draw${draw.status === DRAW_STATUS.ACTIVE ? " is-active" : ""}" data-draw-id="${escapeHtml(draw.id)}" style="--i:${index}">
+          <div class="pl-draw-head">
+            ${markHtml}
+            <div class="pl-draw-title">Розыгрыш ${escapeHtml(draw.prize)}</div>
+            <span class="pl-status pl-status-${escapeHtml(panelStatus.cssClass)}">${escapeHtml(panelStatus.label)}</span>
+            <form method="post" action="${drawPath}/delete" class="pl-del-form">
+              <button
+                type="submit"
+                class="project-icon-btn project-delete-btn draw-delete-btn pl-del"
+                title="Удалить розыгрыш"
+                aria-label="Удалить розыгрыш"
+                data-draw-prize="${escapeHtml(draw.prize)}"
+                data-draw-status="${escapeHtml(draw.status)}"
+              >${renderFormIcon("delete")}</button>
+            </form>
           </div>
-
-          <div class="history-body${coverPreview ? "" : " history-body-no-cover"}">
-            <div class="history-body-main">
-              <div class="history-info-stack">
-              <div class="history-times">
-                <div class="history-time-row">
-                  <span class="draw-ico">${renderFormIcon("start")}</span>
-                  <span class="history-time-text"><span class="history-time-label">Начало:</span> ${escapeHtml(formatCardDateTime(draw.publishAt))}</span>
-                </div>
-                <div class="history-time-row">
-                  <span class="draw-ico">${renderFormIcon("finish")}</span>
-                  <span class="history-time-text"><span class="history-time-label">Конец:</span> ${escapeHtml(formatCardDateTime(draw.endAt))}</span>
-                </div>
-              </div>
-
-              <div class="history-chips">
-                <span class="history-chip">
-                  <span class="draw-ico">${renderFormIcon("winners")}</span>
-                  <span class="history-chip-label">Участ.</span>
-                  <span class="history-chip-value">${(draw.participantIds || []).length}</span>
-                </span>
-                <span class="history-chip">
-                  <span class="draw-ico">${renderFormIcon("trophy")}</span>
-                  <span class="history-chip-label">Мест</span>
-                  <span class="history-chip-value">${draw.winnersCount}</span>
-                </span>
-              </div>
-              </div>
-            </div>
-            ${coverPreview}
+          <div class="pl-div" aria-hidden="true"></div>
+          <div class="pl-period">
+            <span class="pl-period-ico">${PANEL_ICONS.calendar}</span>
+            <span>${escapeHtml(formatCardDateShort(draw.publishAt, TIMEZONE))} <span class="pl-period-sep">-</span> <b>${escapeHtml(formatCardDateShort(draw.endAt, TIMEZONE))}</b></span>
           </div>
-
-          <div class="history-divider history-divider-before-actions" aria-hidden="true"></div>
-
-          ${
-            draw.status === DRAW_STATUS.FINISHED
-              ? `<details class="history-details" data-details-key="winners-${escapeHtml(draw.id)}">
-                  <summary>
-                    <span class="draw-ico history-details-chevron">${renderFormIcon("chevron")}</span>
-                    <span class="draw-ico">${renderFormIcon("winners")}</span>
-                    <span>Победители и выплаты</span>
-                  </summary>
-                  <div class="history-details-anim">
-                    <div class="history-details-content winner-details-content">${winnerRows || "<p class=\"history-empty-note\">Победителей нет.</p>"}</div>
-                  </div>
-                </details>`
-              : ""
-          }
-
-          <div class="history-actions">
-            ${
-              canPublishNow
-                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/publish-now"><button type="submit" class="history-action-btn">${needsChannelPost ? "Опубликовать пост заново" : "Опубликовать сейчас"}</button></form>`
-                : ""
-            }
-            ${
-              canRemindNow
-                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/remind"><button type="submit" class="history-action-btn">Напомнить</button></form>`
-                : ""
-            }
-            ${
-              canFinishNow
-                ? `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/finish-now"><button type="submit" class="history-action-btn history-action-danger">Завершить сейчас</button></form>`
-                : ""
-            }
+          <div class="pl-chips">
+            <span class="pl-chip"><span class="pl-chip-l">Участники</span><span class="pl-chip-v" data-part>${(draw.participantIds || []).length}</span></span>
+            <span class="pl-chip"><span class="pl-chip-l">Мест</span><span class="pl-chip-v">${Number(draw.winnersCount) || 0}</span></span>
+            ${renderDrawTimerChip(draw, nowMs)}
           </div>
+          ${actionsHtml}
+          ${foldHtml}
         </article>
       `;
     })
@@ -7046,88 +7057,76 @@ function renderPanelLiveStatsSection(draws, userProfiles, panelContext = null) {
           formatPendingPayoutQueueButtonMeta(pendingPayouts),
         )
       : "";
+  // data-count-* lets the page count the figures up once when it opens.
+  const usdStat = (label, value) =>
+    `<div class="pl-stat"><span class="pl-stat-l">${escapeHtml(label)}</span><span class="pl-stat-v" data-count-usd="${
+      Number(value) || 0
+    }">${escapeHtml(formatUsdStat(value))}</span></div>`;
+  const buttonsHtml =
+    payoutQueueBtnHtml || remindActiveHtml
+      ? `<div class="pl-stat-btns">${payoutQueueBtnHtml}${remindActiveHtml}</div>`
+      : "";
   return `
-      <section id="panelStatsRoot" class="card history-section">
-        <h2 class="create-title draw-history-title">
-          <span class="create-title-icon">${renderFormIcon("history")}</span>
+      <section id="panelStatsRoot" class="pl-card pl-stats">
+        <h2 class="pl-stats-title">
+          <span class="pl-stats-ico">${renderFormIcon("history")}</span>
           История розыгрышей
         </h2>
-        <div class="stats-row">
-          <div class="stat-card">
-            <span class="stat-card-label">Всего</span>
-            <span class="stat-card-value">${drawsStats.total}</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-card-label">Разыграно Всего</span>
-            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.totalRaffledUsdt)}</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-card-label">За ${escapeHtml(drawsStats.monthLabel)}</span>
-            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidThisMonth)}</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-card-label">За всё время</span>
-            <span class="stat-card-value stat-card-value-rub">${escapeHtml(drawsStats.paidAllTime)}</span>
-          </div>
+        <div class="pl-stat-grid">
+          <div class="pl-stat"><span class="pl-stat-l">Всего розыгрышей</span><span class="pl-stat-v" data-count-int="${drawsStats.total}">${drawsStats.total}</span></div>
+          ${usdStat("Разыграно всего", drawsStats.totalRaffledUsdtValue)}
+          ${usdStat(`За ${drawsStats.monthLabel}`, drawsStats.paidThisMonthUsdtValue)}
+          ${usdStat("Выплачено всего", drawsStats.paidAllTimeUsdtValue)}
         </div>
-        ${payoutQueueBtnHtml}
-        ${remindActiveHtml}
+        ${buttonsHtml}
       </section>
   `;
 }
 
-function renderHistoryPaginationControls({
-  total,
-  shownTotal,
-  nextOffset,
-  limit,
-  includeShowMore = true,
-}) {
+function renderHistoryPaginationControls({ total, nextOffset, limit, includeShowMore = true }) {
   const safeLimit = Math.max(1, Number(limit) || PANEL_HISTORY_PAGE_SIZE);
   const hasMore = includeShowMore && Number.isFinite(nextOffset) && nextOffset < total;
-  const showMeta = total > safeLimit || shownTotal < total;
-  if (!showMeta && !hasMore) {
+  if (!hasMore) {
     return "";
   }
-
-  const shownMeta = showMeta
-    ? `<div class="history-shown-meta">Показано ${shownTotal} из ${total}</div>`
-    : "";
-  const button = hasMore
-    ? `<button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
+  return `<div id="panelHistoryControls" class="history-more-wrap pl-more">
+          <button type="button" class="history-action-btn history-more-btn" id="panelHistoryMoreBtn" data-next-offset="${nextOffset}">
             Показать ещё (${Math.min(safeLimit, total - nextOffset)} шт.)
-          </button>`
-    : "";
-
-  return `<div id="panelHistoryControls" class="history-more-wrap history-more-wrap-bottom">${shownMeta}${button}</div>`;
+          </button>
+        </div>`;
 }
 
 function renderPanelHistorySection(draws, projects, userProfiles, panelContext = null, options = {}) {
+  const filter = normalizePanelHistoryFilter(options.filter);
   const offset = Math.max(0, Number(options.offset) || 0);
   const limit = Math.max(1, Number(options.limit) || PANEL_HISTORY_PAGE_SIZE);
   const total = draws.length;
   const visibleDraws = draws.slice(offset, offset + limit);
-  const drawBlocks = renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext);
+  const drawBlocks = visibleDraws.length
+    ? renderDrawHistoryBlocks(visibleDraws, projects, userProfiles, panelContext)
+    : renderPanelHistoryEmpty(filter);
   const shownTotal = Math.min(offset + visibleDraws.length, total);
   const controlsHtml = renderHistoryPaginationControls({
     total,
-    shownTotal,
     nextOffset: shownTotal,
     limit,
     includeShowMore: options.includeShowMore !== false,
   });
   const hasMore = shownTotal < total;
+  const counts = options.counts || { all: total, active: 0, due: 0 };
+  const filterNames = { all: "Все", active: "Активные", due: "К выплате" };
+  const filterButtons = PANEL_HISTORY_FILTERS.map(
+    (key) =>
+      `<button type="button" class="pl-seg-btn" data-filter="${key}" aria-pressed="${key === filter}">${
+        filterNames[key]
+      }<em>(${Number(counts[key]) || 0})</em></button>`,
+  ).join("");
 
   return `
-      <section id="panelHistoryRoot" class="card history-section" data-history-total="${total}" data-history-has-more="${hasMore ? "1" : "0"}">
-        ${
-          drawBlocks
-            ? `<div class="history-list" id="panelHistoryList">${drawBlocks}</div>${controlsHtml}`
-            : `<div class="access-empty">
-              <span class="draw-ico">${renderFormIcon("gift")}</span>
-              <span>Розыгрышей пока нет</span>
-            </div>`
-        }
+      <section id="panelHistoryRoot" class="pl-history" data-filter="${filter}" data-history-total="${total}" data-history-has-more="${hasMore ? "1" : "0"}">
+        <div class="pl-seg pl-filter" role="group" aria-label="Какие розыгрыши показать"><i class="pl-seg-ind" aria-hidden="true"></i>${filterButtons}</div>
+        <div class="pl-list pl-entering" id="panelHistoryList">${drawBlocks}</div>
+        ${controlsHtml}
       </section>
   `;
 }
@@ -7140,15 +7139,16 @@ function renderPanelLiveHtml(
   panelContext = null,
   historyOptions = {},
 ) {
+  const filter = normalizePanelHistoryFilter(historyOptions.filter);
+  const { lists, counts } = buildPanelHistoryLists(historyDraws, statsDraws, userProfiles, panelContext);
   return `${renderPanelLiveStatsSection(statsDraws, userProfiles, panelContext)}${renderPanelHistorySection(
-    historyDraws,
+    lists[filter],
     projects,
     userProfiles,
     panelContext,
-    historyOptions,
+    { ...historyOptions, filter, counts },
   )}`;
 }
-
 function renderWebPage(draws, message, webUser) {
   const ownerId = webUser?.id ?? getDefaultOwnerId();
   syncBrandProjectTemplatesForOrganizer(ownerId);
@@ -7202,6 +7202,7 @@ function renderWebPage(draws, message, webUser) {
     },
   );
   const payoutQueueHtml = renderPayoutQueueContent(statsDraws, userProfiles, panelContext);
+  const pendingPayoutsSummary = summarizePendingPayouts(statsDraws, userProfiles, panelContext);
   const activeDigestDraws = listActiveDrawsForDigest(historyDraws);
   const remindActivePanelHtml = renderRemindActivePanelContent(activeDigestDraws, projects);
 
@@ -8352,7 +8353,7 @@ ${getPanelFluidTypographyVars()}
     }
     label { display: block; font-size: 12px; margin-bottom: 6px; color: #3b4560; font-weight: 600; }
     .card-dark label { color: #e7edff; }
-    input, select, button:not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.theme-toggle-btn):not(.header-icon-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.winner-copy-btn):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
+    input, select, button:not(.pl-seg-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.theme-toggle-btn):not(.header-icon-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.winner-copy-btn):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
       border-radius: 12px;
       border: 1px solid #cfd8ef;
       padding: 9px 11px;
@@ -8361,7 +8362,7 @@ ${getPanelFluidTypographyVars()}
       background: #fff;
     }
     input, select,
-    button:not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn):not(.winner-copy-btn):not(.header-icon-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
+    button:not(.pl-seg-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.theme-toggle-btn):not(.winner-copy-btn):not(.header-icon-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.settings-action-btn):not(.history-action-btn):not(.winner-action-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
       width: 100%;
     }
     .card-dark input,
@@ -8369,7 +8370,7 @@ ${getPanelFluidTypographyVars()}
       border: 1px solid #6f86d8;
       background: rgba(255, 255, 255, 0.96);
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
+    button:not(.pl-seg-btn):not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab) {
       background: var(--primary);
       color: #fff;
       border: none;
@@ -8377,7 +8378,7 @@ ${getPanelFluidTypographyVars()}
       font-weight: 700;
       transition: all 0.18s ease;
     }
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):hover {
+    button:not(.pl-seg-btn):not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):hover {
       background: var(--primary-2);
       transform: translateY(-1px);
     }
@@ -9948,7 +9949,7 @@ ${getPanelFluidTypographyVars()}
     .draw-submit:not(:disabled),
     .winner-action-btn:not(.winner-action-secondary):not(:disabled),
     .history-action-btn:not(:disabled),
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):not(.btn-secondary):not(.btn-danger):not(:disabled) {
+    button:not(.pl-seg-btn):not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):not(.btn-secondary):not(.btn-danger):not(:disabled) {
       box-shadow: inset 0 1px 0 var(--pemb-fill-hi), inset 0 -2px 0 var(--pemb-fill-lo) !important;
     }
 
@@ -9994,9 +9995,10 @@ ${getPanelFluidTypographyVars()}
     .winner-action-btn:not(:disabled):active,
     .history-action-btn:not(:disabled):active,
     .panel-bottom-bar .quick-action:active,
-    button:not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):not(.btn-secondary):not(.btn-danger):not(:disabled):active {
+    button:not(.pl-seg-btn):not(.theme-toggle-btn):not(.settings-action-btn):not(.winner-copy-btn):not(.quick-action):not(.project-icon-btn):not(.draw-link-btn):not(.history-action-btn):not(.winner-action-btn):not(.panel-sheet-close):not(.panel-sheet-backdrop):not(.header-icon-btn):not(.draw-file-btn):not(.draw-paste-btn):not(.draw-submit):not(.emoji-open):not(.emoji-cell):not(.emoji-tab):not(.btn-secondary):not(.btn-danger):not(:disabled):active {
       box-shadow: var(--pemb-press) !important;
     }
+    ${getPanelLookStyles()}
   </style>
 </head>
 <body>
@@ -10279,7 +10281,11 @@ ${getPanelFluidTypographyVars()}
       <section id="payoutQueuePanel" class="card create-panel panel-hidden">
         <h2 class="create-title">
           <span class="create-title-icon">${renderFormIcon("prize")}</span>
-          Очередь выплат
+          Очередь выплат${
+            pendingPayoutsSummary.count > 0
+              ? ` · ${escapeHtml(formatUsdStat(Math.floor(pendingPayoutsSummary.totalUsdt)))}`
+              : ""
+          }
         </h2>
         <div id="payoutQueueContent" class="payout-queue-content">
           ${payoutQueueHtml}
@@ -10813,6 +10819,7 @@ ${getPanelFluidTypographyVars()}
         sheetRoot.classList.add("is-open");
         sheetRoot.setAttribute("aria-hidden", "false");
         document.body.classList.add("panel-sheet-open");
+        if (window.plPlacePills) window.requestAnimationFrame(() => window.plPlacePills(panel, true));
       }
 
       function togglePanel(panel, btn, isHeaderBtn = false) {
@@ -10990,17 +10997,19 @@ ${getPanelFluidTypographyVars()}
         });
       });
 
-      document.querySelectorAll(".draw-delete-btn").forEach((btn) => {
-        btn.addEventListener("click", (event) => {
-          const prize = btn.dataset.drawPrize || "розыгрыш";
-          const isActive = btn.dataset.drawStatus === "active";
-          const message = isActive
-            ? "Удалить активный розыгрыш «" + prize + "»? Пост в канале будет удалён, участие отменится."
-            : "Удалить розыгрыш «" + prize + "»?";
-          if (!confirm(message)) {
-            event.preventDefault();
-          }
-        });
+      // Delegated: cards brought in by "Показать ещё", the filter or the live
+      // refresh arrive after this runs, and used to be deleted without asking.
+      document.addEventListener("click", (event) => {
+        const btn = event.target.closest(".draw-delete-btn");
+        if (!btn) return;
+        const prize = btn.dataset.drawPrize || "розыгрыш";
+        const isActive = btn.dataset.drawStatus === "active";
+        const message = isActive
+          ? "Удалить активный розыгрыш «" + prize + "»? Пост в канале будет удалён, участие отменится."
+          : "Удалить розыгрыш «" + prize + "»?";
+        if (!confirm(message)) {
+          event.preventDefault();
+        }
       });
 
       cancelBtn.addEventListener("click", resetProjectForm);
@@ -11083,7 +11092,10 @@ ${getPanelFluidTypographyVars()}
             headers["X-Telegram-Init-Data"] = tg.initData;
           }
           const response = await fetch(
-            "${PANEL_BASE}/history?offset=" + encodeURIComponent(offset),
+            "${PANEL_BASE}/history?offset=" +
+              encodeURIComponent(offset) +
+              "&filter=" +
+              encodeURIComponent(root.dataset.filter || "all"),
             {
               credentials: "same-origin",
               headers,
@@ -11093,7 +11105,11 @@ ${getPanelFluidTypographyVars()}
           const data = await response.json();
           const list = document.getElementById("panelHistoryList");
           if (list && data.html) {
+            const shownBefore = list.children.length;
             list.insertAdjacentHTML("beforeend", data.html);
+            Array.from(list.children)
+              .slice(shownBefore)
+              .forEach((card) => card.classList.add("pl-enter"));
           }
           const controls = document.getElementById("panelHistoryControls");
           if (controls) {
@@ -11177,9 +11193,10 @@ ${getPanelFluidTypographyVars()}
           if (Array.isArray(data.liveCards)) {
             data.liveCards.forEach(({ id, html }) => {
               if (!id || !html) return;
-              const existing = root.querySelector('.history-card[data-draw-id="' + id + '"]');
+              const existing = root.querySelector('.pl-card[data-draw-id="' + id + '"]');
               if (!existing) return;
               const openDetails = captureCardDetailsState(existing);
+              const participantsBefore = Number(existing.querySelector("[data-part]")?.textContent);
               const preservedThumb = existing.querySelector("img.history-thumb");
               const keepThumb =
                 preservedThumb &&
@@ -11188,9 +11205,13 @@ ${getPanelFluidTypographyVars()}
                   ? preservedThumb
                   : null;
               existing.outerHTML = html;
-              const nextCard = root.querySelector('.history-card[data-draw-id="' + id + '"]');
+              const nextCard = root.querySelector('.pl-card[data-draw-id="' + id + '"]');
               if (!nextCard) return;
               restoreCardDetailsState(nextCard, openDetails);
+              const participantsAfter = nextCard.querySelector("[data-part]");
+              if (participantsAfter && Number(participantsAfter.textContent) > participantsBefore) {
+                participantsAfter.classList.add("pl-bump");
+              }
               if (keepThumb) {
                 const nextThumb = nextCard.querySelector("img.history-thumb");
                 if (nextThumb && nextThumb.src === keepThumb.src) {
@@ -11284,6 +11305,7 @@ ${getPanelFluidTypographyVars()}
     setupFlashMessages();
     setupOpenBotAfterCreate();
     setupTelegramFormAuth();
+    ${getPanelLookScript({ panelBase: PANEL_BASE })}
   </script>
 </body>
 </html>`;
@@ -11566,7 +11588,7 @@ panelRouter.get("/history", webAuth.requireAuth, requireOrganizer, async (req, r
     await refreshRubUsdtRate();
     const offset = req.query.offset;
     const limit = req.query.limit;
-    res.json(buildPanelHistoryChunk(req.webUser.id, offset, limit));
+    res.json(buildPanelHistoryChunk(req.webUser.id, offset, limit, req.query.filter));
   } catch (error) {
     console.error("[panel] GET /history:", error);
     res.status(500).json({ error: "panel_history_failed" });
