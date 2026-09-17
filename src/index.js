@@ -27,6 +27,7 @@ const {
 const { applyNoLinkPreview } = require("./telegram-no-preview");
 const { createSubscriptionCache } = require("./subscription-cache");
 const { resolveFileLink, getFileLinkCacheStats } = require("./file-link-cache");
+const { createAvatarLinkResolver } = require("./avatar-repair");
 const { isCannotMessageUserError } = require("./telegram-reach");
 const {
   isIgnorableTelegramEditError,
@@ -5043,6 +5044,19 @@ async function ensureUserAvatars(userIds, options = {}) {
   void runSerializedAvatarTask(job);
 }
 
+// Serves a person's photo and mends a stored file_id that Telegram no longer
+// accepts (avatar-repair.js). The panel and the results page share it, so one
+// person is looked up once however many pages ask for them.
+const avatarLinks = createAvatarLinkResolver({
+  readFileId: (userId) => readUserProjectProfilesSnapshot().users?.[String(userId)]?.meta?.avatarFileId || "",
+  resolveLink: (fileId) => resolveFileLink(bot.telegram, fileId),
+  refresh: (userId) => enrichUserAvatar(Number(userId), { force: true }),
+  onRepair: ({ userId, staleFileId, fileId }) => {
+    const outcome = !fileId ? "no photo now" : fileId === staleFileId ? "unchanged" : "new photo stored";
+    console.log(`[avatar] Telegram rejected the stored photo of ${userId}: ${outcome}`);
+  },
+});
+
 function findUserInProfilesByUsername(username) {
   const needle = String(username || "").replace(/^@/, "").trim().toLowerCase();
   if (!needle) {
@@ -5137,7 +5151,7 @@ function renderAccessPersonCard(userId, userProfiles, options = {}) {
   const usernameLine = person.username ? `@${person.username}` : "без username";
   const initial = (fullName || person.username || String(userId)).charAt(0).toUpperCase();
   const avatar = person.avatarFileId
-    ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(userId))}" alt="" class="access-avatar" />`
+    ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(userId))}" alt="" class="access-avatar" data-fallback="${escapeHtml(initial)}" data-fallback-class="access-avatar access-avatar-fallback" data-fallback-style="${escapeHtml(getAvatarFallbackStyle(userId))}" />`
     : `<div class="access-avatar access-avatar-fallback" style="${getAvatarFallbackStyle(userId)}">${escapeHtml(initial)}</div>`;
   const badgeHtml = badge ? `<span class="access-badge">${escapeHtml(badge)}</span>` : "";
   const deleteAction = removable
@@ -6587,7 +6601,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
       : "";
   const initial = (fullName || meta.username || String(winnerId)).charAt(0).toUpperCase() || "?";
   const avatar = meta.avatarFileId
-    ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="pl-av" />`
+    ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="pl-av" data-fallback="${escapeHtml(initial)}" data-fallback-style="${escapeHtml(getAvatarFallbackStyle(winnerId))}" />`
     : `<span class="pl-av" style="${getAvatarFallbackStyle(winnerId)}">${escapeHtml(initial)}</span>`;
   const notifyInfo = winnerNotifications[String(winnerId)];
   const trcDisplay = getWinnerPanelTrcDisplay(draw, notifyInfo, projectData);
@@ -11507,6 +11521,7 @@ registerWinnersMiniApp(app, {
   shouldHideParticipant: (userId) => isPlatformAdmin(userId),
   enrichUserAvatar,
   ensureUserAvatars,
+  resolveUserAvatarLink: (userId) => avatarLinks.resolve(userId),
   bot: WEB_ONLY ? null : bot,
   designPreview: ENABLE_DEV_PREVIEW,
   // Opening someone's Telegram profile from the results page is an admin tool.
@@ -11732,17 +11747,12 @@ panelRouter.get("/qr", webAuth.requireAuth, requireOrganizer, async (req, res) =
 });
 
 panelRouter.get("/avatar/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
-  const userId = req.params.userId;
-  // One lookup per picture in a list: the snapshot, not a full parse each.
-  const userProfiles = readUserProjectProfilesSnapshot();
-  const fileId = userProfiles.users?.[String(userId)]?.meta?.avatarFileId;
-  if (!fileId) {
-    res.status(404).send("No avatar");
-    return;
-  }
-
   try {
-    const url = await resolveFileLink(bot.telegram, fileId);
+    const url = await avatarLinks.resolve(req.params.userId);
+    if (!url) {
+      res.status(404).send("No avatar");
+      return;
+    }
     res.set("Cache-Control", "private, max-age=1800");
     res.redirect(String(url));
   } catch (error) {

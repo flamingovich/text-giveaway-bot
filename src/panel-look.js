@@ -982,6 +982,26 @@ function getPanelLookScript({ panelBase }) {
         });
       }
 
+      // A photo that does not load - Telegram briefly unreachable, or a photo
+      // deleted since the page was drawn - becomes the initial on a gradient that
+      // a person without a photo gets, instead of an empty circle. Load errors do
+      // not bubble, hence the capture phase; the scan catches pictures that
+      // failed before this script ran.
+      function setupAvatarFallback() {
+        const swap = (img) => {
+          if (!(img instanceof HTMLImageElement) || !img.hasAttribute("data-fallback")) return;
+          const span = document.createElement("span");
+          span.className = img.getAttribute("data-fallback-class") || img.className;
+          span.setAttribute("style", img.getAttribute("data-fallback-style") || "");
+          span.textContent = img.getAttribute("data-fallback");
+          img.replaceWith(span);
+        };
+        document.addEventListener("error", (event) => swap(event.target), true);
+        document.querySelectorAll("img[data-fallback]").forEach((img) => {
+          if (img.complete && img.naturalWidth === 0) swap(img);
+        });
+      }
+
       // Registered in the capture phase so the class is on before the theme
       // itself switches in the button's own handler.
       function setupThemeFade() {
@@ -1037,6 +1057,7 @@ function getPanelLookScript({ panelBase }) {
         });
       }).observe(document.body, { childList: true, subtree: true });
 
+      setupAvatarFallback();
       placePills(document, true);
       countUpStats();
       settleEntrance();

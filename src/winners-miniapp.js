@@ -15,7 +15,6 @@ const {
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { isParticipantAnonymous, buildPublicIdentity } = require("./participant-anonymity");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
-const { resolveFileLink } = require("./file-link-cache");
 
 const GIFT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M20 12v10H4V12"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>`;
 const TROPHY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10"/><path d="M17 4v3a5 5 0 0 1-10 0V4"/><path d="M5 5H3v1a3 3 0 0 0 3 3"/><path d="M19 5h2v1a3 3 0 0 1-3 3"/></svg>`;
@@ -463,6 +462,7 @@ function registerWinnersMiniApp(app, deps) {
     shouldHideParticipant,
     enrichUserAvatar,
     ensureUserAvatars,
+    resolveUserAvatarLink,
     bot,
     designPreview,
     validateInitData,
@@ -507,15 +507,17 @@ function registerWinnersMiniApp(app, deps) {
   }
 
   app.get("/winners/avatar/:userId", async (req, res) => {
-    // One request per picture as a list renders: the snapshot, not a full parse each.
-    const userProfiles = readUserProjectProfilesSnapshot();
-    const fileId = userProfiles.users?.[String(req.params.userId)]?.meta?.avatarFileId;
-    if (!fileId || !bot) {
+    if (!bot || !resolveUserAvatarLink) {
       res.status(404).send("No avatar");
       return;
     }
     try {
-      const url = await resolveFileLink(bot.telegram, fileId);
+      // Also mends a stored photo Telegram no longer accepts (avatar-repair.js).
+      const url = await resolveUserAvatarLink(req.params.userId);
+      if (!url) {
+        res.status(404).send("No avatar");
+        return;
+      }
       res.set("Cache-Control", "private, max-age=1800");
       res.redirect(String(url));
     } catch {
