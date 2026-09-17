@@ -119,6 +119,8 @@ const {
   countDepositNetworks,
 } = require("./panel-format");
 const { PANEL_ICONS, getPanelLookStyles, getPanelLookScript } = require("./panel-look");
+const { createRenderReads, resolveWinnerReferralBadge } = require("./panel-referral-badge");
+const { getPanelBuildRedirect } = require("./panel-build-redirect");
 const {
   getWinnerAddressForfeitureKind: forfeitureKindOf,
   canRequestWinnerAddressAgain: canAskWinnerForAddressAgain,
@@ -1485,12 +1487,14 @@ function renderPayoutQueueContent(draws, userProfiles, panelContext = null) {
         }${networkNames[key]}<em>(${counts[key]})</em></button>`,
     )
     .join("");
+  const reads = createPanelRenderReads();
   const winnerRows = entries
     .map(({ draw, winnerId, antiFraudSignals }, index) =>
       renderWinnerCard(draw, winnerId, userProfiles, draw.winnerNotifications || {}, antiFraudSignals, {
         showProject: true,
         returnPanel: "payoutQueue",
         index,
+        reads,
       }),
     )
     .join("");
@@ -6541,39 +6545,32 @@ function formatOrganizerReferralLabel(ownerId, userProfiles) {
   return "организатор";
 }
 
-function getWinnerReferralBadgeHtml(winnerId, draw, userProfiles) {
-  // First, because it is the reason this particular prize is halved - "Реф"
-  // beside a halved amount would read as a mistake.
-  if (isParticipationUnregistered(draw, winnerId)) {
+// The documents one panel page reads for its winner cards - see panel-referral-badge.js.
+// Made per list and dropped with it: a page must not see an older page's reading.
+function createPanelRenderReads() {
+  return createRenderReads({ projects: readProjects, data: readData });
+}
+
+function getWinnerReferralBadgeHtml(winnerId, draw, userProfiles, project, projectData, reads) {
+  const badge = resolveWinnerReferralBadge({
+    winnerId,
+    draw,
+    project,
+    projectData,
+    userProfiles,
+    reads: reads || createPanelRenderReads(),
+    isUnregistered: isParticipationUnregistered(draw, winnerId),
+  });
+  if (badge.kind === "unregistered") {
     return `<span class="winner-badge winner-badge-warn">Не зарег.</span>`;
   }
-  const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
-  const drawOwnerId = getDrawOwnerId(draw);
-  const project = draw.projectId ? getProjectById(draw.projectId, draw.ownerId) : null;
-
-  let referralOwnerId = null;
-  if (project?.name) {
-    const brandEntries = listUserBrandProjectEntries(
-      winnerId,
-      project.name,
-      readUserProjectProfiles,
-      readProjects,
-    );
-    referralOwnerId = resolveReferralOwnerForBrand(winnerId, brandEntries, readData);
-  }
-  if (referralOwnerId == null && projectData.referralOwnerId != null) {
-    referralOwnerId = Number(projectData.referralOwnerId);
-  }
-
-  if (referralOwnerId && drawOwnerId && referralOwnerId !== drawOwnerId) {
-    const label = formatOrganizerReferralLabel(referralOwnerId, userProfiles);
+  if (badge.kind === "foreign") {
+    const label = formatOrganizerReferralLabel(badge.referralOwnerId, userProfiles);
     return `<span class="winner-badge winner-badge-warn">Не мой реф (${escapeHtml(label)})</span>`;
   }
-
-  if (projectData.selfReportedNonReferral) {
+  if (badge.kind === "non-referral") {
     return `<span class="winner-badge winner-badge-warn">Не реф</span>`;
   }
-
   return `<span class="winner-badge winner-badge-ok">Реф</span>`;
 }
 
@@ -6618,7 +6615,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, antiFraudSignals, notifyInfo);
   const isPrizeForfeited = isWinnerPrizeForfeited(notifyInfo, antiFraud);
   const forfeitedDeliveryReason = getWinnerForfeitedDeliveryReason(notifyInfo);
-  const refBadge = getWinnerReferralBadgeHtml(winnerId, draw, userProfiles);
+  const refBadge = getWinnerReferralBadgeHtml(winnerId, draw, userProfiles, project, projectData, options.reads);
   // "Выплачено" leads: the card no longer has a separate "Выплачено:" row.
   // A burnt prize shows only its reason: "Нет адреса", "Отписка", "Блок". An
   // anti-fraud burn has no reason of its own - its badges beside this one say
@@ -6965,6 +6962,7 @@ function buildPanelLiveFingerprint(draws, userProfiles, panelContext = null) {
 
 function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = null) {
   const nowMs = Date.now();
+  const reads = createPanelRenderReads();
   return draws
     .map((draw, index) => {
       const project = projects.find((item) => item.id === draw.projectId);
@@ -6977,7 +6975,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = n
       const antiFraudSignals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
       const winnerRows = (draw.winnerIds || [])
         .map((winnerId) =>
-          renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals)
+          renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals, { reads })
         )
         .join("");
       const drawPath = `${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}`;
@@ -11591,6 +11589,21 @@ panelRouter.get("/", async (req, res) => {
     }
     const qs = params.toString();
     res.redirect(303, `${PANEL_BASE}?${qs}`);
+    return;
+  }
+
+  // Without the build in the URL the page reloads itself right after loading;
+  // sending the build first saves drawing the whole panel twice per open.
+  const buildRedirect = getPanelBuildRedirect({
+    originalUrl: req.originalUrl,
+    build: PANEL_PAGE_BUILD,
+    publicUrl: WEB_PUBLIC_URL,
+    basePath: PANEL_BASE,
+  });
+  if (buildRedirect) {
+    console.log(`[panel] GET / owner=${user.id} build=${PANEL_PAGE_BUILD} v=${req.query.v || "-"} -> redirect`);
+    res.set({ "Cache-Control": "no-store", Pragma: "no-cache" });
+    res.redirect(302, buildRedirect);
     return;
   }
 
