@@ -30,6 +30,7 @@ const { resolveFileLink, getFileLinkCacheStats } = require("./file-link-cache");
 const { createAvatarLinkResolver } = require("./avatar-repair");
 const { buildRichPostHtml, padButtonLabel, readMessageButtons } = require("./rich-post");
 const { createRichMessageApi, readCoverFileId, COVER_MEDIA_ID } = require("./telegram-rich");
+const { buildActiveDrawsDigestRichHtml } = require("./draw-digest-rich");
 const { isCannotMessageUserError } = require("./telegram-reach");
 const {
   isIgnorableTelegramEditError,
@@ -2552,6 +2553,24 @@ function getDrawPrizeAmountUsd(draw) {
   return 0;
 }
 
+// The reminder post as a rich message: every draw is a button of its own
+// instead of a line ending in "КЛИК" (draw-digest-rich.js).
+function buildActiveDrawsDigestRichContent(draws, options = {}) {
+  const totalUsd = draws.reduce((sum, draw) => sum + getDrawPrizeAmountUsd(draw), 0);
+  return buildActiveDrawsDigestRichHtml({
+    headerPrizeLabel: formatUsdPrizeForPost(totalUsd),
+    items: draws.map((draw) => ({
+      prizeLabel: formatDrawPrizePlain(draw),
+      url: getJoinParticipateTextLinkUrl(draw.id),
+    })),
+    projects: options.projects || [],
+  });
+}
+
+function canSendDigestAsRich() {
+  return Boolean(DRAW_POST_RICH && BOT_TOKEN);
+}
+
 function buildActiveDrawsDigestTelegramContent(draws, options = {}) {
   const items = draws.map((draw) => {
     const timeLeftLabel = formatTimeUntilDrawEndLabel(draw);
@@ -2609,6 +2628,9 @@ function normalizeActiveDrawsDigestEntry(raw) {
     timeLeftKey: raw.timeLeftKey != null ? String(raw.timeLeftKey) : null,
     timeLeftUpdatedAt: raw.timeLeftUpdatedAt || null,
     digestProjectIds: Array.isArray(raw.digestProjectIds) ? raw.digestProjectIds.map(String) : [],
+    // Reminders sent before the buttons moved inside the post are still live in
+    // channels, and only the way they were sent can edit them.
+    rich: Boolean(raw.rich),
   };
 }
 
@@ -2633,6 +2655,7 @@ function setActiveDrawsDigestEntry(data, channelId, entry) {
     digestProjectIds: Array.isArray(entry.digestProjectIds)
       ? entry.digestProjectIds.map(String)
       : [],
+    rich: Boolean(entry.rich),
   };
 }
 
@@ -2674,6 +2697,15 @@ async function deleteActiveDrawsDigestMessages(data, channelId) {
 }
 
 async function editActiveDrawsDigestMessage(channelId, messageId, draws, options = {}) {
+  if (options.rich) {
+    await richMessageApi.editRichPost({
+      chatId: channelId,
+      messageId,
+      html: buildActiveDrawsDigestRichContent(draws, options),
+    });
+    return;
+  }
+
   const content = buildActiveDrawsDigestTelegramContent(draws, options);
   await bot.telegram.editMessageText(channelId, messageId, undefined, content.text, {
     entities: content.entities,
@@ -2712,7 +2744,7 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
   const messageId = entry.messageIds[0];
   const digestOwnerId = entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId;
   const digestProjects = resolveDigestProjects(entry.digestProjectIds, digestOwnerId);
-  const digestOptions = { projects: digestProjects };
+  const digestOptions = { projects: digestProjects, rich: entry.rich };
   try {
     await editActiveDrawsDigestMessage(channelId, messageId, remaining, digestOptions);
     for (const extraId of entry.messageIds.slice(1)) {
@@ -2725,6 +2757,7 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
       timeLeftKey: buildDigestTimeLeftKey(remaining),
       timeLeftUpdatedAt: new Date().toISOString(),
       digestProjectIds: entry.digestProjectIds || [],
+      rich: entry.rich,
     });
   } catch (error) {
     console.error(
@@ -2740,6 +2773,7 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
           timeLeftKey: buildDigestTimeLeftKey(remaining),
           timeLeftUpdatedAt: new Date().toISOString(),
           digestProjectIds: entry.digestProjectIds || [],
+          rich: entry.rich,
         });
         return;
       }
@@ -2750,11 +2784,20 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
 
 async function sendActiveDrawsDigestForChannel(data, channelId, draws, options = {}) {
   await deleteActiveDrawsDigestMessages(data, channelId);
-  const content = buildActiveDrawsDigestTelegramContent(draws, options);
-  const message = await bot.telegram.sendMessage(channelId, content.text, {
-    entities: content.entities,
-    link_preview_options: content.link_preview_options,
-  });
+  const rich = canSendDigestAsRich();
+  let message;
+  if (rich) {
+    message = await richMessageApi.sendRichPost({
+      chatId: channelId,
+      html: buildActiveDrawsDigestRichContent(draws, options),
+    });
+  } else {
+    const content = buildActiveDrawsDigestTelegramContent(draws, options);
+    message = await bot.telegram.sendMessage(channelId, content.text, {
+      entities: content.entities,
+      link_preview_options: content.link_preview_options,
+    });
+  }
   setActiveDrawsDigestEntry(data, channelId, {
     messageIds: message?.message_id ? [message.message_id] : [],
     drawIds: draws.map((draw) => String(draw.id)),
@@ -2762,6 +2805,7 @@ async function sendActiveDrawsDigestForChannel(data, channelId, draws, options =
     timeLeftKey: buildDigestTimeLeftKey(draws),
     timeLeftUpdatedAt: new Date().toISOString(),
     digestProjectIds: Array.isArray(options.projectIds) ? options.projectIds.map(String) : [],
+    rich,
   });
   return message;
 }
@@ -4792,7 +4836,7 @@ async function syncActiveDrawsDigestCountdowns(data) {
     const messageId = entry.messageIds[0];
     const digestOwnerId = entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId;
     const digestProjects = resolveDigestProjects(entry.digestProjectIds, digestOwnerId);
-    const digestOptions = { projects: digestProjects };
+    const digestOptions = { projects: digestProjects, rich: entry.rich };
     try {
       await editActiveDrawsDigestMessage(channelId, messageId, remaining, digestOptions);
       for (const extraId of entry.messageIds.slice(1)) {
@@ -4805,6 +4849,7 @@ async function syncActiveDrawsDigestCountdowns(data) {
         timeLeftKey: timeKey,
         timeLeftUpdatedAt: new Date().toISOString(),
         digestProjectIds: entry.digestProjectIds || [],
+        rich: entry.rich,
       });
       updated += 1;
       await sleep(350);
