@@ -28,6 +28,8 @@ const { applyNoLinkPreview } = require("./telegram-no-preview");
 const { createSubscriptionCache } = require("./subscription-cache");
 const { resolveFileLink, getFileLinkCacheStats } = require("./file-link-cache");
 const { createAvatarLinkResolver } = require("./avatar-repair");
+const { buildRichPostHtml, padButtonLabel, readMessageButtons } = require("./rich-post");
+const { createRichMessageApi, readCoverFileId, COVER_MEDIA_ID } = require("./telegram-rich");
 const { isCannotMessageUserError } = require("./telegram-reach");
 const {
   isIgnorableTelegramEditError,
@@ -158,8 +160,14 @@ const {
 } = require("./winner-notify-sync");
 
 const DRAW_POST_PREMIUM_EMOJI = process.env.DRAW_POST_PREMIUM_EMOJI !== "false";
+// Channel posts are rich messages (Bot API 10.3), which is what puts the
+// "Участвую" button inside the post instead of under it. Premium emoji stay out
+// of them on purpose - they belong in private chats. DRAW_POST_RICH=false in
+// .env brings the old post back without a deploy.
+const DRAW_POST_RICH = process.env.DRAW_POST_RICH !== "false";
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const richMessageApi = createRichMessageApi({ token: BOT_TOKEN });
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .split(",")
   .map((id) => Number(id.trim()))
@@ -983,9 +991,14 @@ function rememberDrawPostFingerprint(draw) {
 function getDrawPostFingerprint(draw) {
   try {
     const includeWinners = draw.status === DRAW_STATUS.FINISHED;
-    const markup = includeWinners
-      ? getFinishedKeyboard(draw).reply_markup
-      : getKeyboardMarkup(draw.id, getDrawParticipantCount(draw));
+    // A rich post has no keyboard under it; its button, counter and all, is
+    // part of the post, so that is what the fingerprint watches instead.
+    const markup =
+      draw.messageType === "rich"
+        ? getDrawRichButtons(draw, includeWinners)
+        : includeWinners
+          ? getFinishedKeyboard(draw).reply_markup
+          : getKeyboardMarkup(draw.id, getDrawParticipantCount(draw));
     // Only the keyboard, deliberately. The caption carries a countdown that
     // ticks on its own while the post keeps a throttled, coarser label, so
     // hashing the caption made the fingerprint stricter than reality: it
@@ -1017,13 +1030,13 @@ function isActiveDrawPostCountStale(draw) {
   return draw.postParticipantCount !== current;
 }
 
-function parseParticipantCountFromMarkup(replyMarkup) {
-  for (const row of replyMarkup?.inline_keyboard || []) {
-    for (const btn of row) {
-      const match = String(btn.text || "").match(/Участвовать\s*\((\d+)\)/i);
-      if (match) {
-        return Number(match[1]);
-      }
+// Reads the counter off the post itself, whether the button sits under it
+// ("Участвовать (12)") or inside it ("🎁 Участвую (12)").
+function parseParticipantCountFromPost(post) {
+  for (const button of readMessageButtons(post)) {
+    const match = button.text.match(/Участв\S*\s*\((\d+)\)/i);
+    if (match) {
+      return Number(match[1]);
     }
   }
   return null;
@@ -2866,7 +2879,7 @@ function getWinnerMentionLink(userProfiles, winnerId, draw = null) {
 }
 
 function getDrawPostTelegramContent(draw, options = {}) {
-  const { includeWinners = false, forCaption = false } = options;
+  const { includeWinners = false, forCaption = false, rich = false } = options;
   const projectLine = getDrawPostProjectLine(draw);
 
   if (includeWinners) {
@@ -2877,7 +2890,9 @@ function getDrawPostTelegramContent(draw, options = {}) {
     const payload = buildDrawPostFinishedPayload({
       prizeLabel: formatDrawPrizePlain(draw),
       winners,
-      resultsUrl: getWinnersChannelUrl(draw.id),
+      // In a rich post "Проверить результаты" is a button of its own, so the
+      // line of text that used to carry the link is left out.
+      resultsUrl: rich ? "" : getWinnersChannelUrl(draw.id),
       postTitle: draw.postTitle || "",
       projectLine,
     });
@@ -2894,7 +2909,7 @@ function getDrawPostTelegramContent(draw, options = {}) {
 
   const { endManual, durationLabel } = getActivePostDurationParts(draw);
   const payload = buildDrawPostCaptionPayload({
-    usePremiumEmoji: DRAW_POST_PREMIUM_EMOJI,
+    usePremiumEmoji: rich ? false : DRAW_POST_PREMIUM_EMOJI,
     prizeLabel: formatDrawPrizePlain(draw),
     winnersCount: draw.winnersCount,
     durationLabel,
@@ -3231,7 +3246,74 @@ function getFinishedKeyboard(draw) {
   return { reply_markup: { inline_keyboard: [[button]] } };
 }
 
+function drawHasCoverFile(draw) {
+  return Boolean(draw.imagePath && fs.existsSync(draw.imagePath));
+}
+
+// The cover travels once: the first send uploads the file, and every later edit
+// sends back the file_id Telegram answered with.
+function getDrawRichCover(draw) {
+  if (draw.coverFileId) {
+    return { fileId: draw.coverFileId };
+  }
+  return drawHasCoverFile(draw) ? { path: draw.imagePath } : null;
+}
+
+// Buttons inside the post: green to join, blue to check the results. Their
+// labels are padded because a button in a post is only as wide as its label.
+function getDrawRichButtons(draw, includeWinners) {
+  if (includeWinners) {
+    const resultsUrl = getWinnersChannelUrl(draw.id);
+    return resultsUrl
+      ? [{ text: padButtonLabel("🔎 Проверить результаты"), url: resultsUrl, style: "primary" }]
+      : [];
+  }
+  const participateUrl = getJoinParticipateUrl(draw.id);
+  return participateUrl
+    ? [
+        {
+          text: padButtonLabel(`🎁 Участвую (${getDrawParticipantCount(draw)})`),
+          url: participateUrl,
+          style: "success",
+        },
+      ]
+    : [];
+}
+
+function buildDrawRichHtml(draw, includeWinners) {
+  const content = getDrawPostTelegramContent(draw, { includeWinners, rich: true });
+  return buildRichPostHtml({
+    text: content.text,
+    entities: content.caption_entities || [],
+    coverMediaId: drawHasCoverFile(draw) || draw.coverFileId ? COVER_MEDIA_ID : "",
+    buttons: getDrawRichButtons(draw, includeWinners),
+  });
+}
+
+// A post can only be rich if its button has somewhere to lead - a join link
+// through the mini app. Mega draws keep their own post and their own keyboard.
+function canPublishDrawAsRich(draw, includeWinners = false) {
+  return Boolean(
+    DRAW_POST_RICH && BOT_TOKEN && !isMegaDraw(draw) && getDrawRichButtons(draw, includeWinners).length,
+  );
+}
+
 async function publishDrawToChannel(draw) {
+  if (canPublishDrawAsRich(draw)) {
+    const message = await richMessageApi.sendRichPost({
+      chatId: draw.channelId,
+      html: buildDrawRichHtml(draw, false),
+      cover: getDrawRichCover(draw),
+    });
+    draw.messageType = "rich";
+    draw.messageId = message.message_id;
+    draw.coverFileId = readCoverFileId(message) || draw.coverFileId || "";
+    markDrawPostParticipantCount(draw);
+    markDrawCountdownCache(draw);
+    draw.awaitingChannelPost = false;
+    return;
+  }
+
   const keyboard = getKeyboard(draw.id, (draw.participantIds || []).length);
 
   if (draw.imagePath && fs.existsSync(draw.imagePath)) {
@@ -3419,19 +3501,16 @@ function formatDrawChannelLabel(channelId) {
   return String(channelId || "канал");
 }
 
-function extractDrawIdFromParticipateMarkup(replyMarkup) {
-  const rows = replyMarkup?.inline_keyboard || [];
-  for (const row of rows) {
-    for (const btn of row) {
-      const url = String(btn.url || "");
-      const startAppMatch = url.match(/startapp=([^&/?#]+)/);
-      if (startAppMatch) {
-        return decodeURIComponent(startAppMatch[1]);
-      }
-      const deepLinkMatch = url.match(/[?&]start=join_([^&/?#]+)/);
-      if (deepLinkMatch) {
-        return decodeURIComponent(deepLinkMatch[1]);
-      }
+function extractDrawIdFromPost(post) {
+  for (const button of readMessageButtons(post)) {
+    const url = String(button.url || "");
+    const startAppMatch = url.match(/startapp=([^&/?#]+)/);
+    if (startAppMatch) {
+      return decodeURIComponent(startAppMatch[1]);
+    }
+    const deepLinkMatch = url.match(/[?&]start=join_([^&/?#]+)/);
+    if (deepLinkMatch) {
+      return decodeURIComponent(deepLinkMatch[1]);
     }
   }
   return "";
@@ -3462,9 +3541,9 @@ async function linkDrawChannelPost(draw, post) {
   }
 
   draw.messageId = post.message_id;
-  draw.messageType = post.photo ? "photo" : "text";
+  draw.messageType = post.rich_message ? "rich" : post.photo ? "photo" : "text";
   draw.awaitingChannelPost = false;
-  const postedCount = parseParticipantCountFromMarkup(post.reply_markup);
+  const postedCount = parseParticipantCountFromPost(post);
   markDrawPostParticipantCount(
     draw,
     Number.isFinite(postedCount) ? postedCount : getDrawParticipantCount(draw),
@@ -3474,7 +3553,7 @@ async function linkDrawChannelPost(draw, post) {
 }
 
 async function tryLinkDrawFromChannelPost(post) {
-  const drawId = extractDrawIdFromParticipateMarkup(post.reply_markup);
+  const drawId = extractDrawIdFromPost(post);
   if (!drawId) {
     return false;
   }
@@ -3515,7 +3594,7 @@ function findDrawForForwardedPost(draws, userId, forwardedChat, message) {
 
   // Пересланный пост обычно сохраняет кнопку со ссылкой — по ней розыгрыш
   // определяется точно. Без кнопки привязываем, только если кандидат один.
-  const markupDrawId = extractDrawIdFromParticipateMarkup(message?.reply_markup);
+  const markupDrawId = extractDrawIdFromPost(message);
   if (markupDrawId) {
     return candidates.find((draw) => draw.id === markupDrawId) || null;
   }
@@ -3537,21 +3616,29 @@ async function tryLinkDrawFromForwardedPost(userId, forwardedChat, message) {
     return null;
   }
 
+  // A rich post carries this draw's join link inside itself, and no other
+  // message in the channel does, so it needs no probe - and a probe would be
+  // wrong anyway: editing its markup would hang a second keyboard under it.
+  const provenByOwnJoinLink =
+    Boolean(message?.rich_message) && extractDrawIdFromPost(message) === draw.id;
+
   // Чужое сообщение Telegram редактировать не даст. Пробная правка кнопки —
   // единственный способ убедиться, что переслали именно пост бота, а не
   // случайное сообщение из канала: иначе розыгрыш ушёл бы в мёртвую привязку.
-  try {
-    await bot.telegram.editMessageReplyMarkup(
-      draw.channelId,
-      messageId,
-      undefined,
-      getKeyboardMarkup(draw.id, getDrawParticipantCount(draw)),
-    );
-  } catch (error) {
-    // «not modified» приходит только на своё же сообщение — это тоже успех.
-    if (!/message is not modified/i.test(String(error?.message || ""))) {
-      console.warn(`[draw] пересланное сообщение не подошло для ${draw.id}: ${error.message}`);
-      return null;
+  if (!provenByOwnJoinLink) {
+    try {
+      await bot.telegram.editMessageReplyMarkup(
+        draw.channelId,
+        messageId,
+        undefined,
+        getKeyboardMarkup(draw.id, getDrawParticipantCount(draw)),
+      );
+    } catch (error) {
+      // «not modified» приходит только на своё же сообщение — это тоже успех.
+      if (!/message is not modified/i.test(String(error?.message || ""))) {
+        console.warn(`[draw] пересланное сообщение не подошло для ${draw.id}: ${error.message}`);
+        return null;
+      }
     }
   }
 
@@ -3560,6 +3647,7 @@ async function tryLinkDrawFromForwardedPost(userId, forwardedChat, message) {
     chat: forwardedChat,
     photo: message.photo,
     reply_markup: message.reply_markup,
+    rich_message: message.rich_message,
   });
   if (!linked) {
     return null;
@@ -3688,6 +3776,21 @@ function overlayLiveDrawProgress(draw) {
   return draw;
 }
 
+async function editDrawPostAsRich(draw, includeWinners) {
+  const message = await withTelegramEditTimeout(() =>
+    richMessageApi.editRichPost({
+      chatId: draw.channelId,
+      messageId: draw.messageId,
+      html: buildDrawRichHtml(draw, includeWinners),
+      cover: getDrawRichCover(draw),
+    }),
+  );
+  if (!draw.coverFileId) {
+    draw.coverFileId = readCoverFileId(message) || "";
+  }
+  draw.messageType = "rich";
+}
+
 async function editDrawPostAsCaption(draw, includeWinners, keyboard) {
   const captionOpts = applyDrawPostContentToTelegramOpts(
     draw,
@@ -3745,9 +3848,14 @@ async function updateDrawPost(draw, includeWinners) {
 
   const keyboard = includeWinners ? getFinishedKeyboard(draw) : getKeyboard(draw.id, (draw.participantIds || []).length);
   const photoFirst = draw.messageType === "photo";
-  const attempts = photoFirst
-    ? [editDrawPostAsCaption, editDrawPostAsText]
-    : [editDrawPostAsText, editDrawPostAsCaption];
+  // A rich post can only be edited as a rich message; the other two methods
+  // would answer "there is no text in the message to edit" and read as final.
+  const attempts =
+    draw.messageType === "rich"
+      ? [editDrawPostAsRich]
+      : photoFirst
+        ? [editDrawPostAsCaption, editDrawPostAsText]
+        : [editDrawPostAsText, editDrawPostAsCaption];
 
   // Only one of the two attempts can ever be right for a given message, so the
   // other one's complaint is expected noise. Both are kept and weighed together
@@ -4562,6 +4670,14 @@ async function refreshDrawPostKeyboard(draw) {
     return;
   }
   const count = getDrawParticipantCount(draw);
+  if (draw.messageType === "rich") {
+    // The button is part of the post, so the post is what gets rewritten.
+    await editDrawPostAsRich(draw, draw.status === DRAW_STATUS.FINISHED);
+    markDrawPostParticipantCount(draw, count);
+    rememberDrawPostFingerprint(draw);
+    return;
+  }
+
   const markup =
     draw.status === DRAW_STATUS.FINISHED
       ? getFinishedKeyboard(draw).reply_markup
