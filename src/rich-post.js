@@ -130,23 +130,32 @@ function findBlockquotes(entities) {
     .sort((a, b) => a.start - b.start);
 }
 
-// Every line of plain text becomes its own paragraph; empty lines are the space
-// between paragraphs and carry nothing of their own.
-function renderParagraphs(text, entities, start, end, options) {
-  let out = "";
-  let lineStart = start;
-  for (let i = start; i <= end; i += 1) {
-    if (i === end || text[i] === "\n") {
-      if (i > lineStart) {
-        const line = renderRange(text, entities, lineStart, i, options);
-        if (line) {
-          out += `<p>${line}</p>\n`;
-        }
-      }
+// A run of plain text becomes one paragraph whose lines are separated by <br>.
+// Line by line paragraphs looked wrong: Telegram draws them tight against each
+// other, so the empty line the post has between the project and the prize was
+// lost and the post read as one lump. Newlines that only stand between this run
+// and a quotation block are dropped - the block is a break of its own.
+function renderParagraph(text, entities, start, end, options) {
+  let from = start;
+  let to = end;
+  while (from < to && text[from] === "\n") {
+    from += 1;
+  }
+  while (to > from && text[to - 1] === "\n") {
+    to -= 1;
+  }
+  if (to <= from) {
+    return "";
+  }
+  const lines = [];
+  let lineStart = from;
+  for (let i = from; i <= to; i += 1) {
+    if (i === to || text[i] === "\n") {
+      lines.push(i > lineStart ? renderRange(text, entities, lineStart, i, options) : "");
       lineStart = i + 1;
     }
   }
-  return out;
+  return `<p>${lines.join("<br>")}</p>\n`;
 }
 
 function renderBlockquote(text, entities, range, options) {
@@ -166,12 +175,12 @@ function richHtmlFromEntities(text, entities, options = {}) {
   let pos = 0;
   for (const range of findBlockquotes(entities)) {
     if (range.start > pos) {
-      out += renderParagraphs(source, inline, pos, range.start, options);
+      out += renderParagraph(source, inline, pos, range.start, options);
     }
     out += renderBlockquote(source, inline, range, options);
     pos = Math.max(pos, range.end);
   }
-  out += renderParagraphs(source, inline, pos, source.length, options);
+  out += renderParagraph(source, inline, pos, source.length, options);
   return out.trimEnd();
 }
 

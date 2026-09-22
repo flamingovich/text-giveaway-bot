@@ -30,8 +30,9 @@ function withoutBlankLines(text) {
   return text.split("\n").map((line) => line.trim()).filter(Boolean).join("\n");
 }
 
-test("plain lines become paragraphs, blank lines are just spacing", () => {
-  assert.equal(richHtmlFromEntities("Первая\n\nВторая", []), "<p>Первая</p>\n<p>Вторая</p>");
+test("a run of text is one paragraph, and its empty lines stay empty", () => {
+  assert.equal(richHtmlFromEntities("Первая\n\nВторая", []), "<p>Первая<br><br>Вторая</p>");
+  assert.equal(richHtmlFromEntities("Первая\nВторая", []), "<p>Первая<br>Вторая</p>");
   assert.equal(richHtmlFromEntities("", []), "");
   assert.equal(richHtmlFromEntities("\n\n", []), "");
 });
@@ -112,7 +113,7 @@ test("entities in any order, nested to any depth", () => {
 
 test("a style spanning several lines is applied line by line", () => {
   const html = richHtmlFromEntities("Первая\nВторая", [{ type: "bold", offset: 0, length: 13 }]);
-  assert.equal(html, "<p><b>Первая</b></p>\n<p><b>Вторая</b></p>");
+  assert.equal(html, "<p><b>Первая</b><br><b>Вторая</b></p>");
 });
 
 test("a style that runs out of the one around it is dropped, not mangled", () => {
@@ -156,7 +157,7 @@ test("the whole post: cover, text, button", () => {
   });
   assert.equal(
     html,
-    '<img src="tg://photo?id=cover"/>\n<p><b>Приз</b></p>\n<p>Жми</p>\n<tg-button-row><tg-button type="url" style="success" url="https://t.me/x">Участвую</tg-button></tg-button-row>',
+    '<img src="tg://photo?id=cover"/>\n<p><b>Приз</b><br>Жми</p>\n<tg-button-row><tg-button type="url" style="success" url="https://t.me/x">Участвую</tg-button></tg-button-row>',
   );
   assert.equal(
     buildRichPostHtml({ text: "Приз", entities: [] }),
@@ -180,8 +181,7 @@ test("the live draw post keeps every word it has today", () => {
   assert.equal(
     html,
     [
-      "<p><b>Обмотки рук | Скотч</b></p>",
-      "<p><b>🎁 РОЗЫГРЫШ НА 50$</b></p>",
+      "<p><b>Обмотки рук | Скотч</b><br><br><b>🎁 РОЗЫГРЫШ НА 50$</b></p>",
       "<blockquote>👥 Призовых мест: <b>1</b><br>⏰ Итоги через <b>2 дня</b></blockquote>",
       "<p><b>👇 Жми кнопку, для участия 👇</b></p>",
     ].join("\n"),
@@ -278,4 +278,27 @@ test("a button label made of styled pieces reads as its words", () => {
     }),
     [{ text: "Участвую (7)", url: "https://t.me/x" }],
   );
+});
+
+test("the empty line between the project and the prize is kept", () => {
+  const payload = buildDrawPostCaptionPayload({
+    usePremiumEmoji: false,
+    prizeLabel: "75$",
+    winnersCount: 3,
+    durationLabel: "23 часа",
+    endManual: false,
+    postTitle: "⚡ 3 ШТОРЫ И ВСЕ 2Х…",
+    projectLine: { emoji: "🐻", name: "LuckyBear", url: "https://depman.vip/bear", displayUrl: "depman.vip/bear" },
+  });
+  const html = richHtmlFromEntities(payload.caption, payload.caption_entities);
+  assert.equal(
+    html,
+    [
+      '<p><b>⚡ 3 ШТОРЫ И ВСЕ 2Х…</b><br>🐻 <a href="https://depman.vip/bear"><b>LuckyBear</b></a> » ' +
+        '<a href="https://depman.vip/bear"><b>depman.vip/bear</b></a><br><br><b>🎁 РОЗЫГРЫШ НА 75$</b></p>',
+      "<blockquote>👥 Призовых мест: <b>3</b><br>⏰ Итоги через <b>23 часа</b></blockquote>",
+      "<p><b>👇 Жми кнопку, для участия 👇</b></p>",
+    ].join("\n"),
+  );
+  assert.ok(html.includes("<br><br>"), "the post must breathe between the project and the prize");
 });
