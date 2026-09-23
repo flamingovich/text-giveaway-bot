@@ -32,7 +32,7 @@ function buildActiveDrawsDigestRichHtml({ headerPrizeLabel = "0$", items = [], p
   const noun = items.length === 1 ? "РОЗЫГРЫШ" : "РОЗЫГРЫШИ";
   const parts = [`<p><b>🎁 ${noun} НА ${escapeHtml(headerPrizeLabel)} 🎁</b></p>`];
   for (const item of items) {
-    const label = `РОЗЫГРЫШ НА ${String(item?.prizeLabel || "")}`.trim();
+    const label = `🎁 РОЗЫГРЫШ НА ${String(item?.prizeLabel || "")} 🎁`.trim();
     // A draw whose post cannot be linked to still belongs in the list; without
     // a link there is nothing for a button to do, so it stays a line of text.
     parts.push(
