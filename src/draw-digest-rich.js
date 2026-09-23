@@ -1,7 +1,8 @@
 // The reminder post lists every live draw of a channel. Each draw used to be a
 // line ending in the word "КЛИК"; now each is a button of its own, which is what
 // the rich message format is for (see rich-post.js). The projects block under
-// them keeps the shape it has always had.
+// them keeps the shape it has always had. The buttons are blue: the owner
+// picked that colour for the reminder, green stays for joining a draw.
 
 const { escapeHtml, buttonRowHtml, padButtonLabel } = require("./rich-post");
 const { formatRefLinkDisplay } = require("./draw-post-emojis");
@@ -36,7 +37,7 @@ function buildActiveDrawsDigestRichHtml({ headerPrizeLabel = "0$", items = [], p
     // a link there is nothing for a button to do, so it stays a line of text.
     parts.push(
       item?.url
-        ? buttonRowHtml([{ text: padButtonLabel(label), url: item.url, style: "success" }])
+        ? buttonRowHtml([{ text: padButtonLabel(label), url: item.url, style: "primary" }])
         : `<p><b>${escapeHtml(label)}</b></p>`,
     );
   }

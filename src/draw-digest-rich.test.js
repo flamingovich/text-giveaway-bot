@@ -22,8 +22,8 @@ test("the reminder the owner approved: heading, a button per draw, projects", ()
     html,
     [
       "<p><b>🎁 РОЗЫГРЫШИ НА 4О$ 🎁</b></p>",
-      `<tg-button-row><tg-button type="url" style="success" url="https://t.me/bot/join?startapp=a">${PAD_SPACE}${PAD_SPACE}РОЗЫГРЫШ НА 3О$${PAD_SPACE}${PAD_SPACE}</tg-button></tg-button-row>`,
-      `<tg-button-row><tg-button type="url" style="success" url="https://t.me/bot/join?startapp=b">${PAD_SPACE}${PAD_SPACE}РОЗЫГРЫШ НА 1О$${PAD_SPACE}${PAD_SPACE}</tg-button></tg-button-row>`,
+      `<tg-button-row><tg-button type="url" style="primary" url="https://t.me/bot/join?startapp=a">${PAD_SPACE}${PAD_SPACE}РОЗЫГРЫШ НА 3О$${PAD_SPACE}${PAD_SPACE}</tg-button></tg-button-row>`,
+      `<tg-button-row><tg-button type="url" style="primary" url="https://t.me/bot/join?startapp=b">${PAD_SPACE}${PAD_SPACE}РОЗЫГРЫШ НА 1О$${PAD_SPACE}${PAD_SPACE}</tg-button></tg-button-row>`,
       "<p><b>🎰 ТОП ПРОЕКТЫ 👇</b></p>",
       '<blockquote>🍀 <a href="https://depman.vip/pokerdom"><b>Pokerdom</b></a> » <a href="https://depman.vip/pokerdom"><b>depman.vip/pokerdom</b></a><br>🔥 <a href="https://depman.vip/beef"><b>BEEF</b></a> » <a href="https://depman.vip/beef"><b>depman.vip/beef</b></a></blockquote>',
     ].join("\n"),
@@ -39,12 +39,12 @@ test("one draw is spoken of in the singular", () => {
   assert.ok(!html.includes("РОЗЫГРЫШИ"));
 });
 
-test("the buttons are green and padded to fill the post", () => {
+test("the buttons are blue and padded to fill the post", () => {
   const html = buildActiveDrawsDigestRichHtml({
     headerPrizeLabel: "1О$",
     items: [{ prizeLabel: "1О$", url: "https://t.me/x" }],
   });
-  assert.ok(html.includes('style="success"'));
+  assert.ok(html.includes('style="primary"'));
   assert.ok(html.includes(`>${PAD_SPACE}${PAD_SPACE}РОЗЫГРЫШ НА 1О$${PAD_SPACE}${PAD_SPACE}<`));
 });
 
@@ -60,7 +60,7 @@ test("no draws, no projects: the heading still stands on its own", () => {
     buildActiveDrawsDigestRichHtml({ headerPrizeLabel: "3О$", items: [{ prizeLabel: "3О$", url: "https://t.me/x" }], projects: [] }),
     [
       "<p><b>🎁 РОЗЫГРЫШ НА 3О$ 🎁</b></p>",
-      `<tg-button-row><tg-button type="url" style="success" url="https://t.me/x">${PAD_SPACE}${PAD_SPACE}РОЗЫГРЫШ НА 3О$${PAD_SPACE}${PAD_SPACE}</tg-button></tg-button-row>`,
+      `<tg-button-row><tg-button type="url" style="primary" url="https://t.me/x">${PAD_SPACE}${PAD_SPACE}РОЗЫГРЫШ НА 3О$${PAD_SPACE}${PAD_SPACE}</tg-button></tg-button-row>`,
     ].join("\n"),
   );
 });

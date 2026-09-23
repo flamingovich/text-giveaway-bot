@@ -2697,7 +2697,10 @@ async function deleteActiveDrawsDigestMessages(data, channelId) {
 }
 
 async function editActiveDrawsDigestMessage(channelId, messageId, draws, options = {}) {
-  if (options.rich) {
+  // A reminder sent in the old shape becomes the new one on its next edit:
+  // Telegram lets a plain text message be edited into a rich message, checked
+  // against the live API. So the shape it was sent in does not decide this.
+  if (canSendDigestAsRich()) {
     await richMessageApi.editRichPost({
       chatId: channelId,
       messageId,
@@ -2744,7 +2747,7 @@ async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
   const messageId = entry.messageIds[0];
   const digestOwnerId = entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId;
   const digestProjects = resolveDigestProjects(entry.digestProjectIds, digestOwnerId);
-  const digestOptions = { projects: digestProjects, rich: entry.rich };
+  const digestOptions = { projects: digestProjects };
   try {
     await editActiveDrawsDigestMessage(channelId, messageId, remaining, digestOptions);
     for (const extraId of entry.messageIds.slice(1)) {
@@ -4836,7 +4839,7 @@ async function syncActiveDrawsDigestCountdowns(data) {
     const messageId = entry.messageIds[0];
     const digestOwnerId = entry.ownerId != null ? entry.ownerId : remaining[0]?.ownerId;
     const digestProjects = resolveDigestProjects(entry.digestProjectIds, digestOwnerId);
-    const digestOptions = { projects: digestProjects, rich: entry.rich };
+    const digestOptions = { projects: digestProjects };
     try {
       await editActiveDrawsDigestMessage(channelId, messageId, remaining, digestOptions);
       for (const extraId of entry.messageIds.slice(1)) {
