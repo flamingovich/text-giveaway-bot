@@ -55,6 +55,10 @@ function readUserProjectProfilesSnapshot() {
   return readDocumentSnapshot(STORE_KEYS.USER_PROJECT_PROFILES);
 }
 
+function readArchivedDrawsSnapshot() {
+  return readDocumentSnapshot(STORE_KEYS.DRAWS_ARCHIVE);
+}
+
 function readDelegatedAdminsSnapshot() {
   return readDocumentSnapshot(STORE_KEYS.DELEGATED_ADMINS);
 }
@@ -128,6 +132,7 @@ module.exports = {
   readDataSnapshot,
   readUserProjectProfilesSnapshot,
   readDelegatedAdminsSnapshot,
+  readArchivedDrawsSnapshot,
   writeData,
   readArchivedDraws,
   writeArchivedDraws,

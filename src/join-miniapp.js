@@ -30,6 +30,7 @@ const {
   getDrawOwnerId,
   resolveJoinProjectContext,
   ensureCrossOrganizerProjectProfile,
+  buildCrossOrganizerNonReferralPatch,
 } = require("./project-profile-bridge");
 const { checkWalletHasTransactions } = require("./tron-wallet-check");
 const {
@@ -3114,6 +3115,7 @@ function registerJoinMiniApp(app, deps) {
     // Shared read-only snapshots (storage/index.js) for the paths that only look.
     readDataSnapshot = readData,
     readUserProjectProfilesSnapshot = readUserProjectProfiles,
+    readArchivedDrawsSnapshot = null,
     getUserProfileBundle,
     getWinnerDisplayName,
     shouldHideParticipant = () => false,
@@ -3519,6 +3521,11 @@ function registerJoinMiniApp(app, deps) {
       readProjects,
       readData,
       getProjectById,
+      // Read only: who the person first took part with on the brand.
+      readDrawHistory: () => [
+        ...(readDataSnapshot()?.draws || []),
+        ...(readArchivedDrawsSnapshot ? readArchivedDrawsSnapshot()?.draws || [] : []),
+      ],
     };
   }
 
@@ -3966,7 +3973,26 @@ function registerJoinMiniApp(app, deps) {
     });
   });
 
+  // Someone who first took part on this brand with another organiser is that
+  // organiser's person: here they are not a referral, whatever the roll says
+  // (findBrandHomes in project-profile-bridge.js). The session remembers it,
+  // because the wallet step writes the referral fields again.
+  function applyCrossOrganizerNonReferralIfNeeded(userId, session, draw) {
+    const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
+    if (!joinCtx.isCrossOrganizerNonReferral) {
+      return false;
+    }
+    setUserProjectProfile(userId, session.projectId, buildCrossOrganizerNonReferralPatch(joinCtx));
+    session.skipReferralCheck = true;
+    session.crossOrganizerNonReferral = true;
+    session.brandHomeOwnerId = joinCtx.brandHomeOwnerId ?? null;
+    return true;
+  }
+
   function applyReferralRoll(userId, session, draw) {
+    if (applyCrossOrganizerNonReferralIfNeeded(userId, session, draw)) {
+      return true;
+    }
     const ownerId = getDrawOwnerId(draw);
     const isNonReferral = Math.random() < NON_REFERRAL_CHANCE;
     if (isNonReferral) {
@@ -4154,18 +4180,25 @@ function registerJoinMiniApp(app, deps) {
         : { ok: false, hasTransactions: false, txCount: 0 };
     const forceNonReferralByWallet = walletCheck.ok && walletCheck.hasTransactions;
     const ownerId = getDrawOwnerId(draw);
-    const isReferral = !forceNonReferralByWallet && !session.skipReferralCheck;
+    // Checked again here: the step can be reached with an id inherited from
+    // another organiser's copy of the brand, without the roll ever running.
+    const crossOrganizer =
+      Boolean(session.crossOrganizerNonReferral) ||
+      (!session.unregistered && applyCrossOrganizerNonReferralIfNeeded(userId, session, draw));
+    const isReferral = !forceNonReferralByWallet && !session.skipReferralCheck && !crossOrganizer;
 
     // An unregistered join keeps the wallet but records no referral status at
     // all: writing one would mark registration complete and skip the question
     // on the next draw, which is exactly what the choice is not supposed to do.
     const referralFields = session.unregistered
       ? {}
-      : {
-          referralVerified: isReferral,
-          selfReportedNonReferral: forceNonReferralByWallet ? true : Boolean(session.skipReferralCheck),
-          referralOwnerId: isReferral ? ownerId : null,
-        };
+      : crossOrganizer
+        ? buildCrossOrganizerNonReferralPatch({ brandHomeOwnerId: session.brandHomeOwnerId })
+        : {
+            referralVerified: isReferral,
+            selfReportedNonReferral: forceNonReferralByWallet ? true : Boolean(session.skipReferralCheck),
+            referralOwnerId: isReferral ? ownerId : null,
+          };
     setUserProjectProfile(userId, session.projectId, {
       ...referralFields,
       trc20Address: address,
@@ -4176,7 +4209,7 @@ function registerJoinMiniApp(app, deps) {
       walletHasTransactions: forceNonReferralByWallet,
       ...(forceNonReferralByWallet
         ? { nonReferralReason: "wallet_has_transactions" }
-        : { nonReferralReason: null }),
+        : { nonReferralReason: crossOrganizer ? "cross_organizer" : null }),
     });
 
     const result = await addUserToDraw(

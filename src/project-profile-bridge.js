@@ -4,6 +4,7 @@ const {
   hasCompletedProjectIdStep,
 } = require("./project-account-id");
 const { buildBrandProjectId, isPokerdomProject } = require("./deposit-guide");
+const { participationTimestamp } = require("./project-attribution");
 
 /** Старые projectId Pokerdom до brand_* (prod, май–июнь 2026). */
 const LEGACY_POKERDOM_PROJECT_OWNERS = {
@@ -46,6 +47,71 @@ function getDrawOwnerId(draw) {
     return Number(draw.createdBy);
   }
   return null;
+}
+
+// project-identity.js resolves these too, but it requires this module, so the
+// few old Pokerdom ids are resolved here directly.
+function resolveBrandProjectId(projectId) {
+  const key = String(projectId || "");
+  const legacyOwnerId = LEGACY_POKERDOM_PROJECT_OWNERS[key];
+  return legacyOwnerId ? `brand_pokerdom_${legacyOwnerId}` : key;
+}
+
+function brandHomeKey(userId, brandName) {
+  return `${userId}|${normalizeProjectBrandName(brandName)}`;
+}
+
+// Every organiser runs a copy of each brand, but a person is a referral of one
+// of them at most: the organiser they first took part with on that brand (the
+// owner's rule). With every other organiser of the brand they are not one, and
+// go into that organiser's draws straight away. Two organisers each counting
+// the same person as theirs was the case for 44 people on production when the
+// rule came in.
+//
+// draws: live and archived together. Returns Map "userId|brand" -> { ownerId,
+// at }. userId narrows the scan to one person, as the join flow needs.
+function findBrandHomes(draws = [], projects = [], { userId = null } = {}) {
+  const projectById = new Map((projects || []).map((project) => [project.id, project]));
+  const only = userId != null ? String(userId) : null;
+  const homes = new Map();
+  for (const draw of draws || []) {
+    const project = projectById.get(resolveBrandProjectId(draw?.projectId));
+    const brand = normalizeProjectBrandName(project?.name);
+    if (!brand) {
+      continue;
+    }
+    const ownerId = getDrawOwnerId(draw) ?? (project.ownerId != null ? Number(project.ownerId) : null);
+    if (!ownerId) {
+      continue;
+    }
+    for (const participant of draw.participantIds || []) {
+      const key = String(participant);
+      if (only && key !== only) {
+        continue;
+      }
+      const stamp = participationTimestamp(draw, key);
+      const at = stamp ? stamp.at : Number.MAX_SAFE_INTEGER;
+      const homeKey = `${key}|${brand}`;
+      const current = homes.get(homeKey);
+      if (!current || at < current.at) {
+        homes.set(homeKey, { ownerId: Number(ownerId), at });
+      }
+    }
+  }
+  return homes;
+}
+
+// What marks a profile as another organiser's person on the brand. The same
+// marks at every step of the join flow and in the backfill of old profiles.
+function buildCrossOrganizerNonReferralPatch(ctx = {}, at = new Date()) {
+  return {
+    referralVerified: false,
+    selfReportedNonReferral: true,
+    crossOrganizerNonReferral: true,
+    nonReferralReason: "cross_organizer",
+    nonReferralMarkedAt: new Date(at).toISOString(),
+    referralOwnerId: ctx.brandHomeOwnerId ?? ctx.referralOwnerId ?? null,
+  };
 }
 
 function listUserBrandProjectEntries(userId, brandName, readUserProjectProfiles, readProjects) {
@@ -146,6 +212,10 @@ function resolveJoinProjectContext(userId, draw, deps) {
     readProjects,
     readData,
     getProjectById,
+    // Live and archived draws, for the organiser the person first took part
+    // with on the brand (findBrandHomes). Without it only a verified referral
+    // elsewhere counts, as before.
+    readDrawHistory = null,
   } = deps;
 
   const projectId = draw?.projectId || null;
@@ -165,6 +235,7 @@ function resolveJoinProjectContext(userId, draw, deps) {
         directProfile?.referralOwnerId != null ? Number(directProfile.referralOwnerId) : null,
       drawOwnerId,
       isCrossOrganizerNonReferral: false,
+      brandHomeOwnerId: null,
       siblingSource: null,
       brandName,
     };
@@ -178,8 +249,15 @@ function resolveJoinProjectContext(userId, draw, deps) {
   );
   const sibling = pickPrimaryBrandEntry(brandEntries, projectId);
   const referralOwnerId = resolveReferralOwnerForBrand(userId, brandEntries, readData);
+  const homes =
+    typeof readDrawHistory === "function"
+      ? findBrandHomes(readDrawHistory(), readProjects().projects || [], { userId })
+      : null;
+  // The first organiser on the brand decides. A verified referral elsewhere
+  // only counts for someone who never took part anywhere on the brand.
+  const brandHomeOwnerId = homes?.get(brandHomeKey(userId, brandName))?.ownerId ?? referralOwnerId ?? null;
   const isCrossOrganizerNonReferral = Boolean(
-    referralOwnerId && drawOwnerId && referralOwnerId !== drawOwnerId,
+    brandHomeOwnerId && drawOwnerId && Number(brandHomeOwnerId) !== Number(drawOwnerId),
   );
 
   const needsWallet = draw?.askWalletOnJoin !== false;
@@ -243,6 +321,7 @@ function resolveJoinProjectContext(userId, draw, deps) {
     referralOwnerId,
     drawOwnerId,
     isCrossOrganizerNonReferral,
+    brandHomeOwnerId,
     siblingSource: sibling,
     brandName,
   };
@@ -256,10 +335,16 @@ function ensureCrossOrganizerProjectProfile(userId, draw, ctx, setUserProjectPro
   const sibling = ctx.siblingSource;
   const trc20Address = ctx.directProfile?.trc20Address || sibling?.projectData?.trc20Address;
   if (!trc20Address) {
+    // A draw without wallets still records whose person this is: without it
+    // the profile stayed empty, and the prize was paid in full as to a referral.
+    if (ctx.isCrossOrganizerNonReferral && !ctx.directProfile?.crossOrganizerNonReferral) {
+      setUserProjectProfile(userId, draw.projectId, buildCrossOrganizerNonReferralPatch(ctx));
+    }
     return;
   }
 
   const nextReferralOwnerId =
+    (ctx.isCrossOrganizerNonReferral ? ctx.brandHomeOwnerId : null) ||
     ctx.referralOwnerId ||
     ctx.directProfile?.referralOwnerId ||
     sibling?.projectData?.referralOwnerId ||
@@ -288,6 +373,7 @@ function ensureCrossOrganizerProjectProfile(userId, draw, ctx, setUserProjectPro
     payload.referralVerified = false;
     payload.selfReportedNonReferral = true;
     payload.crossOrganizerNonReferral = true;
+    payload.nonReferralReason = "cross_organizer";
   } else if (!ctx.directProfile?.trc20Address && sibling?.projectData) {
     payload.referralVerified = Boolean(sibling.projectData.referralVerified);
     payload.selfReportedNonReferral = Boolean(sibling.projectData.selfReportedNonReferral);
@@ -607,6 +693,10 @@ function migratePokerdomLegacyProfiles(options = {}) {
 module.exports = {
   LEGACY_POKERDOM_PROJECT_OWNERS,
   normalizeProjectBrandName,
+  resolveBrandProjectId,
+  brandHomeKey,
+  findBrandHomes,
+  buildCrossOrganizerNonReferralPatch,
   getDrawOwnerId,
   listUserBrandProjectEntries,
   resolveReferralOwnerForBrand,

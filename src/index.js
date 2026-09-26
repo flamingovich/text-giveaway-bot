@@ -68,6 +68,8 @@ const {
   formatRefLinkDisplay,
 } = require("./draw-post-emojis");
 const { evaluateIpFraud, listProjectWalletAddresses, buildGlobalWalletOwners } = require("./draw-anti-fraud");
+const { mergeDrawLists } = require("./admin-draw-source");
+const { planBrandHomeBackfill, applyBrandHomeBackfill } = require("./brand-home-backfill");
 const {
   drawAsksProjectIdOnJoin,
   buildGlobalProjectAccountIdOwners,
@@ -149,6 +151,7 @@ const {
   readDataSnapshot,
   readUserProjectProfilesSnapshot,
   readDelegatedAdminsSnapshot,
+  readArchivedDrawsSnapshot,
 } = require("./storage");
 const { withFloodRetry } = require("./telegram-flood-retry");
 const { userMetaNeedsWrite } = require("./user-meta-touch");
@@ -579,6 +582,29 @@ function migratePokerdomLegacyWalletProfiles() {
       `${result.brandProfilesCreated} created, ${result.brandProfilesUpdated} updated, ` +
       `${result.skippedExistingWallet} skipped (other wallet already set)`,
   );
+}
+
+// A person is a referral of one organiser per brand at most - the one they
+// first took part with (brand-home-backfill.js). Runs on every start, so
+// profiles waiting for a payout are corrected once it is settled.
+function backfillBrandHomeReferrals() {
+  const profiles = readUserProjectProfiles();
+  const plan = planBrandHomeBackfill({
+    profiles,
+    projects: readProjects().projects || [],
+    draws: mergeDrawLists(readData().draws, readArchivedDraws().draws),
+    isExpired: isWinnerNotificationExpired,
+    isMoneyPrize: (draw) => isMoneyPrizeType(draw?.prizeType),
+  });
+  const applied = applyBrandHomeBackfill(profiles, plan.marks);
+  if (applied > 0) {
+    writeUserProjectProfiles(profiles);
+  }
+  if (applied > 0 || plan.deferred.length > 0) {
+    console.log(
+      `[boot] реф у второго организатора бренда: снято ${applied}, ждут выплаты ${plan.deferred.length}`,
+    );
+  }
 }
 
 function syncBrandProjectTemplatesForOrganizer(ownerId) {
@@ -5535,6 +5561,7 @@ async function tryAutoJoinDraw(draw, userId) {
       readProjects,
       readData,
       getProjectById,
+      readDrawHistory: () => [...(readDataSnapshot().draws || []), ...(readArchivedDrawsSnapshot().draws || [])],
     });
     const projectIdStepPending =
       drawAsksProjectIdOnJoin(draw) && !joinCtxHasCompletedProjectIdStep(joinCtx);
@@ -5556,6 +5583,7 @@ async function tryAutoJoinDraw(draw, userId) {
     readProjects,
     readData,
     getProjectById,
+    readDrawHistory: () => [...(readDataSnapshot().draws || []), ...(readArchivedDrawsSnapshot().draws || [])],
   });
   const canSkip = !draw.projectId || joinCtx.canSkipRegistration;
   if (canSkip) {
@@ -11644,6 +11672,7 @@ registerJoinMiniApp(app, {
   WEB_PUBLIC_URL,
   readData,
   readDataSnapshot,
+  readArchivedDrawsSnapshot,
   readUserProjectProfilesSnapshot,
   readProjects,
   getProjectById,
@@ -13432,6 +13461,7 @@ async function bootstrap() {
   migrateClearDeviceFraud();
   migrateBrandProjectTemplates();
   migratePokerdomLegacyWalletProfiles();
+  backfillBrandHomeReferrals();
   const archiveResult = runDrawArchiveMaintenance();
   if (archiveResult.moved > 0) {
     console.log(
