@@ -319,22 +319,49 @@ const WINNERS = `
   body button.pl-copy:active { transform: scale(1.15); }
   body button.pl-copy.pl-copied { color: var(--green); }
 
-  /* Paid is the one filled button; refusing is red text on glass, so the two
-     never look alike under a thumb. The width formula is the old one: two
-     buttons share a row and their words must fit it. */
-  body .pl-win-acts .winner-action-btn {
-    ${CAPSULE}
-    ${FILLED_GLASS}
-    border: 0;
-    font-size: .9375rem;
-    ${GROW_MOTION}
+  /* A winner's decisions as one group, the way iOS lists actions: a glass
+     panel, the words in the action's colour, hairlines between. Paid and
+     refused share the first row, anything else takes a row of its own. The
+     green and red lean towards the label colour: pure iOS green on the light
+     grey is barely readable. */
+  body .pl-win-acts {
+    ${GRAY_GLASS}
+    border-radius: var(--r-row);
+    overflow: hidden;
   }
-  body .pl-win-acts form:not(.pl-wide) .winner-action-btn { font-size: clamp(.6875rem, calc((50cqw - 15px) / 10.4), .9375rem); }
-  body .pl-win-acts .winner-action-btn.pl-btn-success { --tint: var(--green); --on-tint: #fff; --tint-fill: initial; }
-  body .pl-win-acts .winner-action-btn.pl-btn-danger { ${tintedGlass("var(--red)")} }
-  body .pl-win-acts .winner-action-btn.pl-btn-secondary,
+  body .pl-win-acts form { position: relative; }
+  body .pl-win-acts form.pl-wide:not(:first-child)::before,
+  body .pl-win-acts form:not(.pl-wide) + form:not(.pl-wide)::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    pointer-events: none;
+  }
+  /* Stronger than the system separator: on the glass that one all but
+     disappeared (the owner asked for the lines to show). */
+  body .pl-win-acts { --pl-acts-line: color-mix(in oklab, var(--label-2) 45%, transparent); }
+  body .pl-win-acts form.pl-wide:not(:first-child)::before { top: 0; left: .875rem; right: .875rem; border-top: .5px solid var(--pl-acts-line); }
+  body .pl-win-acts form:not(.pl-wide) + form:not(.pl-wide)::before { left: 0; top: .625rem; bottom: .625rem; border-left: .5px solid var(--pl-acts-line); }
+  :root body .pl-win-acts .winner-action-btn {
+    height: 2.75rem;
+    min-height: 0;
+    padding: 0 .75rem;
+    color: var(--tint-ink);
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    filter: none;
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: -.01em;
+    transform: none;
+    transition: background-color .15s var(--ease);
+  }
+  :root body .pl-win-acts .winner-action-btn.pl-btn-success { color: color-mix(in oklab, var(--green) 80%, var(--label)); font-weight: 600; }
+  :root body .pl-win-acts .winner-action-btn.pl-btn-danger { color: color-mix(in oklab, var(--red) 88%, var(--label)); }
+  :root body .pl-win-acts .winner-action-btn:active:not(:disabled) { background: var(--fill); transform: none; filter: none; }
   body .winner-action-btn.winner-action-secondary { ${TINTED_GLASS} }
-  body .pl-win-acts .winner-action-btn:active { ${GROW_PRESSED} }
 
   body .winner-profile-btn,
   body .winner-copy-btn {
@@ -349,23 +376,19 @@ const WINNERS = `
   body .pl-win-name-row .winner-message-btn.is-busy { opacity: .45; pointer-events: none; }
 
   /* The ID the winner gave the project: grey monospace under the logo, red
-     when it cannot be real (winner-account-id.js), green for a moment once
-     copied. */
-  :root body .pl-win-side button.pl-win-id {
+     when it cannot be real (winner-account-id.js). */
+  body .pl-win-side .pl-win-id {
     color: var(--label-2);
     background: var(--fill);
-    border: 0;
     border-radius: .5rem;
-    box-shadow: none;
     font: 500 .75rem/1.3 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
     letter-spacing: 0;
+    -webkit-tap-highlight-color: transparent;
     transition: color .2s var(--ease), background-color .2s var(--ease), transform .14s var(--ease);
   }
-  :root body .pl-win-side button.pl-win-id:active { transform: scale(.96); }
-  :root body .pl-win-side .pl-win-id-k { color: var(--label-3); font-weight: 600; }
-  :root body .pl-win-side button.pl-win-id.is-suspect { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
-  :root body .pl-win-side button.pl-win-id.is-suspect .pl-win-id-k { color: inherit; opacity: .6; }
-  :root body .pl-win-side button.pl-win-id.is-copied { color: var(--green); }
+  body .pl-win-side .pl-win-id[role="button"]:active { transform: scale(.96); }
+  body .pl-win-side .pl-win-id:focus-visible { outline: 2px solid var(--tint); outline-offset: 1px; }
+  body .pl-win-side .pl-win-id.is-suspect { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
   body .pl-win-id-warn { color: var(--red); font-size: .6875rem; font-weight: 500; line-height: 1.25; }
 `;
 

@@ -377,8 +377,11 @@ function getPanelLookStyles() {
        rather than squeezing the name and the date out of the card. */
     .pl-win-side { flex: none; align-self: flex-start; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 8.5rem; min-width: 0; margin-left: auto; }
     .pl-win-side .pl-win-logo { margin-left: 0; }
-    :root body .pl-win-side button.pl-win-id { display: block; width: auto; min-width: 0; max-width: 100%; height: auto; margin: 0; padding: 3px 7px; text-align: right; white-space: normal; word-break: break-all; cursor: pointer; }
-    .pl-win-id-k { margin-right: 4px; }
+    .pl-win-side .pl-win-id { display: block; max-width: 100%; padding: 3px 7px; text-align: right; white-space: normal; word-break: break-all; }
+    .pl-win-side .pl-win-id[role="button"] { cursor: pointer; -webkit-user-select: none; user-select: none; }
+    .pl-win-id .pl-win-id-full,
+    .pl-win-id[aria-expanded="true"] .pl-win-id-short { display: none; }
+    .pl-win-id[aria-expanded="true"] .pl-win-id-full { display: inline; }
     .pl-win-id-warn { display: block; max-width: 100%; text-align: right; }
     .pl-win-meta.pl-win-date { white-space: normal; }
     /* Badges and the payout block always share one line. When the badges would be
@@ -477,7 +480,7 @@ function getPanelLookStyles() {
       transition: color 0.2s ease, transform 0.14s ease;
     }
     :root body button.pl-copy svg { width: 15px; height: 15px; }
-    .pl-win-acts { container-type: inline-size; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .pl-win-acts { container-type: inline-size; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; }
     .pl-win-acts form { display: grid; min-width: 0; margin: 0; }
     .pl-win-acts form.pl-wide { grid-column: 1 / -1; }
     :root body .pl-win-acts .winner-action-btn {
@@ -1018,6 +1021,23 @@ function getPanelLookScript({ panelBase }) {
         });
       }
 
+      // A long account ID on a winner's card opens in full and closes again on
+      // a tap (winner-account-id.js). Delegated: the live refresh replaces cards.
+      function setupAccountIdToggles() {
+        const flip = (id) => id.setAttribute("aria-expanded", id.getAttribute("aria-expanded") === "true" ? "false" : "true");
+        document.addEventListener("click", (event) => {
+          const id = event.target.closest(".pl-win-id[aria-expanded]");
+          if (id) flip(id);
+        });
+        document.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          const id = event.target.closest && event.target.closest(".pl-win-id[aria-expanded]");
+          if (!id) return;
+          event.preventDefault();
+          flip(id);
+        });
+      }
+
       // A photo that does not load - Telegram briefly unreachable, or a photo
       // deleted since the page was drawn - becomes the initial on a gradient that
       // a person without a photo gets, instead of an empty circle. Load errors do
@@ -1103,6 +1123,7 @@ function getPanelLookScript({ panelBase }) {
       setupFolds();
       setupCollapses();
       setupCopyFeedback();
+      setupAccountIdToggles();
       setupThemeFade();
       if (document.fonts && document.fonts.ready) {
         document.fonts.ready.then(() => {

@@ -52,4 +52,13 @@ function describeWinnerAccountId(userNode, project) {
   return { id, warning };
 }
 
-module.exports = { findWinnerAccountId, describeWinnerAccountId };
+// A Pokerdom ID is 24 characters and took two lines of the card: it shows as
+// "6a2e…443d" and opens in full on a tap. The short kinds, #XXXXX and a
+// LuckyBear number, are shown whole.
+const LONG_ID = 12;
+function shortenAccountId(id) {
+  const text = String(id || "");
+  return text.length > LONG_ID ? `${text.slice(0, 4)}…${text.slice(-4)}` : "";
+}
+
+module.exports = { findWinnerAccountId, describeWinnerAccountId, shortenAccountId };

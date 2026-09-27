@@ -19,7 +19,7 @@ const { registerAdminDashboard } = require("./admin-dashboard");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { normalizeAdminLabel, formatReferralOwnerLabel } = require("./admin-label");
-const { describeWinnerAccountId } = require("./winner-account-id");
+const { describeWinnerAccountId, shortenAccountId } = require("./winner-account-id");
 const {
   getWinnerDirectChatUrl,
   buildWinnerChatLinkMessage,
@@ -6735,9 +6735,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   }
   const actionsHtml = actions.length
     ? `<div class="pl-win-acts">${actions
-        .map(([action, label, extraClass], position) => {
-          // An odd one out takes the whole row instead of leaving a gap beside it.
-          const wide = position === actions.length - 1 && actions.length % 2 === 1;
+        .map(([action, label, extraClass]) => {
+          // Paid and refused share the first row; anything else takes a row of its own.
+          const wide = action !== "pay" && action !== "deny-pay";
           return `<form method="post" action="${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/${action}/${encodeURIComponent(String(winnerId))}"${wide ? ' class="pl-wide"' : ""}>
         ${returnPanelField}
         <button type="submit" class="winner-action-btn${extraClass}">${label}</button>
@@ -6772,14 +6772,21 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     ? `<span class="pl-win-meta pl-win-date">Дата победы: ${keepTogether(escapeHtml(formatWinnerVictoryDate(draw)))}</span>`
     : "";
   // The ID they gave the project, under its logo, so the owner can check it
-  // before paying; red when it cannot be real (winner-account-id.js). A tap copies it.
+  // before paying; red when it cannot be real. A long one shows its ends and
+  // opens in full on a tap (winner-account-id.js).
   const accountId = project ? describeWinnerAccountId(userProfiles.users?.[String(winnerId)], project) : null;
+  const shortAccountId = accountId ? shortenAccountId(accountId.id) : "";
+  const accountIdClass = `pl-win-id${accountId?.warning ? " is-suspect" : ""}`;
   const accountIdHtml = accountId
-    ? `<button type="button" class="winner-copy-btn pl-win-id${accountId.warning ? " is-suspect" : ""}" data-copy="${escapeHtml(
-        accountId.id,
-      )}" title="Скопировать ID" aria-label="${escapeHtml(`Скопировать ID ${accountId.id}`)}"><span class="pl-win-id-k">ID</span>${escapeHtml(
-        accountId.id,
-      )}</button>${accountId.warning ? `<span class="pl-win-id-warn">${escapeHtml(accountId.warning)}</span>` : ""}`
+    ? `${
+        shortAccountId
+          ? `<span class="${accountIdClass}" role="button" tabindex="0" aria-expanded="false" title="${escapeHtml(
+              accountId.id,
+            )}"><span class="pl-win-id-short">${escapeHtml(shortAccountId)}</span><span class="pl-win-id-full">${escapeHtml(
+              accountId.id,
+            )}</span></span>`
+          : `<span class="${accountIdClass}">${escapeHtml(accountId.id)}</span>`
+      }${accountId.warning ? `<span class="pl-win-id-warn">${escapeHtml(accountId.warning)}</span>` : ""}`
     : "";
   const sideHtml = projectLogoHtml || accountIdHtml ? `<div class="pl-win-side">${projectLogoHtml}${accountIdHtml}</div>` : "";
 
@@ -10697,8 +10704,6 @@ ${getPanelFluidTypographyVars()}
         btn.addEventListener("click", async () => {
           const text = btn.getAttribute("data-copy") || "";
           if (!text) return;
-          btn.classList.add("is-copied");
-          setTimeout(() => btn.classList.remove("is-copied"), 1200);
           try {
             await navigator.clipboard.writeText(text);
             btn.title = "Скопировано";

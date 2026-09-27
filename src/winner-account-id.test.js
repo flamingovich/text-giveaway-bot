@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { findWinnerAccountId, describeWinnerAccountId } = require("./winner-account-id");
+const { findWinnerAccountId, describeWinnerAccountId, shortenAccountId } = require("./winner-account-id");
 
 const FUGU = { id: "brand_fugu_100", templateSlug: "fugu", name: "FUGU" };
 const POKERDOM = { id: "brand_pokerdom_100", templateSlug: "pokerdom", name: "Pokerdom" };
@@ -52,4 +52,11 @@ test("an ID the brand could not have issued is marked", () => {
 test("a made-up ID is marked", () => {
   const node = { projects: { brand_fugu_100: { projectAccountId: "#AAAAA" } } };
   assert.equal(describeWinnerAccountId(node, FUGU).warning, "ID не проходит проверку");
+});
+
+test("a long ID is cut to its ends, a short one is left whole", () => {
+  assert.equal(shortenAccountId("6a2ec8b83f72281c3bb2443d"), "6a2e…443d");
+  assert.equal(shortenAccountId("#FJ0UW"), "");
+  assert.equal(shortenAccountId("1771050325"), "");
+  assert.equal(shortenAccountId(""), "");
 });
