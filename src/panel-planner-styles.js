@@ -1,10 +1,11 @@
 // How the organiser panel looks, drawn in the gz-planner design language.
 //
 // The panel's old stylesheets - the page's own, the shared mini-app one, the
-// emoji picker's, the emboss layer and the "Живее" refresh in panel-look.js -
-// still decide where everything sits, with their look stripped out by
-// css-layout-filter.js. Everything a person sees is decided here, last on the
-// page, with no !important: there is nothing underneath left to fight.
+// emboss layer and the "Живее" refresh in panel-look.js - still decide where
+// everything sits, with their look stripped out by css-layout-filter.js.
+// Everything a person sees is decided here, with no !important: there is
+// nothing underneath left to fight. Only the emoji picker comes after, whole,
+// with the same tokens (emoji-picker.js).
 //
 // The panel's body carries no class of its own, so the scope is plain "body".
 // Sheets are where the forms live, and in a sheet the planner draws controls
@@ -55,6 +56,8 @@ const HEADER = `
   }
   body .page-logo { border-radius: .625rem; box-shadow: none; }
   body .page-title { font-size: 1.0625rem; }
+  /* "RollerBot" over "Панель розыгрышей", as a title and its subtitle. */
+  :root body.mini-app-shell .page-title { flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; line-height: 1.15; }
   body .page-title-brand { color: var(--label); font-weight: 700; letter-spacing: -.02em; }
   body .page-title-sub { color: var(--label-2); font-size: .8125rem; font-weight: 400; }
 
@@ -75,7 +78,13 @@ const SURFACES = `
     border-radius: var(--r-card);
     color: var(--label);
   }
-  body .pl-draw.is-active { border-color: color-mix(in srgb, var(--tint) 55%, transparent); }
+  /* A running draw is outlined in blue; the thin tinted hairline it had was
+     too faint to tell from the others at a glance. Inset, so it keeps the
+     card's corners and takes no room. */
+  body .pl-draw.is-active {
+    border-color: transparent;
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--tint) 65%, var(--tint-ink)), var(--glass-shadow);
+  }
 
   body .pl-empty { color: var(--label-2); font-size: .9375rem; font-weight: 400; }
 
@@ -97,7 +106,6 @@ const STATS = `
     font-weight: 680;
     letter-spacing: -.3px;
   }
-  body .pl-stats-ico { ${ICON_TILE} border-radius: .5rem; }
 
   body .pl-stat {
     background: var(--fill);
@@ -138,6 +146,15 @@ const SEGMENTS = `
   body button.pl-seg-btn[aria-pressed="true"] { color: var(--label); font-weight: 600; }
   body .pl-seg-btn em { font-style: normal; font-variant-numeric: tabular-nums; opacity: .7; }
   body .pl-net-filter button.pl-seg-btn { font-size: .8125rem; }
+
+  /* The payout queue's search: a grey field with the glass inside, as iOS
+     draws one. The field look is the shared one; only its shape is set here. */
+  body .pl-queue-search { position: relative; display: block; }
+  body .pl-queue-search svg { position: absolute; left: .85rem; top: 50%; width: 1.0625rem; height: 1.0625rem; transform: translateY(-50%); color: var(--label-2); pointer-events: none; }
+  :root body .pl-queue .pl-queue-search input[data-queue-search] { display: block; width: 100%; height: 2.5rem; min-height: 0; margin: 0; padding: 0 .9rem 0 2.5rem; -webkit-appearance: none; appearance: none; }
+  body .pl-queue-search input::placeholder { color: var(--label-3); }
+  body .pl-queue-search input::-webkit-search-decoration,
+  body .pl-queue-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
 `;
 
 // One draw: title row with a status capsule, the period, three figures, the
@@ -281,7 +298,7 @@ const WINNERS = `
   }
   body .pl-pay-amt b { color: var(--label); font-size: .875rem; font-weight: 650; font-variant-numeric: tabular-nums; }
   body .pl-pay-net { border-left: .5px solid var(--separator); }
-  body .pl-pay-net span { color: var(--label-2); font-size: .8125rem; font-weight: 500; }
+  body .pl-pay-net span { color: color-mix(in srgb, var(--label-2) 55%, var(--label)); font-size: .8125rem; font-weight: 500; }
   body .pl-pay-text { color: var(--label); font-size: .8125rem; font-weight: 590; }
 
   body .pl-wal { background: var(--fill); border: 0; border-radius: var(--r-ctl); }
@@ -436,7 +453,6 @@ const FORMS = `
     ${GROW_MOTION}
   }
   body .draw-submit:not(:disabled):active { ${GROW_PRESSED} }
-  body .draw-submit .draw-ico { color: currentColor; }
   body .draw-submit-secondary,
   body button.draw-submit.draw-submit-secondary { ${GRAY_GLASS} }
 
@@ -451,59 +467,6 @@ const FORMS = `
   ${DEFAULT_BUTTON}:not(:disabled):active { ${GROW_PRESSED} }
   body button.btn-secondary { ${GRAY_GLASS} }
   body button.btn-danger { ${tintedGlass("var(--red)")} }
-`;
-
-// The emoji picker: a frosted popover like the planner's menus, the search as
-// a grey field, the section tabs quiet until chosen.
-const EMOJI = `
-  body .emoji-field button.emoji-open {
-    background: none;
-    border: 0;
-    border-radius: 50%;
-    font-size: 1.125rem;
-  }
-  body .emoji-field button.emoji-open.is-open { background: var(--fill); }
-
-  body .emoji-pop {
-    background: color-mix(in oklab, var(--bg-elevated) 94%, transparent);
-    -webkit-backdrop-filter: blur(1.5rem) saturate(1.6);
-    backdrop-filter: blur(1.5rem) saturate(1.6);
-    border: .5px solid var(--glass-brd);
-    border-radius: var(--r-row);
-    box-shadow: 0 1rem 2.5rem rgba(0,0,0,.28);
-  }
-  body .emoji-search {
-    color: var(--label);
-    background: var(--fill);
-    border: 0;
-    border-radius: 999px;
-    font-size: .9375rem;
-  }
-  body .emoji-search:focus { outline: none; box-shadow: inset 0 0 0 1.5px var(--tint); }
-  body .emoji-recent-title,
-  body .emoji-group-title { color: var(--label-2); font-size: .6875rem; font-weight: 590; letter-spacing: .03em; text-transform: uppercase; }
-
-  /* The emoji need their own fonts back - the layout filter took the type. */
-  body .emoji-pop button.emoji-cell {
-    background: none;
-    border: 0;
-    border-radius: .5rem;
-    font-size: 21px;
-    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-    letter-spacing: 0;
-  }
-  body .emoji-pop button.emoji-cell:active { background: var(--fill); transform: scale(1.15); }
-  body .emoji-tabs { background: none; border-top: .5px solid var(--separator); }
-  body .emoji-tabs button.emoji-tab {
-    background: none;
-    border: 0;
-    border-radius: .5rem;
-    font-size: 17px;
-    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-    opacity: .55;
-  }
-  body .emoji-tabs button.emoji-tab.is-active { background: var(--fill); opacity: 1; }
-  body .emoji-empty { color: var(--label-2); font-size: .8125rem; }
 `;
 
 // Sheets slide up frosted, with the planner's larger corners, a lit top rim
@@ -558,6 +521,11 @@ const BOTTOM_BAR = `
     ${GROW_MOTION}
   }
   body .panel-bottom-bar #toggleCreateDrawBtn { ${FILLED_GLASS} }
+  /* The old sheets size these buttons one way at rest and another on hover,
+     and their :hover rule outweighs the resting one, so the whole bar grew
+     under a mouse. One size for every state. */
+  :root body.mini-app-shell .panel-bottom-bar .quick-action,
+  :root body.mini-app-shell .panel-bottom-bar .quick-action:is(:hover, :focus-visible) { min-height: 52px; padding: 10px 8px; }
   body .panel-bottom-bar .quick-action:active { ${GROW_PRESSED} }
   body .panel-bottom-bar .quick-action .qa-icon { color: currentColor; }
   body .panel-bottom-bar .quick-action .qa-label { color: currentColor; font-size: .9375rem; font-weight: 590; }
@@ -624,6 +592,15 @@ const LISTS = `
   body .access-empty .draw-ico { color: var(--label-3); }
 
   body .access-avatar { border: 0; border-radius: 50%; }
+  /* An admin's pencil and bin sit on the right, as on the project cards. */
+  :root body .access-card-head-removable { grid-template-columns: 48px minmax(0, 1fr) auto; }
+  :root body .access-card-head-removable .access-avatar-wrap { grid-column: 1; grid-row: 1; }
+  :root body .access-card-head-removable .access-card-body { grid-column: 2; grid-row: 1; }
+  :root body .access-card-head-removable .access-card-actions { grid-column: 3; grid-row: 1; gap: .5rem; }
+  body .access-editing-hint { color: var(--label-2); font-size: .875rem; padding: 0 .25rem; }
+  body .access-editing-hint[hidden] { display: none; }
+  body .access-form .access-edit-cancel { display: block; width: 100%; margin: .25rem 0 0; padding: .625rem; text-align: center; font-size: .9375rem; }
+  body .access-form .access-edit-cancel[hidden] { display: none; }
   body .access-avatar-fallback {
     color: #fff;
     border: 0;
@@ -695,7 +672,6 @@ function getPanelPlannerStyles() {
     DRAWS,
     WINNERS,
     FORMS,
-    EMOJI,
     SHEETS,
     BOTTOM_BAR,
     LISTS,

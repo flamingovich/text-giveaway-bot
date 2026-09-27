@@ -192,19 +192,27 @@ function buildJoinWalletStepPayload(project, networkId) {
   };
 }
 
-function buildWinnerDepositAddressRequestHtml(_draw, project, networkId, winnerDepositMinutes, projectLinkHtml) {
+// The first ask comes right after the check and carries a deadline. The owner
+// asking again from the panel carries none (rerequest): the first address was
+// no good, and the prize must not burn while a corrected one is on its way.
+function buildWinnerDepositAddressRequestHtml(_draw, project, networkId, winnerDepositMinutes, projectLinkHtml, { rerequest = false } = {}) {
   const network = getDepositNetworkMeta(networkId);
   const projectPart =
     projectLinkHtml || `<b>${String(project?.name || "проекте").replace(/&/g, "&amp;").replace(/</g, "&lt;")}</b>`;
-  return [
-    `${pe("check")} <b>Проверка пройдена!</b>`,
+  const lines = [
+    rerequest
+      ? `${pe("red")} <b>Организатор просит адрес ещё раз</b> — прошлый не подошёл.`
+      : `${pe("check")} <b>Проверка пройдена!</b>`,
     "",
     `Отправьте <b>АКТУАЛЬНЫЙ</b> адрес пополнения <b>USDT</b> на ${projectPart} в сети <b>${network.shortLabel}</b><i> (${network.selectLabel}).</i>`,
     `<blockquote>${pe("red")} <b>Очень важно: Если сеть будет неверной — приз НЕ ПРИДЁТ! Перепроверяйте сеть!</b></blockquote>`,
     "",
-    `${pe("alarm")} <b>У вас есть ${winnerDepositMinutes} минут — иначе приз сгорит.</b>`,
-    `Пример: <code>${network.addressExample}</code>`,
-  ].join("\n");
+  ];
+  if (winnerDepositMinutes) {
+    lines.push(`${pe("alarm")} <b>У вас есть ${winnerDepositMinutes} минут — иначе приз сгорит.</b>`);
+  }
+  lines.push(`Пример: <code>${network.addressExample}</code>`);
+  return lines.join("\n");
 }
 
 // The wrong-format reply the winner gets in the bot. Kept apart from

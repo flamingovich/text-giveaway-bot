@@ -94,13 +94,16 @@ test("the picker's buttons are excluded from the panel's catch-all button rule",
   }
 });
 
-test("the title field lets the picker hang outside it", () => {
+// The picker's look is its own stylesheet, drawn with the planner's tokens. Run
+// through the layout filter with the old stylesheets it would lose every
+// colour, border and font - the emoji would come out in the text font.
+test("the picker's styles come after the planner's, outside the layout filter", () => {
   const fs = require("node:fs");
   const path = require("node:path");
-  const styles = require("./emoji-picker").getEmojiPickerStyles();
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
-
-  // .draw-field clips its contents; the popover has to escape that.
-  assert.match(source, /\.draw-field \{[^}]*overflow: hidden/, "панель по-прежнему обрезает поле");
-  assert.match(styles, /\.emoji-field \{[^}]*overflow: visible/, "пикер должен это отменять");
+  const planner = source.indexOf("${getPanelPlannerStyles()}");
+  const picker = source.indexOf("${getEmojiPickerStyles()}");
+  assert.ok(planner !== -1, "стили планера не найдены");
+  assert.ok(picker > planner, "стили пикера должны идти после стилей планера");
+  assert.equal(source.split("${getEmojiPickerStyles()}").length, 2, "стили пикера подключены больше одного раза");
 });

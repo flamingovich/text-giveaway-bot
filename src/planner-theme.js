@@ -125,6 +125,12 @@ function getPlannerCanvas(scope, shell = scope) {
 
   ${scope} .app-desktop-bg { display: none; }
 
+  /* No scrollbars anywhere: the mini app is scrolled by touch, and in Telegram
+     on a computer the bars ate the edge of every sheet and list. Scrolling
+     itself still works - with the wheel, the trackpad and the finger. */
+  html, ${scope}, ${scope} * { scrollbar-width: none; }
+  html::-webkit-scrollbar, ${scope}::-webkit-scrollbar, ${scope} *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
   /* What shows past the page when it is pulled beyond its end. The body's
      palette cannot reach up here, so the two canvas colours are named. */
   html { background-color: #F2F2F7; }

@@ -143,3 +143,15 @@ test("asking a third time keeps counting", () => {
   clearWinnerAddressForRerequest(notify, notExpired);
   assert.strictEqual(notify.addressRerequestCount, 3);
 });
+
+// Asking again from the panel used to give the winner twenty minutes and burn
+// the prize after them, while the owner was the one waiting for a corrected
+// address. The second ask names no deadline at all.
+test("asking again names no deadline; the first ask keeps its twenty minutes", () => {
+  const { buildWinnerDepositAddressRequestHtml } = require("./deposit-guide");
+  const first = buildWinnerDepositAddressRequestHtml({}, { name: "BEEF" }, "trc20", 20, null);
+  const again = buildWinnerDepositAddressRequestHtml({}, { name: "BEEF" }, "trc20", null, null, { rerequest: true });
+  assert.match(first, /20 минут/);
+  assert.doesNotMatch(again, /минут|сгорит/);
+  assert.match(again, /ещё раз/);
+});

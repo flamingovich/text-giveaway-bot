@@ -18,9 +18,13 @@ const { registerWinnersMiniApp } = require("./winners-miniapp");
 const { registerAdminDashboard } = require("./admin-dashboard");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
+const { normalizeAdminLabel, formatReferralOwnerLabel } = require("./admin-label");
 const {
+  EMOJI_DATA_PATH,
+  sendEmojiData,
+  getEmojiOpenButtonMarkup,
+  getEmojiPanelMarkup,
   getEmojiPickerStyles,
-  getEmojiPickerMarkup,
   getEmojiPickerScript,
 } = require("./emoji-picker");
 const {
@@ -122,7 +126,6 @@ const {
   PANEL_DEPOSIT_NETWORKS,
   formatUsdStat,
   formatCountdownClock,
-  formatCardDateShort,
   keepAmountsWhole,
   normalizePanelHistoryFilter,
   filterPanelHistoryDraws,
@@ -331,7 +334,7 @@ function addDelegatedAdmin(user, label, addedBy) {
     username: user.username || "",
     first_name: user.first_name || "",
     last_name: user.last_name || "",
-    label: String(label || "").trim(),
+    label: normalizeAdminLabel(label),
     addedAt: new Date().toISOString(),
     addedBy: Number(addedBy) || null,
   });
@@ -343,6 +346,18 @@ function addDelegatedAdmin(user, label, addedBy) {
     last_name: user.last_name || "",
   });
   return { ok: true };
+}
+
+function renameDelegatedAdmin(userId, label) {
+  const id = Number(userId);
+  const data = readDelegatedAdmins();
+  const entry = (data.admins || []).find((item) => Number(item.userId) === id);
+  if (!entry) {
+    return { ok: false, error: "Админ с таким ID не найден." };
+  }
+  entry.label = normalizeAdminLabel(label);
+  writeDelegatedAdmins(data);
+  return { ok: true, label: entry.label };
 }
 
 function removeDelegatedAdmin(userId) {
@@ -1530,10 +1545,7 @@ function renderRemindActivePanelContent(activeDraws, projects) {
         </div>
       </div>
 
-      <button type="submit" class="draw-submit">
-        <span class="draw-ico">${renderFormIcon("confirm")}</span>
-        Отправить напоминание
-      </button>
+      <button type="submit" class="draw-submit">Отправить напоминание</button>
     </form>
   `;
 }
@@ -1585,9 +1597,10 @@ function renderPayoutQueueContent(draws, userProfiles, panelContext = null) {
     .join("");
 
   return `<div class="pl-queue" data-net="all">
+      <label class="pl-queue-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input type="search" data-queue-search placeholder="Имя, @ник, ID или кошелёк" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Поиск в очереди выплат" /></label>
       <div class="pl-seg pl-net-filter" role="group" aria-label="Сеть выплаты"><i class="pl-seg-ind" aria-hidden="true"></i>${filterButtons}</div>
       <div class="pl-queue-list">${winnerRows}</div>
-      <div class="pl-card pl-empty pl-queue-empty" hidden>В этой сети выплат нет</div>
+      <div class="pl-card pl-empty pl-queue-empty" hidden data-empty-net="В этой сети выплат нет" data-empty-search="Никого не нашли">В этой сети выплат нет</div>
     </div>`;
 }
 // The draws behind the payout queue: finished money draws with a winner still
@@ -1925,7 +1938,7 @@ function buildWinnerExpiredText(draw) {
   ].join("\n");
 }
 
-function buildWinnerDepositAddressRequestHtml(draw, networkId) {
+function buildWinnerDepositAddressRequestHtml(draw, networkId, { rerequest = false } = {}) {
   const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const resolvedNetwork = resolveDepositNetworkForProject(project, networkId);
   const projectLinkHtml = draw.projectId ? buildProjectLinkHtml(draw.projectId) : null;
@@ -1933,8 +1946,9 @@ function buildWinnerDepositAddressRequestHtml(draw, networkId) {
     draw,
     project,
     resolvedNetwork,
-    WINNER_DEPOSIT_ADDRESS_MINUTES,
+    rerequest ? null : WINNER_DEPOSIT_ADDRESS_MINUTES,
     projectLinkHtml,
+    { rerequest },
   );
 }
 
@@ -4492,23 +4506,25 @@ function clearWinnerAddressForRerequest(notify) {
   return clearWinnerAddressBeforeRerequest(notify, isDepositAddressExpired);
 }
 
-async function requestWinnerDepositAddress(draw, userId, notify) {
+// The first ask, right after the check, gives the winner twenty minutes. The
+// owner asking again from the panel gives none: that ask exists because the
+// first address was no good, and a prize burning while the owner waits for a
+// corrected one is the owner's loss of a winner, not the winner's fault. With
+// no addressExpiresAt the scheduler never expires the record.
+async function requestWinnerDepositAddress(draw, userId, notify, { deadline = true } = {}) {
   const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const networkId = resolveDepositNetworkForProject(project, notify.requiredDepositNetwork);
   notify.requiredDepositNetwork = networkId;
 
-  const addressExpiresAt = DateTime.now()
-    .setZone(TIMEZONE)
-    .plus({ minutes: WINNER_DEPOSIT_ADDRESS_MINUTES })
-    .toISO();
-
   notify.status = "awaiting_address";
-  notify.addressExpiresAt = addressExpiresAt;
+  notify.addressExpiresAt = deadline
+    ? DateTime.now().setZone(TIMEZONE).plus({ minutes: WINNER_DEPOSIT_ADDRESS_MINUTES }).toISO()
+    : "";
   notify.trc20Address = "";
 
   const message = await sendHtmlWithEmojiFallback(
     userId,
-    buildWinnerDepositAddressRequestHtml(draw, networkId),
+    buildWinnerDepositAddressRequestHtml(draw, networkId, { rerequest: !deadline }),
     getWinnerDepositAddressKeyboard(draw),
   );
   notify.addressPromptMessageId = message.message_id;
@@ -5414,8 +5430,11 @@ function renderAccessPersonCard(userId, userProfiles, options = {}) {
   const { badge = "", removable = false, superClass = "", entry = {} } = options;
   const person = getAccessPersonMeta(userId, userProfiles, entry);
   const fullName = [person.first_name, person.last_name].filter(Boolean).join(" ").trim();
-  const displayName = fullName || (person.username ? `@${person.username}` : `ID ${userId}`);
-  const usernameLine = person.username ? `@${person.username}` : "без username";
+  const givenName = normalizeAdminLabel(entry.label);
+  const displayName = givenName || fullName || (person.username ? `@${person.username}` : `ID ${userId}`);
+  const handle = person.username ? `@${person.username}` : "без username";
+  // With a given name on top, the Telegram name moves down next to the handle.
+  const usernameLine = givenName && fullName && fullName !== givenName ? `${handle} · ${fullName}` : handle;
   const initial = (fullName || person.username || String(userId)).charAt(0).toUpperCase();
   const avatar = person.avatarFileId
     ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(userId))}" alt="" class="access-avatar" data-fallback="${escapeHtml(initial)}" data-fallback-class="access-avatar access-avatar-fallback" data-fallback-style="${escapeHtml(getAvatarFallbackStyle(userId))}" />`
@@ -5423,6 +5442,15 @@ function renderAccessPersonCard(userId, userProfiles, options = {}) {
   const badgeHtml = badge ? `<span class="access-badge">${escapeHtml(badge)}</span>` : "";
   const deleteAction = removable
     ? `<div class="access-card-actions">
+          <button
+            type="button"
+            class="project-icon-btn project-edit-btn access-edit-btn"
+            title="Изменить имя"
+            aria-label="Изменить имя"
+            data-access-id="${escapeHtml(String(userId))}"
+            data-access-label="${escapeHtml(givenName)}"
+            data-access-handle="${escapeHtml(person.username ? `@${person.username}` : fullName || `ID ${userId}`)}"
+          >${renderFormIcon("edit")}</button>
           <form method="post" action="${PANEL_BASE}/admin/access/${encodeURIComponent(String(userId))}/remove" class="project-delete-form">
             <button
               type="submit"
@@ -6405,8 +6433,10 @@ function renderQuickActionIcon(type) {
   return "";
 }
 
-function drawLabel(iconType, text) {
-  return `<label class="draw-label"><span class="draw-ico">${renderFormIcon(iconType)}</span><span class="draw-label-text">${escapeHtml(text)}</span></label>`;
+// Words only: the owner chose field labels without icons (the iOS way) over the
+// tinted glyphs, colour tiles and grey glyphs they were shown side by side.
+function drawLabel(_iconType, text) {
+  return `<label class="draw-label"><span class="draw-label-text">${escapeHtml(text)}</span></label>`;
 }
 
 function renderProjectCard(project) {
@@ -6529,20 +6559,12 @@ function formatWinnerVictoryDate(draw) {
   return formatDateTime(isoString);
 }
 
+// Whose referral someone else's referral is, for the badge (admin-label.js).
 function formatOrganizerReferralLabel(ownerId, userProfiles) {
-  const ownerMeta = userProfiles.users?.[String(ownerId)]?.meta;
-  if (!ownerMeta) {
-    return "организатор";
-  }
-  const username = String(ownerMeta.username || "").replace(/^@/, "").trim();
-  if (username) {
-    return `реф @${username}`;
-  }
-  const fullName = [ownerMeta.first_name, ownerMeta.last_name].filter(Boolean).join(" ").trim();
-  if (fullName) {
-    return `реф ${fullName}`;
-  }
-  return "организатор";
+  const givenLabel = (readDelegatedAdminsSnapshot().admins || []).find(
+    (entry) => Number(entry.userId) === Number(ownerId),
+  )?.label;
+  return formatReferralOwnerLabel({ givenLabel, meta: userProfiles.users?.[String(ownerId)]?.meta });
 }
 
 // The documents one panel page reads for its winner cards - see panel-referral-badge.js.
@@ -6566,7 +6588,7 @@ function getWinnerReferralBadgeHtml(winnerId, draw, userProfiles, project, proje
   }
   if (badge.kind === "foreign") {
     const label = formatOrganizerReferralLabel(badge.referralOwnerId, userProfiles);
-    return `<span class="winner-badge winner-badge-warn">Не мой реф (${escapeHtml(label)})</span>`;
+    return `<span class="winner-badge winner-badge-warn">${escapeHtml(label)}</span>`;
   }
   if (badge.kind === "non-referral") {
     return `<span class="winner-badge winner-badge-warn">Не реф</span>`;
@@ -6634,7 +6656,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
       ? `<span class="winner-badge winner-badge-danger">${escapeHtml(forfeitLabel)}</span>`
       : ""
     : isPaymentDenied
-      ? `<span class="winner-badge winner-badge-danger">Отказано в выплате</span>`
+      ? `<span class="winner-badge winner-badge-danger">Отказано</span>`
     : isAwaitingAddress
       ? `<span class="winner-badge">Ожидает адрес</span>`
     : isVerified
@@ -6691,7 +6713,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     actions.push(["pay", "Оплатил", " pl-btn-success"]);
   }
   if (canMarkPaid) {
-    actions.push(["deny-pay", "Отказано в выплате", " pl-btn-danger"]);
+    actions.push(["deny-pay", "Отказано", " pl-btn-danger"]);
   }
   // Offered next to "Оплатил" on purpose: the address turning out to be wrong
   // is discovered at the moment of paying, not before it.
@@ -6728,8 +6750,13 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     ? `<span class="pl-win-meta">Дата победы: ${escapeHtml(formatWinnerVictoryDate(draw))}</span>`
     : "";
 
+  // What the payout queue's search looks through, beyond the words on the card.
+  const searchText = [winnerId, displayName, meta.username ? `@${meta.username}` : "", trcAddress, project?.name || ""]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
   return `
-    <article class="pl-win" data-net="${networkId || ""}" style="--i:${Number(options.index) || 0}">
+    <article class="pl-win" data-net="${networkId || ""}" data-search="${escapeHtml(searchText)}" style="--i:${Number(options.index) || 0}">
       <div class="pl-win-top">
         ${avatar}
         <div class="pl-win-name">
@@ -7035,10 +7062,6 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = n
             </form>
           </div>
           <div class="pl-div" aria-hidden="true"></div>
-          <div class="pl-period">
-            <span class="pl-period-ico">${PANEL_ICONS.calendar}</span>
-            <span>${escapeHtml(formatCardDateShort(draw.publishAt, TIMEZONE))} <span class="pl-period-sep">-</span> <b>${escapeHtml(formatCardDateShort(draw.endAt, TIMEZONE))}</b></span>
-          </div>
           <div class="pl-chips">
             <span class="pl-chip"><span class="pl-chip-l">Участники</span><span class="pl-chip-v" data-part>${(draw.participantIds || []).length}</span></span>
             <span class="pl-chip"><span class="pl-chip-l">Мест</span><span class="pl-chip-v">${Number(draw.winnersCount) || 0}</span></span>
@@ -7084,10 +7107,7 @@ function renderPanelLiveStatsSection(draws, userProfiles, panelContext = null) {
       : "";
   return `
       <section id="panelStatsRoot" class="pl-card pl-stats">
-        <h2 class="pl-stats-title">
-          <span class="pl-stats-ico">${renderFormIcon("history")}</span>
-          История розыгрышей
-        </h2>
+        <h2 class="pl-stats-title">История розыгрышей</h2>
         <div class="pl-stat-grid">
           <div class="pl-stat"><span class="pl-stat-l">Всего розыгрышей</span><span class="pl-stat-v" data-count-int="${drawsStats.total}">${drawsStats.total}</span></div>
           ${usdStat("Разыграно всего", drawsStats.totalRaffledUsdtValue)}
@@ -8348,8 +8368,6 @@ ${getPanelFluidTypographyVars()}
       filter: none;
       transform: none;
     }
-    .draw-submit .draw-ico { color: inherit; width: 18px; height: 18px; }
-    .draw-submit .draw-ico svg { width: 18px; height: 18px; }
     .draw-submit-row {
       display: flex;
       flex-direction: column;
@@ -9860,7 +9878,6 @@ ${getPanelFluidTypographyVars()}
       .form-footer button { max-width: none; }
     }
     ${getMiniAppStyles()}
-    ${getEmojiPickerStyles()}
 
     /* Emboss ("тиснение"), as in the mini apps (getEmbossStyles in
        miniapp-ui.js): a lit top edge and a shaded bottom edge inside surfaces
@@ -9926,9 +9943,6 @@ ${getPanelFluidTypographyVars()}
     .panel-bottom-bar {
       box-shadow: inset 0 1px 0 var(--pemb-hi), 0 -6px 20px rgba(0, 0, 0, 0.24) !important;
     }
-    .emoji-pop {
-      box-shadow: inset 0 1px 0 var(--pemb-hi), inset 0 -1px 0 var(--pemb-lo), 0 14px 40px rgba(0, 0, 0, 0.28) !important;
-    }
     .draw-image-preview-wrap {
       box-shadow: inset 0 1px 0 var(--pemb-inner-hi), inset 0 -1px 0 var(--pemb-inner-lo), 0 8px 20px rgba(27, 45, 94, 0.08) !important;
     }
@@ -9948,7 +9962,6 @@ ${getPanelFluidTypographyVars()}
     .remind-draw-item,
     .paste-box,
     .form-section-card,
-    .emoji-tabs,
     .msg,
     .badge,
     .access-badge,
@@ -10031,6 +10044,7 @@ ${getPanelFluidTypographyVars()}
     ${getPanelLookStyles()}
     `)}
     ${getPanelPlannerStyles()}
+    ${getEmojiPickerStyles()}
   </style>
 </head>
 <body>
@@ -10102,15 +10116,18 @@ ${getPanelFluidTypographyVars()}
           <div class="draw-block">
             <div class="draw-field emoji-field" data-emoji-field>
               ${drawLabel("gift", "Заголовок")}
-              <input class="draw-input" name="postTitle" type="text" maxlength="120" placeholder="Необязательно — только в посте" />
-              ${getEmojiPickerMarkup()}
+              <div class="emoji-input">
+                <input class="draw-input" name="postTitle" type="text" maxlength="120" placeholder="Напишите заголовок поста" />
+                ${getEmojiOpenButtonMarkup()}
+              </div>
+              ${getEmojiPanelMarkup()}
             </div>
             <div class="draw-row-2">
               <div class="draw-field">
                 ${drawLabel("prize", "Приз")}
                 <select class="draw-input" id="prizeType" name="prizeType" required>
                   <option value="money_rub">Деньги ₽</option>
-                  <option value="money_usd">Деньги $</option>
+                  <option value="money_usd" selected>Деньги $</option>
                   <option value="custom">Другое</option>
                 </select>
               </div>
@@ -10173,11 +10190,11 @@ ${getPanelFluidTypographyVars()}
               <div class="draw-field anim-collapse anim-collapse-open" id="endAfterWrap">
                 ${drawLabel("finish", "Длительность")}
                 <div class="draw-inline-full">
-                  <input class="draw-input draw-input-num" name="endAfterValue" type="number" min="1" step="1" value="10" />
+                  <input class="draw-input draw-input-num" name="endAfterValue" type="number" min="1" step="1" value="1" />
                   <select class="draw-input draw-input-unit" name="endAfterUnit">
                     <option value="minutes">мин.</option>
                     <option value="hours">ч.</option>
-                    <option value="days">дн.</option>
+                    <option value="days" selected>дн.</option>
                   </select>
                 </div>
               </div>
@@ -10196,10 +10213,10 @@ ${getPanelFluidTypographyVars()}
               <div class="draw-field anim-collapse anim-collapse-open" id="winnerConfirmWrap">
                 ${drawLabel("confirm", "Время")}
                 <div class="draw-inline-full">
-                  <input class="draw-input draw-input-num" name="winnerConfirmValue" type="number" min="1" step="1" value="30" />
+                  <input class="draw-input draw-input-num" name="winnerConfirmValue" type="number" min="1" step="1" value="1" />
                   <select class="draw-input draw-input-unit" name="winnerConfirmUnit">
                     <option value="minutes">мин.</option>
-                    <option value="hours">ч.</option>
+                    <option value="hours" selected>ч.</option>
                   </select>
                 </div>
               </div>
@@ -10231,10 +10248,7 @@ ${getPanelFluidTypographyVars()}
           </div>
 
           <input type="hidden" name="publishTarget" value="channel" />
-          <button type="submit" class="draw-submit" id="createDrawSubmitBtn">
-            <span class="draw-ico">${renderFormIcon("gift")}</span>
-            Создать розыгрыш
-          </button>
+          <button type="submit" class="draw-submit" id="createDrawSubmitBtn">Создать розыгрыш</button>
         </form>
       </section>
 
@@ -10274,7 +10288,6 @@ ${getPanelFluidTypographyVars()}
           <div class="project-form-footer">
             <button type="button" id="project-edit-cancel" class="draw-link-btn project-cancel-btn" style="display:none;">Отмена редактирования</button>
             <button type="submit" id="project-submit-btn" class="draw-submit">
-              <span class="draw-ico">${renderFormIcon("project")}</span>
               <span id="project-submit-label">Добавить проект</span>
             </button>
           </div>
@@ -10367,17 +10380,22 @@ ${getPanelFluidTypographyVars()}
           }
         </div>
 
-        <form method="post" action="${PANEL_BASE}/admin/access" class="draw-form access-form">
+        <form method="post" action="${PANEL_BASE}/admin/access" class="draw-form access-form" id="access-form">
           <div class="draw-block">
-            <div class="draw-field">
+            <div class="draw-field" id="access-telegram-field">
               ${drawLabel("user", "Telegram")}
               <input class="draw-input" name="userRef" type="text" required placeholder="@username или 123456789" />
             </div>
+            <div class="access-editing-hint" id="access-editing-hint" hidden></div>
+            <div class="draw-field">
+              ${drawLabel("user", "Имя")}
+              <input class="draw-input" name="label" type="text" maxlength="40" placeholder="Например, Депман" />
+            </div>
           </div>
-          <button type="submit" class="draw-submit">
-            <span class="draw-ico">${renderFormIcon("confirm")}</span>
-            Добавить админа
+          <button type="submit" class="draw-submit" id="access-submit-btn">
+            <span id="access-submit-label">Добавить админа</span>
           </button>
+          <button type="button" class="draw-link-btn access-edit-cancel" id="access-edit-cancel" hidden>Отмена</button>
         </form>
       </section>
       `
@@ -10988,6 +11006,46 @@ ${getPanelFluidTypographyVars()}
       applyRemindPrefs();
     }
 
+    function setupAccessFormEdit() {
+      const form = document.getElementById("access-form");
+      const telegramField = document.getElementById("access-telegram-field");
+      const telegramInput = form?.querySelector('[name="userRef"]');
+      const labelInput = form?.querySelector('[name="label"]');
+      const hint = document.getElementById("access-editing-hint");
+      const submitLabel = document.getElementById("access-submit-label");
+      const cancelBtn = document.getElementById("access-edit-cancel");
+      if (!form || !telegramField || !telegramInput || !labelInput || !submitLabel || !cancelBtn || !hint) return;
+
+      function reset() {
+        form.action = "${PANEL_BASE}/admin/access";
+        telegramField.hidden = false;
+        telegramInput.required = true;
+        hint.hidden = true;
+        hint.textContent = "";
+        labelInput.value = "";
+        submitLabel.textContent = "Добавить админа";
+        cancelBtn.hidden = true;
+      }
+
+      document.addEventListener("click", (event) => {
+        const btn = event.target.closest(".access-edit-btn");
+        if (!btn) return;
+        const id = btn.dataset.accessId || "";
+        if (!id) return;
+        form.action = "${PANEL_BASE}/admin/access/" + encodeURIComponent(id) + "/rename";
+        telegramField.hidden = true;
+        telegramInput.required = false;
+        hint.hidden = false;
+        hint.textContent = "Имя для " + (btn.dataset.accessHandle || "админа");
+        labelInput.value = btn.dataset.accessLabel || "";
+        submitLabel.textContent = "Сохранить имя";
+        cancelBtn.hidden = false;
+        form.scrollIntoView({ behavior: "smooth", block: "center" });
+        labelInput.focus({ preventScroll: true });
+      });
+      cancelBtn.addEventListener("click", reset);
+    }
+
     function setupProjectFormEdit() {
       const form = document.getElementById("create-project-form");
       const cancelBtn = document.getElementById("project-edit-cancel");
@@ -11298,9 +11356,15 @@ ${getPanelFluidTypographyVars()}
               const sheetScroll = document.querySelector("#panelSheetRoot .panel-sheet-scroll");
               const sheetScrollTop = sheetScroll ? sheetScroll.scrollTop : 0;
               const net = queueRoot.querySelector(".pl-queue")?.getAttribute("data-net") || "all";
+              const query = queueRoot.querySelector("[data-queue-search]")?.value || "";
               queueRoot.innerHTML = data.payoutQueueHtml;
               if (net !== "all") {
                 queueRoot.querySelector('.pl-net-filter .pl-seg-btn[data-net="' + net + '"]')?.click();
+              }
+              const nextSearch = queueRoot.querySelector("[data-queue-search]");
+              if (query && nextSearch) {
+                nextSearch.value = query;
+                window.plApplyQueueFilter?.(nextSearch.closest(".pl-queue"));
               }
               if (sheetScroll) sheetScroll.scrollTop = sheetScrollTop;
             }
@@ -11371,10 +11435,7 @@ ${getPanelFluidTypographyVars()}
         submitting = true;
         submitBtn.disabled = true;
         submitBtn.classList.add("is-busy");
-        submitBtn.innerHTML =
-          '<span class="draw-ico">' +
-          ${JSON.stringify(renderFormIcon("gift"))} +
-          "</span> Создаём розыгрыш…";
+        submitBtn.textContent = "Создаём розыгрыш…";
       });
 
       window.addEventListener("pageshow", () => {
@@ -11388,6 +11449,7 @@ ${getPanelFluidTypographyVars()}
     setupDrawImageField();
     setupClipboardSubmit("create-draw-form", "draw-clipboard-data", "draw-image-input", "pasted-draw");
     setupProjectFormEdit();
+    setupAccessFormEdit();
     setupAccessDeleteButtons();
     setupPrizeTypeToggle();
     setupPreventNumberWheel();
@@ -11471,6 +11533,7 @@ app.get("/brand/background-dark.png", (req, res) => {
   }
   res.sendFile(BRAND_BACKGROUND_DARK_FILE);
 });
+app.get(EMOJI_DATA_PATH, sendEmojiData);
 const panelRouter = express.Router();
 
 // Panel actions are form posts carrying a SameSite=None cookie, so a page on
@@ -11781,6 +11844,21 @@ panelRouter.post("/admin/access", webAuth.requireAuth, requireOrganizer, require
         String(resolved.user.id);
   redirectWithMessage(res, `Админ ${display} добавлен.`);
 });
+
+panelRouter.post(
+  "/admin/access/:userId/rename",
+  webAuth.requireAuth,
+  requireOrganizer,
+  requireSuperAdmin,
+  (req, res) => {
+    const result = renameDelegatedAdmin(req.params.userId, req.body?.label);
+    if (!result.ok) {
+      redirectWithMessage(res, result.error);
+      return;
+    }
+    redirectWithMessage(res, result.label ? `Имя сохранено: ${result.label}.` : "Имя убрано.");
+  },
+);
 
 panelRouter.post(
   "/admin/access/:userId/remove",
@@ -12526,7 +12604,7 @@ panelRouter.post(
     clearWinnerAddressForRerequest(notify);
 
     try {
-      await requestWinnerDepositAddress(draw, userId, notify);
+      await requestWinnerDepositAddress(draw, userId, notify, { deadline: false });
     } catch (error) {
       // Nothing is persisted on failure, so the winner keeps the address and
       // the state they already had.
@@ -12541,7 +12619,7 @@ panelRouter.post(
     persistOwnedDrawContext({ data, archivedData, draw, inArchive });
     redirectWithMessage(
       res,
-      `Запрос адреса отправлен победителю ${userId}. У него ${WINNER_DEPOSIT_ADDRESS_MINUTES} мин.`,
+      `Запрос адреса отправлен победителю ${userId}. Без срока — приз не сгорит.`,
       panelReturn,
     );
   },

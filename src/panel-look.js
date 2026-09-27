@@ -111,8 +111,6 @@ function getPanelLookStyles() {
       line-height: 1.2;
       color: var(--pl-text);
     }
-    .pl-stats-ico { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--pl-tint); color: var(--pl-btn); }
-    .pl-stats-ico svg { width: 18px; height: 18px; display: block; }
     .pl-stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
     .pl-stat { display: grid; gap: 3px; min-width: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--pl-line-soft); background: var(--pl-sunk); box-shadow: var(--pl-emb); }
     .pl-stat-l { font-size: 11.5px; font-weight: 600; color: var(--pl-hint); }
@@ -832,8 +830,41 @@ function getPanelLookScript({ panelBase }) {
         });
       }
 
-      // Every waiting winner is already in the sheet, so the network filter only
-      // hides and shows cards; nothing is fetched.
+      // Every waiting winner is already in the sheet, so the network filter and
+      // the search only hide and show cards; nothing is fetched. Both apply at
+      // once: a card shows when it is in the chosen network and matches the
+      // search, which looks through the words on the card and its data-search
+      // (id, @username, wallet).
+      function applyQueueFilter(queue) {
+        const list = queue && queue.querySelector(".pl-queue-list");
+        if (!list) return 0;
+        const net = queue.getAttribute("data-net") || "all";
+        const input = queue.querySelector("[data-queue-search]");
+        const words = String(input ? input.value : "").trim().toLowerCase().split(/\\s+/).filter(Boolean);
+        let shown = 0;
+        list.querySelectorAll(":scope > .pl-win").forEach((card) => {
+          const haystack = (card.getAttribute("data-search") || "") + " " + card.textContent.toLowerCase();
+          const match =
+            (net === "all" || card.getAttribute("data-net") === net) &&
+            words.every((word) => haystack.includes(word));
+          card.hidden = !match;
+          if (match) {
+            card.style.setProperty("--i", String(shown));
+            shown += 1;
+          }
+        });
+        const empty = queue.querySelector(".pl-queue-empty");
+        if (empty) {
+          empty.hidden = shown > 0;
+          empty.textContent = words.length
+            ? empty.getAttribute("data-empty-search") || "Никого не нашли"
+            : empty.getAttribute("data-empty-net") || "В этой сети выплат нет";
+        }
+        return shown;
+      }
+      // The live poll redraws the queue and puts the search back through this.
+      window.plApplyQueueFilter = applyQueueFilter;
+
       function setupQueueNetworkFilter() {
         document.addEventListener("click", (event) => {
           const btn = event.target.closest(".pl-net-filter .pl-seg-btn");
@@ -847,19 +878,14 @@ function getPanelLookScript({ panelBase }) {
           queue.setAttribute("data-net", next);
           pressOnly(btn.closest(".pl-seg"), btn);
           const from = list.offsetHeight;
-          let shown = 0;
-          list.querySelectorAll(":scope > .pl-win").forEach((card) => {
-            const match = next === "all" || card.getAttribute("data-net") === next;
-            card.hidden = !match;
-            if (match) {
-              card.style.setProperty("--i", String(shown));
-              shown += 1;
-            }
-          });
-          const empty = queue.querySelector(".pl-queue-empty");
-          if (empty) empty.hidden = shown > 0;
+          applyQueueFilter(queue);
           slideIn(list, NET_ORDER.indexOf(next) > NET_ORDER.indexOf(current) ? "next" : "prev");
           tweenHeight(list, from);
+        });
+        document.addEventListener("input", (event) => {
+          const input = event.target.closest("[data-queue-search]");
+          if (!input) return;
+          applyQueueFilter(input.closest(".pl-queue"));
         });
       }
 
