@@ -1597,6 +1597,7 @@ function renderPayoutQueueContent(draws, userProfiles, panelContext = null) {
     .map(({ draw, winnerId, antiFraudSignals }, index) =>
       renderWinnerCard(draw, winnerId, userProfiles, draw.winnerNotifications || {}, antiFraudSignals, {
         showProject: true,
+        payoutQueue: true,
         returnPanel: "payoutQueue",
         index,
         reads,
@@ -6593,7 +6594,7 @@ function getWinnerReferralBadgeHtml(winnerId, draw, userProfiles, project, proje
     isUnregistered: isParticipationUnregistered(draw, winnerId),
   });
   if (badge.kind === "unregistered") {
-    return `<span class="winner-badge winner-badge-warn">Не зарег.</span>`;
+    return `<span class="winner-badge winner-badge-warn">Не зареган</span>`;
   }
   if (badge.kind === "foreign") {
     const label = formatOrganizerReferralLabel(badge.referralOwnerId, userProfiles);
@@ -6678,8 +6679,10 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
         ? `<span class="winner-badge">Уведомлён</span>`
         : `<span class="winner-badge">Ожидает</span>`;
   // The public pages mask this person; the panel must not, or the owner cannot
-  // tell who they are paying. The badge says why the channel post looks different.
-  const anonymousBadge = isParticipantAnonymous(draw, winnerId)
+  // tell who they are paying. The badge says why the channel post looks
+  // different, which matters beside the draw and not in the payout queue - the
+  // owner asked for it gone there.
+  const anonymousBadge = !options.payoutQueue && isParticipantAnonymous(draw, winnerId)
     ? `<span class="winner-badge winner-badge-anon">Аноним</span>`
     : "";
   const antiFraudBadges = antiFraud.labels
@@ -6788,7 +6791,11 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
           : `<span class="${accountIdClass}">${escapeHtml(accountId.id)}</span>`
       }${accountId.warning ? `<span class="pl-win-id-warn">${escapeHtml(accountId.warning)}</span>` : ""}`
     : "";
-  const sideHtml = projectLogoHtml || accountIdHtml ? `<div class="pl-win-side">${projectLogoHtml}${accountIdHtml}</div>` : "";
+  // The logo moves up only to make room for an ID; without one it stays in the middle.
+  const sideHtml =
+    projectLogoHtml || accountIdHtml
+      ? `<div class="pl-win-side${accountIdHtml ? " pl-win-side-id" : ""}">${projectLogoHtml}${accountIdHtml}</div>`
+      : "";
 
   // What the payout queue's search looks through, beyond the words on the card.
   const searchText = [winnerId, displayName, meta.username ? `@${meta.username}` : "", trcAddress, project?.name || "", accountId?.id || ""]

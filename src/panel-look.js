@@ -372,10 +372,12 @@ function getPanelLookStyles() {
     .pl-win-logo { flex: none; margin-left: auto; line-height: 0; }
     :root body .pl-win-logo img { width: 60px; height: 30px; max-width: none; object-fit: contain; object-position: right center; }
     .pl-av-link { flex: none; display: block; line-height: 0; border-radius: 50%; }
-    /* The brand's logo at the top right, the ID the winner gave it underneath. */
+    /* The brand's logo on the right, level with the name; with the ID the
+       winner gave it, the logo goes to the top and the ID underneath. */
     /* Narrow on purpose: a 24-character Pokerdom ID breaks into two lines
        rather than squeezing the name and the date out of the card. */
-    .pl-win-side { flex: none; align-self: flex-start; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 8.5rem; min-width: 0; margin-left: auto; }
+    .pl-win-side { flex: none; align-self: center; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 8.5rem; min-width: 0; margin-left: auto; }
+    .pl-win-side.pl-win-side-id { align-self: flex-start; }
     .pl-win-side .pl-win-logo { margin-left: 0; }
     .pl-win-side .pl-win-id { display: block; max-width: 100%; padding: 3px 7px; text-align: right; white-space: normal; word-break: break-all; }
     .pl-win-side .pl-win-id[role="button"] { cursor: pointer; -webkit-user-select: none; user-select: none; }
