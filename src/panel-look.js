@@ -371,6 +371,16 @@ function getPanelLookStyles() {
     .pl-win-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 500; color: var(--pl-hint); }
     .pl-win-logo { flex: none; margin-left: auto; line-height: 0; }
     :root body .pl-win-logo img { width: 60px; height: 30px; max-width: none; object-fit: contain; object-position: right center; }
+    .pl-av-link { flex: none; display: block; line-height: 0; border-radius: 50%; }
+    /* The brand's logo at the top right, the ID the winner gave it underneath. */
+    /* Narrow on purpose: a 24-character Pokerdom ID breaks into two lines
+       rather than squeezing the name and the date out of the card. */
+    .pl-win-side { flex: none; align-self: flex-start; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 8.5rem; min-width: 0; margin-left: auto; }
+    .pl-win-side .pl-win-logo { margin-left: 0; }
+    :root body .pl-win-side button.pl-win-id { display: block; width: auto; min-width: 0; max-width: 100%; height: auto; margin: 0; padding: 3px 7px; text-align: right; white-space: normal; word-break: break-all; cursor: pointer; }
+    .pl-win-id-k { margin-right: 4px; }
+    .pl-win-id-warn { display: block; max-width: 100%; text-align: right; }
+    .pl-win-meta.pl-win-date { white-space: normal; }
     /* Badges and the payout block always share one line. When the badges would be
        cut, the script adds pl-tight and the network's name goes, its logo stays;
        only past that do the badges end in "…". */

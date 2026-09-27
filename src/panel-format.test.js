@@ -6,6 +6,7 @@ const {
   formatCountdownClock,
   formatCardDateShort,
   keepAmountsWhole,
+  keepTogether,
   normalizePanelHistoryFilter,
   filterPanelHistoryDraws,
   countDepositNetworks,
@@ -98,4 +99,10 @@ test("an amount never breaks between its digit groups", () => {
   assert.equal(keepAmountsWhole("1 500 000 ₽"), `1${nbsp}500${nbsp}000 ₽`);
   assert.equal(keepAmountsWhole("50$ и 2 приза"), "50$ и 2 приза");
   assert.equal(keepAmountsWhole(undefined), "");
+});
+
+test("a date keeps its time on the same line", () => {
+  const nbsp = String.fromCharCode(0xa0);
+  assert.equal(keepTogether("03.06.2026 18:13"), `03.06.2026${nbsp}18:13`);
+  assert.equal(keepTogether(null), "");
 });

@@ -37,6 +37,11 @@ function keepAmountsWhole(text) {
   return String(text ?? "").replace(/(\d) (?=\d{3}(?!\d))/g, `$1${NO_BREAK_SPACE}`);
 }
 
+// A phrase that must not break inside, such as a date with its time.
+function keepTogether(text) {
+  return String(text ?? "").split(" ").join(NO_BREAK_SPACE);
+}
+
 // Time left as "HH:MM:SS"; hours run past 24 for draws that last days.
 // Nothing left gives null, and the caller says what that means for its chip.
 function formatCountdownClock(msLeft) {
@@ -96,6 +101,7 @@ module.exports = {
   formatCountdownClock,
   formatCardDateShort,
   keepAmountsWhole,
+  keepTogether,
   normalizePanelHistoryFilter,
   filterPanelHistoryDraws,
   countDepositNetworks,

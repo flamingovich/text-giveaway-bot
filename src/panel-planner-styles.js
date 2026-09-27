@@ -346,6 +346,27 @@ const WINNERS = `
   }
   body .winner-profile-btn:active,
   body .winner-copy-btn:active { transform: scale(1.15); }
+  body .pl-win-name-row .winner-message-btn.is-busy { opacity: .45; pointer-events: none; }
+
+  /* The ID the winner gave the project: grey monospace under the logo, red
+     when it cannot be real (winner-account-id.js), green for a moment once
+     copied. */
+  :root body .pl-win-side button.pl-win-id {
+    color: var(--label-2);
+    background: var(--fill);
+    border: 0;
+    border-radius: .5rem;
+    box-shadow: none;
+    font: 500 .75rem/1.3 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0;
+    transition: color .2s var(--ease), background-color .2s var(--ease), transform .14s var(--ease);
+  }
+  :root body .pl-win-side button.pl-win-id:active { transform: scale(.96); }
+  :root body .pl-win-side .pl-win-id-k { color: var(--label-3); font-weight: 600; }
+  :root body .pl-win-side button.pl-win-id.is-suspect { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+  :root body .pl-win-side button.pl-win-id.is-suspect .pl-win-id-k { color: inherit; opacity: .6; }
+  :root body .pl-win-side button.pl-win-id.is-copied { color: var(--green); }
+  body .pl-win-id-warn { color: var(--red); font-size: .6875rem; font-weight: 500; line-height: 1.25; }
 `;
 
 // Fields are grey fills on the sheet, the planner's control; the caption above

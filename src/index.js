@@ -19,6 +19,13 @@ const { registerAdminDashboard } = require("./admin-dashboard");
 const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniAppViewportMeta, getPanelFluidTypographyVars } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { normalizeAdminLabel, formatReferralOwnerLabel } = require("./admin-label");
+const { describeWinnerAccountId } = require("./winner-account-id");
+const {
+  getWinnerDirectChatUrl,
+  buildWinnerChatLinkMessage,
+  isChatLinkPrivacyRefusal,
+  createChatLinkThrottle,
+} = require("./winner-chat-link");
 const {
   EMOJI_DATA_PATH,
   sendEmojiData,
@@ -130,6 +137,7 @@ const {
   normalizePanelHistoryFilter,
   filterPanelHistoryDraws,
   countDepositNetworks,
+  keepTogether,
 } = require("./panel-format");
 const { PANEL_ICONS, getPanelLookStyles, getPanelLookScript } = require("./panel-look");
 const { keepLayout } = require("./css-layout-filter");
@@ -6407,6 +6415,7 @@ function renderFormIcon(type) {
     edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"/></svg>',
     delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
     user: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>',
+    message: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/></svg>',
     history: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7-1.93-.79-3.68-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>',
     chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6-1.41-1.41z"/></svg>',
     copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
@@ -6736,8 +6745,19 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
         })
         .join("")}</div>`
     : "";
+  // Where the profile link was, the owner asked for a way to write to the
+  // winner (winner-chat-link.js); the profile opens from the avatar instead.
   const profileUrl = buildParticipantProfileUrl(winnerId, PANEL_BASE);
-  const profileBtn = `<a href="${escapeHtml(profileUrl)}" class="winner-profile-btn" title="Профиль участника" aria-label="Профиль участника">${renderFormIcon("user")}</a>`;
+  const avatarHtml = `<a href="${escapeHtml(profileUrl)}" class="pl-av-link" title="Профиль участника" aria-label="Профиль участника">${avatar}</a>`;
+  const directChatUrl = getWinnerDirectChatUrl(meta.username);
+  const chatTarget = directChatUrl
+    ? `href="${escapeHtml(directChatUrl)}" data-chat-direct`
+    : `href="#" role="button" data-chat-link="${escapeHtml(
+        `${PANEL_BASE}/draws/${encodeURIComponent(draw.id)}/chat-link/${encodeURIComponent(String(winnerId))}`,
+      )}"`;
+  const messageBtn = `<a ${chatTarget} class="winner-profile-btn winner-message-btn" title="Написать" aria-label="${escapeHtml(
+    `Написать: ${displayName}`,
+  )}">${renderFormIcon("message")}</a>`;
   // In the payout queue the brand logo says which project the money is for; a
   // project without a logo keeps its name in words.
   const logoUrls = options.showProject ? getBrandLogoUrls(project) : null;
@@ -6746,24 +6766,37 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     options.showProject && !logoUrls
       ? `<span class="pl-win-meta">Проект: ${escapeHtml(project?.name || "не указан")}</span>`
       : "";
+  // Allowed to wrap once a long ID narrows the column, but only after the
+  // label: the date and the time stay together.
   const victoryDateHtml = options.showProject
-    ? `<span class="pl-win-meta">Дата победы: ${escapeHtml(formatWinnerVictoryDate(draw))}</span>`
+    ? `<span class="pl-win-meta pl-win-date">Дата победы: ${keepTogether(escapeHtml(formatWinnerVictoryDate(draw)))}</span>`
     : "";
+  // The ID they gave the project, under its logo, so the owner can check it
+  // before paying; red when it cannot be real (winner-account-id.js). A tap copies it.
+  const accountId = project ? describeWinnerAccountId(userProfiles.users?.[String(winnerId)], project) : null;
+  const accountIdHtml = accountId
+    ? `<button type="button" class="winner-copy-btn pl-win-id${accountId.warning ? " is-suspect" : ""}" data-copy="${escapeHtml(
+        accountId.id,
+      )}" title="Скопировать ID" aria-label="${escapeHtml(`Скопировать ID ${accountId.id}`)}"><span class="pl-win-id-k">ID</span>${escapeHtml(
+        accountId.id,
+      )}</button>${accountId.warning ? `<span class="pl-win-id-warn">${escapeHtml(accountId.warning)}</span>` : ""}`
+    : "";
+  const sideHtml = projectLogoHtml || accountIdHtml ? `<div class="pl-win-side">${projectLogoHtml}${accountIdHtml}</div>` : "";
 
   // What the payout queue's search looks through, beyond the words on the card.
-  const searchText = [winnerId, displayName, meta.username ? `@${meta.username}` : "", trcAddress, project?.name || ""]
+  const searchText = [winnerId, displayName, meta.username ? `@${meta.username}` : "", trcAddress, project?.name || "", accountId?.id || ""]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
   return `
     <article class="pl-win" data-net="${networkId || ""}" data-search="${escapeHtml(searchText)}" style="--i:${Number(options.index) || 0}">
       <div class="pl-win-top">
-        ${avatar}
+        ${avatarHtml}
         <div class="pl-win-name">
-          <span class="pl-win-name-row"><b>${escapeHtml(displayName)}</b>${profileBtn}</span>
+          <span class="pl-win-name-row"><b>${escapeHtml(displayName)}</b>${messageBtn}</span>
           ${usernameMetaHtml}${projectLineHtml}${victoryDateHtml}
         </div>
-        ${projectLogoHtml}
+        ${sideHtml}
       </div>
       <div class="pl-win-row">
         <div class="pl-badges">${refBadge}${statusBadge}${anonymousBadge}${antiFraudBadges}</div>
@@ -10643,7 +10676,7 @@ ${getPanelFluidTypographyVars()}
         location.href = url;
       }
 
-      document.querySelectorAll(".winner-profile-btn").forEach((link) => {
+      document.querySelectorAll(".winner-profile-btn:not(.winner-message-btn), .pl-av-link").forEach((link) => {
         if (link.dataset.bound === "1") return;
         link.dataset.bound = "1";
         link.addEventListener("click", (event) => {
@@ -10657,9 +10690,15 @@ ${getPanelFluidTypographyVars()}
 
     function setupCopyButtons() {
       document.querySelectorAll(".winner-copy-btn").forEach((btn) => {
+        // Called again after every live update: without the mark a button
+        // that survived it collected one more handler each time.
+        if (btn.dataset.copyBound === "1") return;
+        btn.dataset.copyBound = "1";
         btn.addEventListener("click", async () => {
           const text = btn.getAttribute("data-copy") || "";
           if (!text) return;
+          btn.classList.add("is-copied");
+          setTimeout(() => btn.classList.remove("is-copied"), 1200);
           try {
             await navigator.clipboard.writeText(text);
             btn.title = "Скопировано";
@@ -10675,6 +10714,55 @@ ${getPanelFluidTypographyVars()}
             area.remove();
           }
         });
+      });
+    }
+
+    // "Написать" on a winner (winner-chat-link.js). Delegated to the document:
+    // the payout queue and the draw cards are replaced by the live poll.
+    function setupWinnerChatButtons() {
+      const tg = window.Telegram?.WebApp;
+      const openTelegram = (url) => {
+        if (tg?.openTelegramLink && /^https:\\/\\/t\\.me\\//i.test(url)) {
+          tg.openTelegramLink(url);
+          return;
+        }
+        window.open(url, "_blank", "noopener");
+      };
+      const say = (text) => {
+        try {
+          tg.showAlert(text);
+        } catch (_error) {
+          window.alert(text);
+        }
+      };
+      document.addEventListener("click", async (event) => {
+        const btn = event.target.closest(".winner-message-btn");
+        if (!btn) return;
+        event.preventDefault();
+        if (btn.hasAttribute("data-chat-direct")) {
+          openTelegram(btn.getAttribute("href"));
+          return;
+        }
+        const url = btn.getAttribute("data-chat-link");
+        if (!url || btn.classList.contains("is-busy")) return;
+        btn.classList.add("is-busy");
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+          });
+          const data = await response.json().catch(() => null);
+          if (data?.ok && data.botUrl) {
+            openTelegram(data.botUrl);
+          } else {
+            say(data?.error || "Не получилось открыть чат. Попробуйте ещё раз.");
+          }
+        } catch (_error) {
+          say("Нет связи с сервером. Попробуйте ещё раз.");
+        } finally {
+          btn.classList.remove("is-busy");
+        }
       });
     }
 
@@ -11455,6 +11543,7 @@ ${getPanelFluidTypographyVars()}
     setupPreventNumberWheel();
     setupCopyButtons();
     setupProfileLinks();
+    setupWinnerChatButtons();
     setupPublishEndToggles();
     setupAskProjectIdToggle();
     setupCreateDrawSubmitGuard();
@@ -12554,6 +12643,50 @@ panelRouter.post("/draws/:id/notify/:userId", webAuth.requireAuth, requireOrgani
   persistOwnedDrawContext({ data, archivedData, draw, inArchive });
 
   redirectWithMessage(res, `Уведомление отправлено пользователю ${userId}.`);
+});
+
+// "Написать" on a winner without a username: the bot sends the organiser a
+// button that opens the chat, and the panel takes them to it (winner-chat-link.js).
+const winnerChatLinkThrottle = createChatLinkThrottle();
+panelRouter.post("/draws/:id/chat-link/:userId", webAuth.requireAuth, requireOrganizer, async (req, res) => {
+  const userId = Number(req.params.userId);
+  const organizerId = req.webUser.id;
+  const draw = Number.isInteger(userId) ? loadOwnedDrawForPanel(req.params.id, organizerId)?.draw : null;
+  if (!draw || !draw.winnerIds?.includes(userId)) {
+    res.status(404).json({ ok: false, error: "Победитель не найден." });
+    return;
+  }
+  if (WEB_ONLY || !bot) {
+    res.json({ ok: false, error: "Бот сейчас не запущен, чат открыть не получится." });
+    return;
+  }
+  const botUrl = `https://t.me/${BOT_USERNAME}`;
+  const key = `${organizerId}:${userId}`;
+  if (!winnerChatLinkThrottle.take(key)) {
+    res.json({ ok: true, botUrl });
+    return;
+  }
+  const meta = readUserProjectProfilesSnapshot().users?.[String(userId)]?.meta || {};
+  const project = draw.projectId ? getProjectById(draw.projectId, draw.ownerId) : null;
+  const { text, extra } = buildWinnerChatLinkMessage({
+    userId,
+    name: getWinnerDisplayName(meta, userId),
+    drawLabel: [`Розыгрыш ${draw.prize || ""}`.trim(), project?.name].filter(Boolean).join(" · "),
+    escapeHtml,
+  });
+  try {
+    await bot.telegram.sendMessage(organizerId, text, extra);
+  } catch (error) {
+    winnerChatLinkThrottle.release(key);
+    res.json({
+      ok: false,
+      error: isChatLinkPrivacyRefusal(error)
+        ? "Этот человек запретил ссылки на свой профиль, и Telegram не даёт открыть с ним чат. Написать ему может только бот."
+        : `Не удалось отправить ссылку на чат: ${error.message}`,
+    });
+    return;
+  }
+  res.json({ ok: true, botUrl });
 });
 
 panelRouter.post(
