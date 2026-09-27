@@ -155,3 +155,16 @@ test("asking again names no deadline; the first ask keeps its twenty minutes", (
   assert.doesNotMatch(again, /минут|сгорит/);
   assert.match(again, /ещё раз/);
 });
+
+// The panel's "are you sure" kept promising the prize would burn in 20 minutes
+// after re-requests had stopped having a deadline at all.
+test("the panel's confirmation for a re-request names no deadline", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+  const start = source.indexOf('closest(".winner-request-address-btn")');
+  assert.ok(start !== -1, "обработчик кнопки не найден");
+  const dialog = source.slice(start, source.indexOf(");", source.indexOf("confirm(", start)));
+  assert.doesNotMatch(dialog, /WINNER_DEPOSIT_ADDRESS_MINUTES|мин, приз сгорит/);
+  assert.match(dialog, /приз не сгорит/);
+});

@@ -11224,9 +11224,11 @@ ${getPanelFluidTypographyVars()}
       (event) => {
         const btn = event.target.closest(".winner-request-address-btn");
         if (!btn) return;
+        // A re-request has no deadline (requestWinnerDepositAddress with
+        // deadline: false); this said the prize burns in 20 minutes long after.
         const ok = confirm(
           "Запросить у победителя адрес заново? Бот попросит прислать адрес в личку. " +
-            "Если он не ответит за ${WINNER_DEPOSIT_ADDRESS_MINUTES} мин, приз сгорит.",
+            "Срока нет — приз не сгорит, пока вы ждёте ответ.",
         );
         if (!ok) {
           event.preventDefault();
