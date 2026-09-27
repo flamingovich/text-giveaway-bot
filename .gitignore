@@ -22,3 +22,6 @@ data/json-archive/
 backups/
 data/uploads/*
 !data/uploads/.gitkeep
+.env.test
+data-test/
+data-design/

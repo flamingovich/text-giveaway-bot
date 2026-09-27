@@ -2,10 +2,22 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "rollerbot-design",
+      "name": "design",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:design"],
       "port": 3000
+    },
+    {
+      "name": "test-tunnel",
+      "runtimeExecutable": "cloudflared",
+      "runtimeArgs": ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:3002", "--url", "http://localhost:3001"],
+      "port": 3002
+    },
+    {
+      "name": "test-bot",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:test"],
+      "port": 3001
     }
   ]
 }

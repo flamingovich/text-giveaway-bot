@@ -129,3 +129,15 @@ test("the page script still decides the same way the server does", () => {
   assert.ok(source.includes("if (!/^https:\\\\/\\\\//.test("), "page reloads only on https");
   assert.ok(source.includes("params.set(\"v\", build);"), "page sets the build the same way");
 });
+
+// Without a session cookie the panel is drawn in answer to POST /panel/enter.
+// Reloading onto that address asked for a GET it does not have, and the organiser
+// saw "Cannot GET /panel/enter" instead of the panel.
+test("a panel drawn for the sign-in post puts its address right instead of reloading", () => {
+  const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+  assert.ok(source.includes('if (/\\\\/enter\\\\/?$/.test(location.pathname)) {'), "page knows it was drawn for /panel/enter");
+  assert.ok(
+    source.includes('history.replaceState(null, "", ${JSON.stringify(PANEL_BASE)} + "?" + params.toString());'),
+    "there it only rewrites the address to the panel's own",
+  );
+});

@@ -13,6 +13,8 @@ const {
   getAnonymousIdentityStyles,
 } = require("./miniapp-ui");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
+const { keepLayout } = require("./css-layout-filter");
+const { getWinnersPlannerStyles } = require("./planner-pages");
 const { isParticipantAnonymous, buildPublicIdentity } = require("./participant-anonymity");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
 
@@ -207,10 +209,11 @@ function renderWinnersPage(draw, winners, participants, options = {}) {
     .hidden { display: none !important; }
     .preview-toolbar { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; width: 100%; box-sizing: border-box; }
     ${isPreview ? getPreviewDevStyles() : ""}
-    ${getWinnersPageStyles()}
+    ${keepLayout(getWinnersPageStyles())}
     ${getAnonymousIdentityStyles()}
     ${getMiniAppStyles()}
-    ${getEmbossStyles()}
+    ${keepLayout(getEmbossStyles())}
+    ${getWinnersPlannerStyles()}
   </style>
 </head>
 <body class="winners-page mini-app-shell${isPreview ? " join-preview" : ""}">
@@ -401,9 +404,9 @@ function renderWinnersAppLauncherPage() {
   <script>${getMiniAppHeadScript()}</script>
   <style>
     .hidden { display: none !important; }
-    ${getWinnersPageStyles()}
+    ${keepLayout(getWinnersPageStyles())}
     ${getMiniAppStyles()}
-    ${getEmbossStyles()}
+    ${keepLayout(getEmbossStyles())}
     body.winners-page .winners-app-status {
       margin: 24px auto 0;
       max-width: 320px;
@@ -415,6 +418,7 @@ function renderWinnersAppLauncherPage() {
     body.winners-page .winners-app-error {
       color: #cf222e;
     }
+    ${getWinnersPlannerStyles()}
   </style>
 </head>
 <body class="winners-page mini-app-shell">

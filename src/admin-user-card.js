@@ -156,6 +156,10 @@ function buildUserCard(deps, userId, options = {}) {
       : projectData.selfReportedNonReferral
         ? "non-ref"
         : "unknown",
+    // Not a referral here because the brand is another organiser's person:
+    // they first took part with them (project-profile-bridge.js, findBrandHomes).
+    crossOrganizer: Boolean(projectData.crossOrganizerNonReferral),
+    brandHomeOwnerId: projectData.crossOrganizerNonReferral ? projectData.referralOwnerId ?? null : null,
     // Who brought this person to this project, settled once at their first
     // join rather than re-inferred from a history that keeps moving.
     // An id shaped for a different brand was typed to get past the step rather

@@ -9,18 +9,35 @@ const POKERDOM = { templateSlug: "pokerdom", name: "Pokerdom" };
 const LUCKYBEAR = { templateSlug: "luckybear", name: "LuckyBear" };
 const FUGU = { templateSlug: "fugu", name: "FUGU" };
 
+// A Pokerdom id is a 24-character ObjectId; its first eight characters are the
+// second the account was made (see project-account-id.js).
+function pokerdomIdCreatedAt(iso, tail = "e81e6a8743d0d7e2") {
+  return Math.floor(Date.parse(iso) / 1000).toString(16).padStart(8, "0") + tail;
+}
+
 test("Pokerdom no longer takes a row of ones for an id", () => {
-  for (const raw of ["111111111111111", "000000000000000", "123456789012345", "987654321098765"]) {
+  for (const raw of ["111111111111111111111111", "000000000000000000000000", "123456789012345678901234"]) {
     const result = validateProjectAccountIdFormat(raw, POKERDOM);
     assert.equal(result.ok, false, raw);
     assert.match(result.error, /не похож на настоящий/);
   }
 });
 
+test("a Pokerdom id of the wrong length is refused", () => {
+  for (const raw of ["918273645501234", pokerdomIdCreatedAt("2026-07-01").slice(0, 23), pokerdomIdCreatedAt("2026-07-01") + "00000000"]) {
+    assert.equal(validateProjectAccountIdFormat(raw, POKERDOM).ok, false, raw);
+  }
+});
+
 test("a real-looking Pokerdom id still goes through", () => {
-  for (const raw of ["918273645501234", "406172839501726"]) {
+  for (const raw of [pokerdomIdCreatedAt("2026-07-01"), pokerdomIdCreatedAt("2015-05-12", "9dc97bddfe3a04ab"), pokerdomIdCreatedAt("2026-07-01").toUpperCase()]) {
     assert.equal(validateProjectAccountIdFormat(raw, POKERDOM).ok, true, raw);
   }
+});
+
+test("a Pokerdom id whose date is not a real one is refused", () => {
+  assert.equal(validateProjectAccountIdFormat("ffffffff" + "e81e6a8743d0d7e2", POKERDOM).ok, false, "дата из будущего");
+  assert.equal(validateProjectAccountIdFormat("0000abcd" + "e81e6a8743d0d7e2", POKERDOM).ok, false, "1970 год");
 });
 
 test("LuckyBear refuses filler, dashes or not", () => {
@@ -29,10 +46,10 @@ test("LuckyBear refuses filler, dashes or not", () => {
   }
 });
 
-// These are the cases the LuckyBear tests exist to protect: every one of them
-// was, or looks like, a real person's id. Filler detection must not reach them.
+// These are the cases the LuckyBear tests exist to protect: real UIDs, of the
+// lengths seen in the base. Filler detection must not reach them.
 test("real LuckyBear ids are untouched by the filler check", () => {
-  for (const raw of ["165ba529-04f5", "165ba52904f5", "1771050325", "abz123xy"]) {
+  for (const raw of ["1771050325", "165456675", "17710503251"]) {
     assert.equal(validateProjectAccountIdFormat(raw, LUCKYBEAR).ok, true, raw);
   }
 });

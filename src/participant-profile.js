@@ -11,6 +11,11 @@ const {
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { getReferralInviteCount } = require("./join-referrals");
 const { resolveFileLink } = require("./file-link-cache");
+const { keepLayout } = require("./css-layout-filter");
+const { getProfilePlannerStyles } = require("./planner-pages");
+const { mergeDrawLists } = require("./admin-draw-source");
+const { buildMyDrawsList } = require("./participant-draws");
+const { scriptJson } = require("./script-json");
 
 const LEVEL_ICON = "🔥";
 const BACK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>`;
@@ -152,6 +157,20 @@ function getTelegramProfileUrl(userId, username) {
   return `tg://user?id=${userId}`;
 }
 
+function isTelegramUserId(value) {
+  return /^\d{1,20}$/.test(String(value || ""));
+}
+
+// Where "Назад" may lead: a path on this site. Anything else in ?back= - a
+// javascript: link, another site - was never put there by our own pages.
+function sanitizeProfileBackUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) {
+    return "";
+  }
+  return raw;
+}
+
 function buildParticipantProfileUrl(userId, backUrl = "") {
   const base = `/user/${encodeURIComponent(String(userId))}`;
   if (!backUrl) {
@@ -205,15 +224,22 @@ function navigateMiniAppProfileUrl(href) {
 `.trim();
 }
 
+// Finished draws move to the archive after two weeks. Counting only the live
+// document gave a regular a fraction of their draws and wins, and the level
+// that comes from them.
+function collectProfileDraws(deps) {
+  const archived = deps.readArchivedDraws ? deps.readArchivedDraws()?.draws : [];
+  return mergeDrawLists(deps.readData()?.draws, archived);
+}
+
 function buildParticipantProfileViewModel(userId, deps, options = {}) {
-  const data = deps.readData();
   const userProfiles = deps.readUserProjectProfiles();
   const { meta } = deps.getUserProfileBundle(userProfiles, userId, null);
   const displayName = deps.getWinnerDisplayName(meta, userId);
   const username = meta.username ? `@${meta.username}` : "";
   const initial = (displayName.replace(/^@/, "") || String(userId)).charAt(0).toUpperCase() || "?";
   const avatarUrl = meta.avatarFileId ? `/winners/avatar/${encodeURIComponent(String(userId))}` : "";
-  const stats = computeUserGiveawayStats(data.draws || [], userId, deps);
+  const stats = computeUserGiveawayStats(collectProfileDraws(deps), userId, deps);
   const registeredAt = meta.firstSeenAt || meta.updatedAt || stats.firstParticipationAt;
   const telegramProfileUrl = getTelegramProfileUrl(userId, meta.username);
 
@@ -547,9 +573,10 @@ function renderParticipantProfilePage(profile, options = {}) {
   <style>
     .hidden { display: none !important; }
     ${isPreview ? getPreviewDevStyles() : ""}
-    ${getParticipantProfileStyles()}
+    ${keepLayout(getParticipantProfileStyles())}
     ${getMiniAppStyles()}
-    ${getEmbossStyles()}
+    ${keepLayout(getEmbossStyles())}
+    ${getProfilePlannerStyles()}
   </style>
 </head>
 <body class="profile-page mini-app-shell${isPreview ? " join-preview" : ""}">
@@ -585,13 +612,32 @@ function renderParticipantProfilePage(profile, options = {}) {
       ${renderProfileStatLabel("registered", "Дата регистрации")}
     </div>
   </section>
+  <section class="profile-draws hidden" id="profileDraws" aria-label="Мои розыгрыши">
+    <div class="profile-draws-head">
+      <h2 class="profile-draws-title">Мои розыгрыши</h2>
+      <span class="profile-draws-count" id="profileDrawsCount"></span>
+    </div>
+    <div class="profile-draws-list" id="profileDrawsList"></div>
+    <button type="button" class="profile-draws-more hidden" id="profileDrawsMore">Показать ещё</button>
+  </section>
   </div>
   <script>
     ${getMiniAppInitScript({ authSession: false, previewShell: true })}
     (function () {
       const tg = window.Telegram?.WebApp;
       const params = new URLSearchParams(location.search);
-      const back = params.get("back") || ${JSON.stringify(backUrl)} || "";
+      // "Назад" goes only somewhere on this site: ?back= comes from the url,
+      // and a javascript: link or another site there was not put by our pages.
+      function safeBack(value) {
+        if (!value) return "";
+        try {
+          const url = new URL(value, location.origin);
+          return url.origin === location.origin ? url.pathname + url.search + url.hash : "";
+        } catch (_error) {
+          return "";
+        }
+      }
+      const back = safeBack(params.get("back")) || safeBack(${scriptJson(backUrl)}) || "";
 
       document.getElementById("profileBackBtn")?.addEventListener("click", () => {
         if (back) {
@@ -606,13 +652,94 @@ function renderParticipantProfilePage(profile, options = {}) {
       });
 
       document.getElementById("profileTgBtn")?.addEventListener("click", (event) => {
-        const href = ${JSON.stringify(profile.telegramProfileUrl)};
+        const href = ${scriptJson(profile.telegramProfileUrl)};
         if (!href || !tg?.openTelegramLink) return;
         if (href.startsWith("tg://") || href.startsWith("https://t.me/")) {
           event.preventDefault();
           tg.openTelegramLink(href);
         }
       });
+
+      // «Мои розыгрыши» - only for the profile's owner, fetched with their
+      // signed Telegram data (participant-draws.js). Anyone else sees the
+      // figures and nothing more.
+      const PROFILE_ID = ${scriptJson(String(profile.id))};
+      const PREVIEW_DRAWS = ${scriptJson(options.myDrawsPreview || null)};
+      const DRAWS_PAGE = 10;
+      let myDraws = [];
+      let shownDraws = 0;
+
+      function drawRow(item) {
+        const row = document.createElement("div");
+        row.className = "profile-draw-row";
+        const main = document.createElement("div");
+        main.className = "profile-draw-main";
+        const prize = document.createElement("span");
+        prize.className = "profile-draw-prize";
+        prize.textContent = item.prize || "";
+        main.appendChild(prize);
+        const sub = document.createElement("span");
+        sub.className = "profile-draw-sub";
+        sub.textContent = [item.projectName, item.dateLabel].filter(Boolean).join(" · ");
+        main.appendChild(sub);
+        if (item.outcome?.hint) {
+          const hint = document.createElement("span");
+          hint.className = "profile-draw-hint";
+          hint.textContent = item.outcome.hint;
+          main.appendChild(hint);
+        }
+        row.appendChild(main);
+        const chip = document.createElement("span");
+        chip.className = "profile-draw-chip tone-" + String(item.outcome?.tone || "muted");
+        chip.textContent = item.outcome?.label || "";
+        row.appendChild(chip);
+        return row;
+      }
+
+      function showMoreDraws() {
+        const list = document.getElementById("profileDrawsList");
+        if (!list) return;
+        const next = myDraws.slice(shownDraws, shownDraws + DRAWS_PAGE);
+        next.forEach((item) => list.appendChild(drawRow(item)));
+        shownDraws += next.length;
+        document.getElementById("profileDrawsMore")?.classList.toggle("hidden", shownDraws >= myDraws.length);
+      }
+
+      function renderMyDraws(data) {
+        const section = document.getElementById("profileDraws");
+        const list = document.getElementById("profileDrawsList");
+        if (!section || !list) return;
+        myDraws = Array.isArray(data?.items) ? data.items : [];
+        shownDraws = 0;
+        list.textContent = "";
+        const count = document.getElementById("profileDrawsCount");
+        if (count) count.textContent = myDraws.length ? String(myDraws.length) : "";
+        if (!myDraws.length) {
+          const empty = document.createElement("p");
+          empty.className = "profile-draws-empty";
+          empty.textContent = "Вы ещё не участвовали в розыгрышах.";
+          list.appendChild(empty);
+        } else {
+          showMoreDraws();
+        }
+        section.classList.remove("hidden");
+      }
+
+      document.getElementById("profileDrawsMore")?.addEventListener("click", showMoreDraws);
+
+      if (PREVIEW_DRAWS) {
+        renderMyDraws(PREVIEW_DRAWS);
+      } else {
+        const viewerId = String(tg?.initDataUnsafe?.user?.id || "");
+        if (tg?.initData && viewerId && viewerId === PROFILE_ID) {
+          fetch("/api/me/draws", { headers: { "X-Telegram-Init-Data": tg.initData }, cache: "no-store" })
+            .then((response) => (response.ok ? response.json() : null))
+            .then((data) => {
+              if (data) renderMyDraws(data);
+            })
+            .catch(() => {});
+        }
+      }
     })();
   </script>
 </body>
@@ -629,10 +756,17 @@ function registerParticipantProfile(app, deps) {
     findKnownChannel,
     bot,
     designPreview,
+    readArchivedDraws = null,
+    readProjects = null,
+    validateInitData = null,
+    BOT_TOKEN = "",
+    timezone = "Europe/Moscow",
+    isWinnerNotificationExpired = null,
   } = deps;
 
   const viewDeps = {
     readData,
+    readArchivedDraws,
     readUserProjectProfiles,
     getUserProfileBundle,
     getWinnerDisplayName,
@@ -644,24 +778,53 @@ function registerParticipantProfile(app, deps) {
     DRAW_STATUS: deps.DRAW_STATUS,
   };
 
+  // A Telegram id is digits. Anything else in the url used to be printed into
+  // the page's script as it came, and a crafted link ran its own code here.
   app.get("/user/:userId", (req, res) => {
     const userId = req.params.userId;
-    if (shouldHideParticipant(userId)) {
+    if (!isTelegramUserId(userId) || shouldHideParticipant(userId)) {
       res.status(404).type("html").send("<h1>Профиль недоступен</h1>");
       return;
     }
-    const backUrl = String(req.query.back || "");
+    const backUrl = sanitizeProfileBackUrl(req.query.back);
     const profile = buildParticipantProfileViewModel(userId, viewDeps, { backUrl });
     res.type("html").send(renderParticipantProfilePage(profile, { backUrl }));
   });
 
   app.get("/api/user/:userId", (req, res) => {
     const userId = req.params.userId;
-    if (shouldHideParticipant(userId)) {
+    if (!isTelegramUserId(userId) || shouldHideParticipant(userId)) {
       res.status(404).json({ error: "Профиль недоступен." });
       return;
     }
-    res.json(buildParticipantProfileViewModel(userId, viewDeps, { backUrl: req.query.back || "" }));
+    res.json(buildParticipantProfileViewModel(userId, viewDeps, { backUrl: sanitizeProfileBackUrl(req.query.back) }));
+  });
+
+  // «Мои розыгрыши» (participant-draws.js): answered for the Telegram user the
+  // signed initData names, never for an id from the url - the list shows the
+  // draws where the person chose to stay anonymous.
+  app.get("/api/me/draws", (req, res) => {
+    const user =
+      typeof validateInitData === "function"
+        ? validateInitData(req.headers["x-telegram-init-data"], BOT_TOKEN)
+        : null;
+    if (!user?.id) {
+      res.status(401).json({ error: "Откройте через Telegram." });
+      return;
+    }
+    try {
+      const list = buildMyDrawsList({
+        draws: collectProfileDraws(viewDeps),
+        userId: user.id,
+        projects: readProjects ? readProjects()?.projects || [] : [],
+        timezone,
+        isExpired: isWinnerNotificationExpired,
+      });
+      res.set("Cache-Control", "no-store").json(list);
+    } catch (error) {
+      console.error("[profile] мои розыгрыши:", error);
+      res.status(500).json({ error: "Не удалось загрузить розыгрыши." });
+    }
   });
 
   app.get("/channel-avatar/:channelKey", async (req, res) => {
@@ -698,13 +861,26 @@ function registerParticipantProfile(app, deps) {
       boosts: 0,
       registeredAt: "13 мар 2025 г.",
     };
+    const mockDraws = {
+      total: 5,
+      wins: 2,
+      items: [
+        { drawId: "p1", prize: "100$", projectName: "BEEF", dateLabel: "итоги 28 сен, 18:00", outcome: { key: "active", label: "Идёт", tone: "tint", hint: "" } },
+        { drawId: "p2", prize: "5 000₽", projectName: "Pokerdom", dateLabel: "24 сен", outcome: { key: "pending", label: "Победа", tone: "green", hint: "Подтвердите победу в чате с ботом" } },
+        { drawId: "p3", prize: "50$", projectName: "FUGU", dateLabel: "20 сен", outcome: { key: "finished", label: "Без выигрыша", tone: "muted", hint: "" } },
+        { drawId: "p4", prize: "715₽", projectName: "IRIS", dateLabel: "13 сен", outcome: { key: "paid", label: "Выплачено", tone: "green", hint: "" } },
+        { drawId: "p5", prize: "30$", projectName: "LuckyBear", dateLabel: "2 сен", outcome: { key: "forfeited", label: "Аннулирован", tone: "red", hint: "" } },
+      ],
+    };
     app.get("/dev/preview/profile", (_req, res) => {
-      res.type("html").send(renderParticipantProfilePage(mockProfile, { isPreview: true }));
+      res.type("html").send(renderParticipantProfilePage(mockProfile, { isPreview: true, myDrawsPreview: mockDraws }));
     });
   }
 }
 
 module.exports = {
+  isTelegramUserId,
+  sanitizeProfileBackUrl,
   computeUserLevel,
   computeUserGiveawayStats,
   buildParticipantProfileUrl,

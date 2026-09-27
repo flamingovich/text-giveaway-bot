@@ -25,3 +25,16 @@ test("someone who still has registration ahead goes through the steps either way
   assert.equal(decideJoinEntry({ alreadyParticipant: false, canSkipRegistration: false, canReachUser: true }), "flow");
   assert.equal(decideJoinEntry({ alreadyParticipant: false, canSkipRegistration: false, canReachUser: false }), "flow");
 });
+
+// A returning participant was added to a new draw without the channel step, so
+// they never had to subscribe to that draw's channel.
+test("a returning participant who is not subscribed to this draw's channel goes through the steps", () => {
+  assert.equal(
+    decideJoinEntry({ alreadyParticipant: false, canSkipRegistration: true, canReachUser: true, channelSubscribed: false }),
+    "flow",
+  );
+  assert.equal(
+    decideJoinEntry({ alreadyParticipant: false, canSkipRegistration: true, canReachUser: true, channelSubscribed: true }),
+    "auto_join",
+  );
+});

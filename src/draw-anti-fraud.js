@@ -109,7 +109,14 @@ function evaluateIpFraud(draw, userId, userProfiles, signals, deps) {
     };
   }
 
-  if (totalParticipants > 0 && ipCount / totalParticipants > IP_FRAUD_SHARE_RATIO) {
+  // The share rule needs a real cluster too. On its own, two people behind one
+  // home Wi-Fi in a draw of fifteen were over 10% - and whichever of them won
+  // lost the prize as a "bot".
+  if (
+    totalParticipants > 0 &&
+    ipCount >= IP_FRAUD_MIN_CLUSTER_SIZE &&
+    ipCount / totalParticipants > IP_FRAUD_SHARE_RATIO
+  ) {
     const sharePercent = ((ipCount / totalParticipants) * 100).toFixed(1).replace(".", ",");
     return {
       shouldFlag: true,

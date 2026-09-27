@@ -225,7 +225,7 @@ function resolveJoinProjectContext(userId, draw, deps) {
   const drawOwnerId = getDrawOwnerId(draw);
 
   if (!projectId || !brandName) {
-    const canSkipRegistration = isProjectRegistrationComplete(directProfile, draw);
+    const canSkipRegistration = isProjectRegistrationComplete(directProfile, draw, project);
 
     return {
       directProfile,
@@ -262,7 +262,7 @@ function resolveJoinProjectContext(userId, draw, deps) {
 
   const needsWallet = draw?.askWalletOnJoin !== false;
   const needsProjectId = drawAsksProjectIdOnJoin(draw);
-  const hasDirectComplete = isProjectRegistrationComplete(directProfile, draw);
+  const hasDirectComplete = isProjectRegistrationComplete(directProfile, draw, project);
   const hasSiblingTrc20 = Boolean(sibling?.projectData?.trc20Address);
   const hasSiblingProjectId = Boolean(sibling?.projectData?.projectAccountId);
   const hasSiblingReferralStatus = Boolean(
@@ -271,7 +271,7 @@ function resolveJoinProjectContext(userId, draw, deps) {
       isCrossOrganizerNonReferral,
   );
 
-  const hasSiblingIdStepDone = hasCompletedProjectIdStep(sibling?.projectData);
+  const hasSiblingIdStepDone = hasCompletedProjectIdStep(sibling?.projectData, project);
 
   let effectiveProfile = directProfile;
   if (!hasDirectComplete && needsWallet && hasSiblingTrc20) {

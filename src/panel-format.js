@@ -27,6 +27,16 @@ function formatUsdStat(value) {
   return "$" + whole + (cents ? "." + String(cents).padStart(2, "0") : "");
 }
 
+// "Розыгрыш 15 000₽" broke as "Розыгрыш 15" / "000₽" on a narrow card: the
+// space between digit groups is an ordinary one. Tied with a no-break space, a
+// line can only break before the amount. Only on the page: the stored prize is
+// what posts and their buttons are built from, and a changed button label would
+// re-edit every post at the next start.
+const NO_BREAK_SPACE = String.fromCharCode(0xa0);
+function keepAmountsWhole(text) {
+  return String(text ?? "").replace(/(\d) (?=\d{3}(?!\d))/g, `$1${NO_BREAK_SPACE}`);
+}
+
 // Time left as "HH:MM:SS"; hours run past 24 for draws that last days.
 // Nothing left gives null, and the caller says what that means for its chip.
 function formatCountdownClock(msLeft) {
@@ -85,6 +95,7 @@ module.exports = {
   formatUsdStat,
   formatCountdownClock,
   formatCardDateShort,
+  keepAmountsWhole,
   normalizePanelHistoryFilter,
   filterPanelHistoryDraws,
   countDepositNetworks,

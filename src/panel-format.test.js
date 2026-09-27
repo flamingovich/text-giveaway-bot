@@ -5,6 +5,7 @@ const {
   formatUsdStat,
   formatCountdownClock,
   formatCardDateShort,
+  keepAmountsWhole,
   normalizePanelHistoryFilter,
   filterPanelHistoryDraws,
   countDepositNetworks,
@@ -89,4 +90,12 @@ test("countDepositNetworks: unknown networks count only towards all", () => {
     bep20: 1,
   });
   assert.deepEqual(countDepositNetworks([]), { all: 0, trc20: 0, erc20: 0, bep20: 0 });
+});
+
+test("an amount never breaks between its digit groups", () => {
+  const nbsp = String.fromCharCode(0xa0);
+  assert.equal(keepAmountsWhole("15 000₽"), `15${nbsp}000₽`);
+  assert.equal(keepAmountsWhole("1 500 000 ₽"), `1${nbsp}500${nbsp}000 ₽`);
+  assert.equal(keepAmountsWhole("50$ и 2 приза"), "50$ и 2 приза");
+  assert.equal(keepAmountsWhole(undefined), "");
 });

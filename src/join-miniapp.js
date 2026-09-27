@@ -17,9 +17,16 @@ const {
   JOIN_FLOW_STEPS,
   getParticipantRowChevronIcon,
 } = require("./miniapp-ui");
+const { keepLayout } = require("./css-layout-filter");
+const { getJoinPlannerStyles } = require("./join-planner-styles");
+const { getGatePlannerStyles } = require("./planner-pages");
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { buildParticipantProfileUrl, getMiniAppProfileNavigateScript } = require("./participant-profile");
 const { getBrandLogoUrls, renderBrandLogoHtml } = require("./brand-logos");
+const { extractClientIp } = require("./client-ip");
+const { isJoinCaptchaPassed } = require("./join-captcha");
+const { createRateLimiter } = require("./rate-limiter");
+const { createJoinFunnelMiddleware } = require("./join-funnel");
 const { isParticipationUnregistered } = require("./unregistered-participation");
 const {
   isParticipantAnonymous,
@@ -43,6 +50,11 @@ const {
   drawAsksProjectIdOnJoin,
   hasCompletedProjectIdStep,
   validateProjectAccountIdFormat,
+  isProjectAccountIdOwnName,
+  getPokerdomAccountCreatedAt,
+  isPokerdomAccountBeforeReferrals,
+  buildPredatesReferralsPatch,
+  getProjectAccountIdKind,
   buildProjectIdGuideSteps,
   buildProjectIdInputConfig,
   findProjectAccountIdOwner,
@@ -107,9 +119,10 @@ function renderOrganizerGatePage(_botUsername, options = {}) {
   <style>
     ${renderDesignBannerStyles()}
     ${isPreview ? getPreviewDevStyles() : ""}
-    ${getGatePageStyles()}
+    ${keepLayout(getGatePageStyles())}
     ${getMiniAppStyles()}
-    ${getEmbossStyles()}
+    ${keepLayout(getEmbossStyles())}
+    ${getGatePlannerStyles()}
   </style>
 </head>
 <body class="gate-page mini-app-shell${isPreview ? " gate-preview" : ""}">
@@ -318,6 +331,13 @@ const JOIN_BTN_CHECK = `<svg class="join-btn-ico" viewBox="0 0 24 24" fill="none
 const JOIN_BTN_PASTE = `<svg class="join-btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>`;
 const JOIN_REF_STATUS_ERROR_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>`;
 const JOIN_REF_STATUS_OK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg>`;
+// The round arrow at the end of a link out of the app (.join-btn-go). The
+// arrow is its own path so it can nudge towards where it points.
+const JOIN_GO_ARROW_ICON = `<svg class="join-btn-go-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="join-btn-go-arrow-path" d="M7.5 16.5 16.5 7.5M9.5 7.5h7v7"/></svg>`;
+
+// The permission step's bell, with the clapper as its own path so it can lag
+// behind the bell as it swings (join-notify-* in join-planner-styles.js).
+const JOIN_NOTIFY_BELL_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g class="join-notify-bell"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path class="join-notify-clapper" d="M13.73 21a2 2 0 0 1-3.46 0"/></g></svg>`;
 const JOIN_DONE_BELL_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`;
 const JOIN_DONE_CLOCK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
 const JOIN_DONE_MASK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-6.5 10-6.5c1.6 0 3 .4 4.2 1"/><path d="M22 12s-3.6 6.5-10 6.5c-1.7 0-3.2-.5-4.4-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="m3 3 18 18"/></svg>`;
@@ -420,12 +440,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       color: var(--tg-theme-link-color, #2d49cc);
     }
     .hidden { display: none !important; }
-    ${getJoinFlowStyles()}
+    ${keepLayout(getJoinFlowStyles())}
     ${getAnonymousIdentityStyles()}
     ${isPreview ? getPreviewDevStyles() : ""}
-    ${isPreview ? getJoinPreviewThemeStyles() : ""}
+    ${isPreview ? keepLayout(getJoinPreviewThemeStyles()) : ""}
     ${getMiniAppStyles()}
-    ${getEmbossStyles()}
+    ${keepLayout(getEmbossStyles())}
+    ${getJoinPlannerStyles()}
   </style>
 </head>
 <body class="join-flow mini-app-shell${isPreview ? " join-preview" : ""}">
@@ -457,8 +478,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <p class="join-channel-name" id="joinChannelTitle">Канал</p>
           </div>
           <div class="join-channel-actions join-actions">
-            <a class="join-btn join-btn-secondary" id="joinChannelOpenBtn" href="#" target="_blank" rel="noopener">
+            <a class="join-btn join-btn-secondary join-btn-go" id="joinChannelOpenBtn" href="#" target="_blank" rel="noopener">
               <span class="join-btn-label">Открыть канал</span>
+              ${JOIN_GO_ARROW_ICON}
             </a>
             <button type="button" class="join-btn join-btn-primary" id="joinChannelCheckBtn">
               <span class="join-btn-label">Я подписался</span>
@@ -470,7 +492,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       ${renderJoinNotifyStepCard(
         `<div class="join-channel-panel join-notify-panel">
           <div class="join-channel-hero">
-            <div class="join-channel-avatar-wrap" aria-hidden="true">${JOIN_DONE_BELL_ICON}</div>
+            <div class="join-notify-mark" id="joinNotifyMark" aria-hidden="true">
+              <span class="join-notify-mark-wave"></span>
+              <span class="join-notify-mark-wave"></span>
+              <span class="join-notify-mark-sparks"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              <span class="join-channel-avatar-wrap join-notify-mark-disc">${JOIN_NOTIFY_BELL_ICON}</span>
+            </div>
           </div>
           <h2 class="join-step-title">Уведомление о победе</h2>
           <p class="join-channel-lead">Бот может написать о выигрыше только если вы разрешите сообщения. Иначе письмо о победе не дойдёт.</p>
@@ -491,9 +518,9 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         2,
         "Регистрация",
         `<div class="join-actions">
-          <a class="join-btn join-btn-secondary" id="projectLink" href="${refLink}" target="_blank" rel="noopener">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          <a class="join-btn join-btn-secondary join-btn-go" id="projectLink" href="${refLink}" target="_blank" rel="noopener">
             <span class="join-btn-label">Перейти на ${projectName}</span>
+            ${JOIN_GO_ARROW_ICON}
           </a>
           <div id="registrationRefMode" class="join-step-stack">
             <button type="button" class="join-btn join-btn-primary join-btn-locked" id="refConfirmBtn" disabled><span class="join-btn-label">Подтвердить статус реферала</span></button>
@@ -504,15 +531,18 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           </div>
           <div id="registrationProjectIdMode" class="join-step-stack hidden">
             <div class="join-trc20-field join-trc20-field-compact">
-              <label class="join-field-label" for="projectAccountIdInput">Мой ID</label>
               <div class="join-id-input-row">
                 <span class="join-id-prefix" aria-hidden="true">#</span>
-                <input class="join-input join-input-id" id="projectAccountIdInput" placeholder="Введите ID сюда" autocomplete="off" maxlength="5" inputmode="text" autocapitalize="characters" />
+                <input class="join-input join-input-id" id="projectAccountIdInput" placeholder="${escapeHtml(projectIdInputConfig.placeholder)}" aria-label="${escapeHtml(projectIdInputConfig.label)}" autocomplete="off" maxlength="5" inputmode="text" autocapitalize="characters" />
                 <button type="button" class="join-id-paste-btn" id="projectAccountIdPasteBtn" title="Вставить" aria-label="Вставить">${JOIN_BTN_PASTE}</button>
               </div>
             </div>
-            <button type="button" class="join-guide-link hidden" id="projectIdGuideOpenBtn" aria-expanded="false">Как узнать ID</button>
-            <button type="button" class="join-btn join-btn-primary" id="projectAccountIdVerifyBtn"><span class="join-btn-label">Проверить ID</span></button>
+            <button type="button" class="join-guide-link hidden" id="projectIdGuideOpenBtn" aria-expanded="false">${JOIN_INFO_ICON}<span>Как узнать свой ID?</span></button>
+            <div class="join-reveal" id="projectAccountIdVerifyReveal" aria-hidden="true">
+              <div class="join-reveal-inner">
+                <button type="button" class="join-btn join-btn-primary" id="projectAccountIdVerifyBtn" tabindex="-1"><span class="join-btn-label">Проверить ID</span></button>
+              </div>
+            </div>
             <div id="projectAccountIdStatus" class="join-field-status hidden" role="status"></div>
             <div class="join-stack-divider" aria-hidden="true"></div>
             <button type="button" class="join-btn join-btn-outline" id="registrationProjectIdNonRefBtn">Я не реферал</button>
@@ -582,7 +612,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
               <button type="button" class="join-btn join-btn-primary join-done-info-close" id="joinDoneChanceInfoClose">Понятно</button>
             </div>
           </div>
-          <button type="button" class="join-btn join-btn-gradient join-done-boost-btn" id="joinDoneBoostBtn">✨ Пригласить друзей</button>
+          <button type="button" class="join-btn join-btn-gradient join-done-boost-btn" id="joinDoneBoostBtn">Пригласить друзей</button>
           <button type="button" class="join-btn join-btn-outline join-done-anon-btn" id="joinDoneAnonBtn" aria-pressed="false">
             <span class="join-done-anon-icon">${JOIN_DONE_MASK_ICON}</span>
             <span class="join-btn-label" id="joinDoneAnonLabel">Участвовать анонимно</span>
@@ -632,7 +662,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       <div class="join-boost-actions">
         <p class="join-boost-link-preview hidden" id="joinBoostLinkPreview"></p>
         <p class="join-boost-link-notice hidden" id="joinBoostLinkNotice" role="status"></p>
-        <button type="button" class="join-btn join-btn-gradient" id="joinBoostGenerateBtn">✨ Сгенерировать ссылку</button>
+        <button type="button" class="join-btn join-btn-gradient" id="joinBoostGenerateBtn">Сгенерировать ссылку</button>
       </div>
     </div>
   </aside>
@@ -707,17 +737,38 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       [640, "impact", "soft"],
       [920, "notification", "success"],
     ];
-    let doneHapticTimers = [];
 
-    function cancelDoneHaptics() {
-      doneHapticTimers.forEach((timer) => clearTimeout(timer));
-      doneHapticTimers = [];
+    // The bell on the permission step (join-notify-* in join-planner-styles.js):
+    // a light tap as the disc lands, then one on each of the bell's first three
+    // swings - it starts ringing at 0.5 s and peaks at 10%, 24% and 38% of 1.1 s.
+    const NOTIFY_HAPTIC_BEATS = [
+      [420, "impact", "light"],
+      [610, "impact", "rigid"],
+      [765, "impact", "rigid"],
+      [920, "impact", "light"],
+    ];
+
+    let hapticBeatTimers = [];
+
+    function cancelHapticBeats() {
+      hapticBeatTimers.forEach((timer) => clearTimeout(timer));
+      hapticBeatTimers = [];
     }
 
     function playDoneHaptics() {
-      cancelDoneHaptics();
+      // Android browsers take the same rhythm as one pattern started on the
+      // first beat: buzz, then a pause that runs up to the next beat.
+      playHapticBeats(DONE_HAPTIC_BEATS, [14, 206, 10, 266, 28]);
+    }
+
+    function playNotifyHaptics() {
+      playHapticBeats(NOTIFY_HAPTIC_BEATS, [10, 180, 16, 139, 16, 139, 10]);
+    }
+
+    function playHapticBeats(beats, vibratePattern) {
+      cancelHapticBeats();
       if (tg?.HapticFeedback && (typeof tg.isVersionAtLeast !== "function" || tg.isVersionAtLeast("6.1"))) {
-        doneHapticTimers = DONE_HAPTIC_BEATS.map(([at, type, style]) =>
+        hapticBeatTimers = beats.map(([at, type, style]) =>
           setTimeout(() => {
             try {
               if (type === "impact") {
@@ -734,16 +785,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
       const activated = !navigator.userActivation || navigator.userActivation.hasBeenActive;
       if (typeof navigator.vibrate !== "function" || !activated) return;
-      // Android browsers take the same rhythm as one pattern started on the
-      // first beat: buzz, then a pause that runs up to the next beat.
-      doneHapticTimers = [
+      hapticBeatTimers = [
         setTimeout(() => {
           try {
-            navigator.vibrate([14, 206, 10, 266, 28]);
+            navigator.vibrate(vibratePattern);
           } catch (_error) {
             // Decoration only.
           }
-        }, DONE_HAPTIC_BEATS[0][0]),
+        }, beats[0][0]),
       ];
     }
 
@@ -1349,8 +1398,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       hideLoading();
       if (activeStep === name) return;
 
+      if ((activeStep === "done" || activeStep === "notify") && name !== activeStep) {
+        cancelHapticBeats();
+      }
       if (activeStep === "done" && name !== "done") {
-        cancelDoneHaptics();
         stopDoneLivePolling();
         stopDoneCountdown();
         cancelJoinBoostAutoOpen();
@@ -1396,15 +1447,25 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       activeStep = name;
       updateProgress(name);
       if (name === "done") {
-        // Replayed on every visit, not just the first: the class comes off and
-        // goes back on with a reflow in between, which restarts the animations.
-        const mark = document.getElementById("joinDoneMark");
-        if (mark) {
-          mark.classList.remove("is-playing");
-          void mark.offsetWidth;
-          mark.classList.add("is-playing");
-        }
+        replayMark("joinDoneMark");
       }
+      if (name === "notify") {
+        // Here and not in showNotifyStep: that one also runs when the step is
+        // already showing (after a failed check), and the bell should ring once
+        // per arrival, not on every retry.
+        replayMark("joinNotifyMark");
+        playNotifyHaptics();
+      }
+    }
+
+    // Replayed on every visit, not just the first: the class comes off and goes
+    // back on with a reflow in between, which restarts the animations.
+    function replayMark(id) {
+      const mark = document.getElementById(id);
+      if (!mark) return;
+      mark.classList.remove("is-playing");
+      void mark.offsetWidth;
+      mark.classList.add("is-playing");
     }
 
     async function api(path, body, options = {}) {
@@ -2296,7 +2357,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
       const prefix = document.querySelector(".join-id-prefix");
       const input = document.getElementById("projectAccountIdInput");
-      const label = document.querySelector('label[for="projectAccountIdInput"]');
       const row = document.querySelector(".join-id-input-row");
       if (prefix) {
         prefix.classList.toggle("hidden", !projectIdInputConfig.showHashPrefix);
@@ -2307,16 +2367,30 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (input) {
         input.placeholder = projectIdInputConfig.placeholder || "";
         input.maxLength = projectIdInputConfig.maxlength || 32;
-        input.inputMode = "text";
+        input.inputMode = projectIdInputConfig.inputMode || "text";
         // Only the #XXXXX brands are upper-case; the hex ids of Pokerdom and
         // LuckyBear are lower-case, and auto-capitalising them on a phone
         // rewrites what the person just pasted.
         input.autocapitalize = projectIdInputConfig.showHashPrefix ? "characters" : "none";
         input.classList.toggle("join-input-id-pokerdom", !projectIdInputConfig.showHashPrefix);
+        input.setAttribute("aria-label", projectIdInputConfig.label || "Мой ID");
       }
-      if (label) {
-        label.textContent = projectIdInputConfig.label || "Мой ID";
-      }
+    }
+
+    // "Проверить ID" is offered only once there is something to check: it opens
+    // under the field on the first character and folds away if the field is
+    // emptied again. While a check is running or done it stays, whatever the
+    // field says. The animation is in join-planner-styles.js (.join-reveal).
+    function syncProjectIdVerifyReveal() {
+      const reveal = document.getElementById("projectAccountIdVerifyReveal");
+      const input = document.getElementById("projectAccountIdInput");
+      const btn = document.getElementById("projectAccountIdVerifyBtn");
+      if (!reveal) return;
+      const busy = Boolean(btn && (btn.classList.contains("is-loading") || btn.classList.contains("is-done")));
+      const open = busy || Boolean(input && input.value.trim());
+      reveal.classList.toggle("is-open", open);
+      reveal.setAttribute("aria-hidden", open ? "false" : "true");
+      if (btn) btn.tabIndex = open ? 0 : -1;
     }
 
     function applyRegistrationMode(mode, guideSteps, inputConfig) {
@@ -2333,6 +2407,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         syncProjectIdGuideLinkVisibility();
         hideProjectIdGuide();
         setProjectIdVerifyLocked(false);
+        syncProjectIdVerifyReveal();
       } else {
         refMode?.classList.remove("hidden");
         idMode?.classList.add("hidden");
@@ -2362,16 +2437,15 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       if (projectIdInputConfig?.kind === "pokerdom") {
         return value.toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, projectIdInputConfig.maxlength || 64);
       }
-      // LuckyBear ids keep their dash - stripping it, as the #XXXXX branch does,
-      // would turn 165ba529-04f5 into something the project never issued.
+      // LuckyBear's id is the numeric UID. A pasted "UID:" label and spaces go;
+      // letters stay, so a pasted name or code is refused rather than quietly
+      // turned into digits (the same rule as the server's).
       if (projectIdInputConfig?.kind === "luckybear") {
         return value
           .toLowerCase()
-          .replace(/^#/, "")
-          .replace(/[^a-z0-9-]/g, "")
-          .replace(/-{2,}/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, projectIdInputConfig.maxlength || 32);
+          .replace(/^uid\\s*:?\\s*/, "")
+          .replace(/[^a-z0-9]/g, "")
+          .slice(0, 32);
       }
       return value
         .toUpperCase()
@@ -2396,10 +2470,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         return false;
       }
       if (projectIdInputConfig?.kind === "pokerdom") {
-        return payload.length >= 15 && /^[a-f0-9]+$/.test(payload);
+        return /^[a-f0-9]{24}$/.test(payload);
       }
       if (projectIdInputConfig?.kind === "luckybear") {
-        return payload.replace(/-/g, "").length >= 4 && /^[a-z0-9]{3,}(-[a-z0-9]{1,})*$/.test(payload);
+        return /^\\d{6,12}$/.test(payload);
       }
       return /^#[A-Z0-9]{5}$/.test(payload);
     }
@@ -2424,6 +2498,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       }
       hideProjectIdStatus();
       hideProjectIdGuide();
+      syncProjectIdVerifyReveal();
     }
 
     bindClick("projectIdGuideOpenBtn", () => {
@@ -2578,6 +2653,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           projectAccountIdInput.value = cleaned;
         }
         hideProjectIdStatus();
+        syncProjectIdVerifyReveal();
       });
     }
 
@@ -2970,7 +3046,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
                 anonymousMask: "А***й",
                 canOpenProfiles: false,
                 participants: [
-                  { id: "1001", displayName: "Алексей", username: "@alex_winner", initial: "А", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#5b7cfa,#325fff)", profilePageUrl: "", isYou: true, anonymous: false },
+                  { id: "1001", displayName: "Алексей", username: "@alex_winner", initial: "А", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#5b7cfa,#325fff)", profilePageUrl: "/dev/preview/profile", isYou: true, anonymous: false },
                   { id: "1002", displayName: "М***я", username: "", initial: "М", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#f97316,#ea580c)", profilePageUrl: "", isYou: false, anonymous: true },
                   { id: "1003", displayName: "Дмитрий", username: "@dmitry_k", initial: "Д", avatarUrl: "", fallbackStyle: "background:linear-gradient(135deg,#14b8a6,#0d9488)", profilePageUrl: "", isYou: false, anonymous: false },
                 ],
@@ -3130,6 +3206,7 @@ function registerJoinMiniApp(app, deps) {
     buildJoinReferralDirectLink = null,
     isPlatformAdmin = () => false,
     setDrawParticipantAnonymous = null,
+    joinFunnel = null,
   } = deps;
 
   async function verifyRecaptchaToken(token) {
@@ -3143,6 +3220,7 @@ function registerJoinMiniApp(app, deps) {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params.toString(),
+        signal: AbortSignal.timeout(10_000),
       });
       const data = await res.json();
       return data.success === true;
@@ -3178,26 +3256,11 @@ function registerJoinMiniApp(app, deps) {
     return user;
   }
 
-  function extractClientIp(req) {
-    const forwarded = String(req.headers["x-forwarded-for"] || "")
-      .split(",")
-      .map((value) => value.trim())
-      .find(Boolean);
-    const candidates = [
-      forwarded,
-      req.headers["cf-connecting-ip"],
-      req.headers["x-real-ip"],
-      req.ip,
-      req.socket?.remoteAddress,
-    ];
-    for (const candidate of candidates) {
-      const value = String(candidate || "").trim();
-      if (value) {
-        return value;
-      }
-    }
-    return "";
-  }
+  // Per Telegram account: steps and the done screen's poll stay far below this.
+  const joinRequestLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 120 });
+  // Ten id attempts in ten minutes: enough for typos, not for trying ids until
+  // one belongs to somebody.
+  const projectIdAttemptLimiter = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 10 });
 
   function getReferrerIdFromRequest(req) {
     const raw = req.body?.referrerId;
@@ -3247,26 +3310,31 @@ function registerJoinMiniApp(app, deps) {
     return false;
   }
 
-  function joinCtxHasSavedProjectIdStep(joinCtx) {
+  // A saved id that today's checks would refuse does not count (see
+  // hasCompletedProjectIdStep): the person is asked for it again.
+  function joinCtxHasSavedProjectIdStep(joinCtx, draw = null) {
     if (!joinCtx) {
       return false;
     }
-    if (hasCompletedProjectIdStep(joinCtx.directProfile)) {
+    const project = draw?.projectId ? getProjectById(draw.projectId) : null;
+    if (hasCompletedProjectIdStep(joinCtx.directProfile, project)) {
       return true;
     }
-    if (hasCompletedProjectIdStep(joinCtx.effectiveProfile)) {
+    if (hasCompletedProjectIdStep(joinCtx.effectiveProfile, project)) {
       return true;
     }
     const sibling = joinCtx.siblingSource?.projectData;
-    return hasCompletedProjectIdStep(sibling);
+    return hasCompletedProjectIdStep(sibling, project);
   }
 
   function inheritSavedProjectIdStep(userId, draw, joinCtx) {
-    if (!draw?.projectId || hasCompletedProjectIdStep(joinCtx?.directProfile)) {
+    const project = draw?.projectId ? getProjectById(draw.projectId) : null;
+    if (!draw?.projectId || hasCompletedProjectIdStep(joinCtx?.directProfile, project)) {
       return;
     }
     const sibling = joinCtx?.siblingSource?.projectData;
-    if (!sibling) {
+    // Never copy an id the checks would refuse onto another project.
+    if (!sibling || !hasCompletedProjectIdStep(sibling, project)) {
       return;
     }
     const payload = {};
@@ -3325,7 +3393,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    if (drawAsksProjectIdOnJoin(draw) && joinCtxHasSavedProjectIdStep(joinCtx)) {
+    if (drawAsksProjectIdOnJoin(draw) && joinCtxHasSavedProjectIdStep(joinCtx, draw)) {
       inheritSavedProjectIdStep(userId, draw, joinCtx);
       if (draw.askWalletOnJoin === false) {
         await finishRegistrationJoin(draw, userId, session, req, res);
@@ -3354,6 +3422,13 @@ function registerJoinMiniApp(app, deps) {
     if (!user) {
       console.warn(`[join] auth failed ${req.method} ${req.originalUrl}`);
       res.status(401).json({ error: "Откройте через Telegram." });
+      return;
+    }
+    // A person going through the steps makes a few requests a minute, and the
+    // done screen's poll about two dozen; a script makes as many as it likes.
+    if (!joinRequestLimiter.take(String(user.id)).ok) {
+      console.warn(`[join] слишком много запросов: user=${user.id} ${req.method} ${req.originalUrl}`);
+      res.status(429).json({ error: "Слишком много запросов. Подождите минуту." });
       return;
     }
     req.telegramUser = user;
@@ -3450,8 +3525,10 @@ function registerJoinMiniApp(app, deps) {
             initial,
             avatarUrl: avatarFileId ? `/winners/avatar/${encodeURIComponent(String(id))}` : "",
             fallbackStyle: avatarFileId ? "" : getAvatarFallbackStyle(id),
+            // Your own row opens your own profile, with «Мои розыгрыши», for
+            // anyone. Other people's profiles stay an admin tool.
             profilePageUrl:
-              viewerCanOpenProfiles && !anonymous
+              isYou || (viewerCanOpenProfiles && !anonymous)
                 ? buildParticipantProfileUrl(id, `/join/${encodeURIComponent(draw.id)}`)
                 : "",
             isYou,
@@ -3547,7 +3624,7 @@ function registerJoinMiniApp(app, deps) {
 
   // canReachUser: only /session knows it (the others are reached after the
   // client's DM-access step), so it defaults to true. See join-entry-decision.js.
-  function resolveJoinEntry(draw, userId, participationMeta = null, { canReachUser = true } = {}) {
+  async function resolveJoinEntry(draw, userId, participationMeta = null, { canReachUser = true } = {}) {
     if (drawHasParticipant(draw, userId)) {
       clearJoinApiSession(userId, draw.id);
       scheduleParticipantAvatars(draw, userId);
@@ -3559,17 +3636,32 @@ function registerJoinMiniApp(app, deps) {
 
     const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
     const projectIdStepPending =
-      drawAsksProjectIdOnJoin(draw) && !joinCtxHasSavedProjectIdStep(joinCtx);
+      drawAsksProjectIdOnJoin(draw) && !joinCtxHasSavedProjectIdStep(joinCtx, draw);
     const canSkip =
       joinCtx.canSkipRegistration ||
       (draw.projectId &&
         userParticipatedInProject(userId, draw.projectId, draw.id) &&
         !projectIdStepPending);
-    const decision = decideJoinEntry({
+    let decision = decideJoinEntry({
       alreadyParticipant: false,
       canSkipRegistration: canSkip,
       canReachUser,
     });
+    // Only someone about to be let in without steps is asked about the channel,
+    // so a newcomer costs no extra call to Telegram. The same cache as the
+    // channel step answers it, and it only ever remembers a "subscribed".
+    if (decision === "auto_join" && draw.channelId && checkChannelSubscription) {
+      const check = await checkChannelSubscription(draw, userId);
+      decision = decideJoinEntry({
+        alreadyParticipant: false,
+        canSkipRegistration: canSkip,
+        canReachUser,
+        channelSubscribed: check?.subscribed === true,
+      });
+      if (decision !== "auto_join") {
+        console.log(`[join] автоучастие без подписки на канал отменено: user=${userId} draw=${draw.id}`);
+      }
+    }
     if (canSkip && decision !== "auto_join") {
       console.log(
         `[join] автоучастие отложено до доступа в личку: user=${userId} draw=${draw.id}`,
@@ -3603,6 +3695,16 @@ function registerJoinMiniApp(app, deps) {
     });
     next();
   });
+
+  // The funnel (join-funnel.js) is kept from the answers themselves: each one
+  // names the step the person is on next.
+  app.use(
+    "/api/join/:drawId/:action",
+    createJoinFunnelMiddleware({
+      store: joinFunnel,
+      getSessionStep: (userId, drawId) => getJoinApiSession(userId, drawId)?.step || null,
+    }),
+  );
 
   app.get("/api/join/health", (_req, res) => {
     res.json({ ok: true, ts: new Date().toISOString() });
@@ -3756,7 +3858,7 @@ function registerJoinMiniApp(app, deps) {
         return;
       }
 
-      const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta, { canReachUser });
+      const entry = await resolveJoinEntry(draw, userId, req.joinParticipationMeta, { canReachUser });
       if (entry) {
         if (enrichUserAvatar) {
           void enrichUserAvatar(userId);
@@ -3830,7 +3932,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    const entry = await resolveJoinEntry(draw, userId, req.joinParticipationMeta);
     if (entry) {
       res.json(entry);
       return;
@@ -3847,15 +3949,17 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const token = String(req.body?.token || "").trim();
-    if (RECAPTCHA_SECRET_KEY && token) {
-      const ok = await verifyRecaptchaToken(token);
-      if (!ok) {
-        res.status(400).json({ error: "Проверка не пройдена. Попробуйте ещё раз.", step: "captcha" });
-        return;
-      }
-    } else if (req.body?.verified !== true) {
-      res.status(400).json({ error: "Подтвердите, что вы не робот.", step: "captcha" });
+    const passed = await isJoinCaptchaPassed({
+      secretConfigured: Boolean(RECAPTCHA_SECRET_KEY),
+      token: req.body?.token,
+      verified: req.body?.verified,
+      verifyToken: verifyRecaptchaToken,
+    });
+    if (!passed) {
+      res.status(400).json({
+        error: RECAPTCHA_SECRET_KEY ? "Проверка не пройдена. Попробуйте ещё раз." : "Подтвердите, что вы не робот.",
+        step: "captcha",
+      });
       return;
     }
 
@@ -3876,7 +3980,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    const entry = await resolveJoinEntry(draw, userId, req.joinParticipationMeta);
     if (entry) {
       res.json(entry);
       return;
@@ -4014,6 +4118,14 @@ function registerJoinMiniApp(app, deps) {
     return isNonReferral;
   }
 
+  // The same outcome as "Я не реферал", decided by the account's age. The
+  // session flag matters as much as the profile: the wallet step rewrites the
+  // referral fields from it, and would otherwise put the referral status back.
+  function applyAccountPredatesReferralsNonReferral(userId, session) {
+    setUserProjectProfile(userId, session.projectId, buildPredatesReferralsPatch());
+    session.skipReferralCheck = true;
+  }
+
   function applySelfReportedNonReferral(userId, session) {
     setUserProjectProfile(userId, session.projectId, {
       referralVerified: false,
@@ -4060,7 +4172,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    const entry = await resolveJoinEntry(draw, userId, req.joinParticipationMeta);
     if (entry) {
       res.json(entry);
       return;
@@ -4072,10 +4184,20 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
+    if (!projectIdAttemptLimiter.take(String(userId)).ok) {
+      res.status(429).json({ error: "Слишком много попыток. Подождите 10 минут." });
+      return;
+    }
+
     const project = getProjectById(session.projectId);
     const validation = validateProjectAccountIdFormat(req.body?.projectAccountId, project);
     if (!validation.ok) {
       res.status(400).json({ error: validation.error });
+      return;
+    }
+    // Someone who could not find their id types their own name: #SLAVA, #ALMIR.
+    if (isProjectAccountIdOwnName(validation.normalized, req.telegramUser)) {
+      res.status(400).json({ error: "Такой ID не похож на настоящий. Откройте профиль на проекте." });
       return;
     }
 
@@ -4091,12 +4213,20 @@ function registerJoinMiniApp(app, deps) {
     );
 
     applyReferralRoll(userId, session, draw);
+    const accountCreatedAt =
+      getProjectAccountIdKind(project) === "pokerdom" ? getPokerdomAccountCreatedAt(validation.normalized) : null;
     setUserProjectProfile(userId, session.projectId, {
       projectAccountId: validation.normalized,
       projectAccountIdSavedAt: new Date().toISOString(),
       projectAccountIdDuplicate: Boolean(duplicateOwner),
       projectIdStepCompletedAt: new Date().toISOString(),
+      ...(accountCreatedAt ? { projectAccountCreatedAt: accountCreatedAt.toISOString() } : {}),
     });
+    // A Pokerdom account the id says was made before the owner started taking
+    // referrals (1 June 2026) cannot be one of them, whatever the roll said.
+    if (accountCreatedAt && isPokerdomAccountBeforeReferrals(validation.normalized)) {
+      applyAccountPredatesReferralsNonReferral(userId, session);
+    }
     await finishRegistrationJoin(draw, userId, session, req, res);
   });
 
@@ -4109,7 +4239,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    const entry = await resolveJoinEntry(draw, userId, req.joinParticipationMeta);
     if (entry) {
       res.json(entry);
       return;
@@ -4154,7 +4284,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    const entry = resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    const entry = await resolveJoinEntry(draw, userId, req.joinParticipationMeta);
     if (entry) {
       res.json(entry);
       return;

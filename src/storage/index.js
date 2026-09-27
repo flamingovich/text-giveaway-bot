@@ -111,6 +111,13 @@ function writeDelegatedAdmins(data) {
   writeDocument(STORE_KEYS.DELEGATED_ADMINS, data);
 }
 
+// The join funnel keeps small rows of its own next to the documents
+// (join-funnel.js). The design mode's JSON backend has no SQLite: null.
+function getSqliteDb() {
+  ensureStorage();
+  return getBackendName() === "sqlite" ? sqliteBackend.getDb() : null;
+}
+
 function getStorageInfo() {
   return {
     backend: getBackendName(),
@@ -146,4 +153,5 @@ module.exports = {
   writeDelegatedAdmins,
   getStorageInfo,
   getBackendName,
+  getSqliteDb,
 };

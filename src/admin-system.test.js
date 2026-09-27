@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { summariseLog, buildPlainReport, formatDuration, scrub } = require("./admin-system");
+const { summariseLog, buildPlainReport, formatDuration, scrub, findLatestLog } = require("./admin-system");
 
 test("a bot token never reaches the report", () => {
   const line = "[boot] request to https://api.telegram.org/bot8835629478:AAH7xКлюч_ОченьДлинный123/getMe failed";
@@ -123,4 +123,28 @@ test("a log with no dates at all is still counted in full", () => {
   const summary = summariseLog(["[boot] что-то пошло не так", "[boot] и ещё раз"].join("\n"));
   assert.equal(summary.total, 2);
   assert.equal(summary.undatedCount, 0);
+});
+
+test("the log read is the one pm2 writes now, not the one it wrote first", () => {
+  const fs = require("fs");
+  const os = require("os");
+  const path = require("path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pm2-logs-"));
+  try {
+    const touch = (name, secondsAgo) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, "x");
+      const at = new Date(Date.now() - secondsAgo * 1000);
+      fs.utimesSync(file, at, at);
+    };
+    touch("giveaway-bot-error-0.log", 90 * 24 * 3600);
+    touch("giveaway-bot-error-1.log", 60);
+    touch("giveaway-bot-error-1__2026-09-25_00-00-00.log", 5);
+    touch("support-bot-error-1.log", 5);
+    assert.equal(path.basename(findLatestLog(dir, "giveaway-bot-error")), "giveaway-bot-error-1.log");
+    assert.equal(path.basename(findLatestLog(dir, "depman-support-bot-error")), "depman-support-bot-error-0.log");
+    assert.equal(path.basename(findLatestLog(path.join(dir, "missing"), "giveaway-bot-error")), "giveaway-bot-error-0.log");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

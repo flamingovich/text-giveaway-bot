@@ -1,5 +1,9 @@
 const path = require("path");
-require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+// The test bot (npm run dev:test) takes its settings from .env.test alone: the
+// .env next to it holds the live bot's token (see test-bot-guard.js).
+if (process.env.TEST_BOT !== "true") {
+  require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+}
 
 const fs = require("fs");
 const crypto = require("crypto");
@@ -68,8 +72,7 @@ const {
   formatRefLinkDisplay,
 } = require("./draw-post-emojis");
 const { evaluateIpFraud, listProjectWalletAddresses, buildGlobalWalletOwners } = require("./draw-anti-fraud");
-const { mergeDrawLists } = require("./admin-draw-source");
-const { planBrandHomeBackfill, applyBrandHomeBackfill } = require("./brand-home-backfill");
+const { decideJoinEntry } = require("./join-entry-decision");
 const {
   drawAsksProjectIdOnJoin,
   buildGlobalProjectAccountIdOwners,
@@ -120,11 +123,15 @@ const {
   formatUsdStat,
   formatCountdownClock,
   formatCardDateShort,
+  keepAmountsWhole,
   normalizePanelHistoryFilter,
   filterPanelHistoryDraws,
   countDepositNetworks,
 } = require("./panel-format");
 const { PANEL_ICONS, getPanelLookStyles, getPanelLookScript } = require("./panel-look");
+const { keepLayout } = require("./css-layout-filter");
+const { isSameOriginPost } = require("./same-origin-post");
+const { getPanelPlannerStyles } = require("./panel-planner-styles");
 const { createRenderReads, resolveWinnerReferralBadge } = require("./panel-referral-badge");
 const { getPanelBuildRedirect } = require("./panel-build-redirect");
 const {
@@ -152,7 +159,19 @@ const {
   readUserProjectProfilesSnapshot,
   readDelegatedAdminsSnapshot,
   readArchivedDrawsSnapshot,
+  getSqliteDb,
 } = require("./storage");
+const { createJoinFunnelStore } = require("./join-funnel");
+const { assertSafeTestBot } = require("./test-bot-guard");
+const { resolveWebHost } = require("./web-host");
+const { getRootMiniAppRedirect } = require("./root-mini-app-redirect");
+const { describeMissingProjectLink } = require("./draw-project-link");
+const { mergeDrawLists } = require("./admin-draw-source");
+const {
+  planPokerdomReferralBackfill,
+  applyPokerdomReferralBackfill,
+} = require("./pokerdom-referral-backfill");
+const { planBrandHomeBackfill, applyBrandHomeBackfill } = require("./brand-home-backfill");
 const { withFloodRetry } = require("./telegram-flood-retry");
 const { userMetaNeedsWrite } = require("./user-meta-touch");
 const { isAvatarCheckFresh, pickAvatarCheckTargets, avatarJobKey } = require("./avatar-freshness");
@@ -191,6 +210,7 @@ const PANEL_POLL_MS = Number(process.env.PANEL_POLL_MS || 8_000);
 const PANEL_HISTORY_PAGE_SIZE = 10;
 const PANEL_PAGE_BUILD = process.env.PANEL_PAGE_BUILD || String(Date.now());
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
+const WEB_HOST = resolveWebHost();
 const WEB_PUBLIC_URL = (process.env.WEB_PUBLIC_URL || "").replace(/\/$/, "");
 const PANEL_BASE = "/panel";
 const WEB_ONLY = process.env.WEB_ONLY === "true";
@@ -584,9 +604,32 @@ function migratePokerdomLegacyWalletProfiles() {
   );
 }
 
+// Pokerdom accounts older than the referrals (pokerdom-referral-backfill.js).
+// Runs on every start, not once: someone waiting for a Pokerdom payout is
+// marked on the first start after that payout is settled.
+function backfillPokerdomAccountsBeforeReferrals() {
+  const profiles = readUserProjectProfiles();
+  const plan = planPokerdomReferralBackfill({
+    profiles,
+    projects: readProjects().projects || [],
+    draws: mergeDrawLists(readData().draws, readArchivedDraws().draws),
+    isExpired: isWinnerNotificationExpired,
+    isMoneyPrize: (draw) => isMoneyPrizeType(draw?.prizeType),
+  });
+  const applied = applyPokerdomReferralBackfill(profiles, plan.marks);
+  if (applied > 0) {
+    writeUserProjectProfiles(profiles);
+  }
+  if (applied > 0 || plan.deferred.length > 0) {
+    console.log(
+      `[boot] Pokerdom-аккаунты до 1 июня: помечено не-рефералами ${applied}, ждут выплаты ${plan.deferred.length}`,
+    );
+  }
+}
+
 // A person is a referral of one organiser per brand at most - the one they
-// first took part with (brand-home-backfill.js). Runs on every start, so
-// profiles waiting for a payout are corrected once it is settled.
+// first took part with (brand-home-backfill.js). Runs on every start, like the
+// Pokerdom one, so profiles waiting for a payout are marked once it is settled.
 function backfillBrandHomeReferrals() {
   const profiles = readUserProjectProfiles();
   const plan = planBrandHomeBackfill({
@@ -1546,6 +1589,39 @@ function renderPayoutQueueContent(draws, userProfiles, panelContext = null) {
       <div class="pl-card pl-empty pl-queue-empty" hidden>В этой сети выплат нет</div>
     </div>`;
 }
+// The draws behind the payout queue: finished money draws with a winner still
+// to be paid. The live fingerprint covers them too - a winner who confirms or
+// sends an address while the organiser watches the queue has to show up in it,
+// and such a draw is often no longer among the live ones.
+function getPayoutQueueDraws(draws, userProfiles, panelContext = null) {
+  return draws.filter((draw) => {
+    if (draw.status !== DRAW_STATUS.FINISHED || !isMoneyPrizeType(draw.prizeType)) {
+      return false;
+    }
+    const antiFraudSignals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
+    return (draw.winnerIds || []).some((winnerId) =>
+      winnerNeedsPayout(draw, winnerId, userProfiles, antiFraudSignals),
+    );
+  });
+}
+
+function getPanelVersionDraws(historyDraws, statsDraws, userProfiles, panelContext = null) {
+  const byId = new Map();
+  for (const draw of [
+    ...getPanelLiveDraws(historyDraws),
+    ...getPayoutQueueDraws(statsDraws, userProfiles, panelContext),
+  ]) {
+    if (!byId.has(draw.id)) {
+      byId.set(draw.id, draw);
+    }
+  }
+  return [...byId.values()];
+}
+
+function formatPayoutQueueTotal(pendingPayouts) {
+  return pendingPayouts.count > 0 ? ` · ${formatUsdStat(Math.floor(pendingPayouts.totalUsdt))}` : "";
+}
+
 function isDrawPayoutComplete(draw, userProfiles, panelContext = null) {
   if (draw.status !== DRAW_STATUS.FINISHED) {
     return false;
@@ -5548,32 +5624,14 @@ function userParticipatedInProject(userId, projectId, excludeDrawId = null) {
   );
 }
 
+// The bot's own way in (/start join_…, the old "join:" button) lets in only
+// whom the mini app would let in without steps, by the same rules. It used to
+// add anyone to a draw with no project, and anyone with a saved profile,
+// without the captcha, the channel or asking whether the bot can write to them.
+// Everyone else gets the button to the mini app and goes through the steps.
 async function tryAutoJoinDraw(draw, userId) {
   if (drawHasParticipant(draw, userId)) {
     return { joined: true, already: true, message: "Вы уже участвуете!" };
-  }
-
-  if (draw.projectId && userParticipatedInProject(userId, draw.projectId, draw.id)) {
-    const joinCtx = resolveJoinProjectContext(userId, draw, {
-      getUserProjectProfile,
-      setUserProjectProfile,
-      readUserProjectProfiles,
-      readProjects,
-      readData,
-      getProjectById,
-      readDrawHistory: () => [...(readDataSnapshot().draws || []), ...(readArchivedDrawsSnapshot().draws || [])],
-    });
-    const projectIdStepPending =
-      drawAsksProjectIdOnJoin(draw) && !joinCtxHasCompletedProjectIdStep(joinCtx);
-    if (!projectIdStepPending) {
-      const result = await addUserToDraw(draw.id, userId);
-      return {
-        joined: true,
-        already: Boolean(result.already),
-        message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
-        messageHtml: result.messageHtml,
-      };
-    }
   }
 
   const joinCtx = resolveJoinProjectContext(userId, draw, {
@@ -5585,19 +5643,40 @@ async function tryAutoJoinDraw(draw, userId) {
     getProjectById,
     readDrawHistory: () => [...(readDataSnapshot().draws || []), ...(readArchivedDrawsSnapshot().draws || [])],
   });
-  const canSkip = !draw.projectId || joinCtx.canSkipRegistration;
-  if (canSkip) {
-    ensureCrossOrganizerProjectProfile(userId, draw, joinCtx, setUserProjectProfile);
-    const result = await addUserToDraw(draw.id, userId);
-    return {
-      joined: true,
-      already: Boolean(result.already),
-      message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
-      messageHtml: result.messageHtml,
-    };
+  const project = draw.projectId ? getProjectById(draw.projectId) : null;
+  const projectIdStepPending =
+    drawAsksProjectIdOnJoin(draw) && !joinCtxHasCompletedProjectIdStep(joinCtx, project);
+  const canSkip =
+    joinCtx.canSkipRegistration ||
+    Boolean(
+      draw.projectId &&
+        userParticipatedInProject(userId, draw.projectId, draw.id) &&
+        !projectIdStepPending,
+    );
+  if (!canSkip) {
+    return { joined: false };
   }
 
-  return { joined: false };
+  const channelCheck = draw.channelId ? await checkChannelSubscriptionWithRetry(draw, userId) : null;
+  const decision = decideJoinEntry({
+    alreadyParticipant: false,
+    canSkipRegistration: canSkip,
+    canReachUser: await canMessageUser(userId),
+    channelSubscribed: channelCheck ? channelCheck.subscribed === true : true,
+  });
+  if (decision !== "auto_join") {
+    console.log(`[join] автоучастие в боте отменено: user=${userId} draw=${draw.id}`);
+    return { joined: false };
+  }
+
+  ensureCrossOrganizerProjectProfile(userId, draw, joinCtx, setUserProjectProfile);
+  const result = await addUserToDraw(draw.id, userId);
+  return {
+    joined: true,
+    already: Boolean(result.already),
+    message: result.already ? "Вы уже участвуете!" : "Вы участвуете!",
+    messageHtml: result.messageHtml,
+  };
 }
 
 async function sendDepositGuide(ctx, options = {}) {
@@ -6974,13 +7053,16 @@ function buildPanelLiveResponse(ownerId) {
   const statsDraws = getOwnerDrawsForStats(ownerId);
   const { userProfiles, panelContext, projects } = getPanelRenderContext(ownerId);
   const liveDraws = getPanelLiveDraws(historyDraws);
+  const versionDraws = getPanelVersionDraws(historyDraws, statsDraws, userProfiles, panelContext);
   return {
-    version: buildPanelLiveFingerprint(liveDraws, userProfiles, panelContext),
+    version: buildPanelLiveFingerprint(versionDraws, userProfiles, panelContext),
     statsHtml: renderPanelLiveStatsSection(statsDraws, userProfiles, panelContext),
     liveCards: liveDraws.map((draw) => ({
       id: draw.id,
       html: renderDrawHistoryBlocks([draw], projects, userProfiles, panelContext),
     })),
+    payoutQueueHtml: renderPayoutQueueContent(statsDraws, userProfiles, panelContext),
+    payoutQueueTotal: formatPayoutQueueTotal(summarizePendingPayouts(statsDraws, userProfiles, panelContext)),
   };
 }
 
@@ -7224,7 +7306,7 @@ function renderDrawHistoryBlocks(draws, projects, userProfiles, panelContext = n
         <article class="pl-card pl-draw${draw.status === DRAW_STATUS.ACTIVE ? " is-active" : ""}" data-draw-id="${escapeHtml(draw.id)}" style="--i:${index}">
           <div class="pl-draw-head">
             ${markHtml}
-            <div class="pl-draw-title">Розыгрыш ${escapeHtml(draw.prize)}</div>
+            <div class="pl-draw-title">Розыгрыш ${keepAmountsWhole(escapeHtml(draw.prize))}</div>
             <span class="pl-status pl-status-${escapeHtml(panelStatus.cssClass)}">${escapeHtml(panelStatus.label)}</span>
             <form method="post" action="${drawPath}/delete" class="pl-del-form">
               <button
@@ -7393,9 +7475,14 @@ function renderWebPage(draws, message, webUser) {
   const knownChannels = filterByOwner(readKnownChannels().channels || [], ownerId);
   const projectOptions = [
     '<option value="">Без проекта</option>',
-    ...projects.map(
-      (project) => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`,
-    ),
+    ...projects.map((project) => {
+      // A brand with no referral link cannot take a draw (draw-project-link.js);
+      // the list says so before the organiser fills in the whole form.
+      const missingLink = describeMissingProjectLink(project);
+      return missingLink
+        ? `<option value="${escapeHtml(project.id)}" data-missing-link="${escapeHtml(missingLink)}">${escapeHtml(project.name)} · нет реф-ссылки</option>`
+        : `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`;
+    }),
   ].join("");
   const channelOptions = knownChannels
     .map((channel) => {
@@ -7405,7 +7492,7 @@ function renderWebPage(draws, message, webUser) {
     })
     .join("");
   const panelLiveVersion = buildPanelLiveFingerprint(
-    getPanelLiveDraws(historyDraws),
+    getPanelVersionDraws(historyDraws, statsDraws, userProfiles, panelContext),
     userProfiles,
     panelContext,
   );
@@ -7448,10 +7535,19 @@ function renderWebPage(draws, message, webUser) {
       var params = new URLSearchParams(location.search);
       if (params.get("v") === build) return;
       params.set("v", build);
+      // Drawn in answer to the sign-in post, /panel/enter: it has no GET, so
+      // reloading there showed "Cannot GET /panel/enter" to everyone who came
+      // without a session cookie. A reply to a POST never comes from a cache,
+      // so only the address is put right.
+      if (/\\/enter\\/?$/.test(location.pathname)) {
+        history.replaceState(null, "", ${JSON.stringify(PANEL_BASE)} + "?" + params.toString());
+        return;
+      }
       location.replace(location.pathname + "?" + params.toString());
     })();
   </script>
   <style>
+    ${keepLayout(`
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     :root {
       --bg: #dbe8f8;
@@ -10218,6 +10314,8 @@ ${getPanelFluidTypographyVars()}
       box-shadow: var(--pemb-press) !important;
     }
     ${getPanelLookStyles()}
+    `)}
+    ${getPanelPlannerStyles()}
   </style>
 </head>
 <body>
@@ -10500,11 +10598,7 @@ ${getPanelFluidTypographyVars()}
       <section id="payoutQueuePanel" class="card create-panel panel-hidden">
         <h2 class="create-title">
           <span class="create-title-icon">${renderFormIcon("prize")}</span>
-          Очередь выплат${
-            pendingPayoutsSummary.count > 0
-              ? ` · ${escapeHtml(formatUsdStat(Math.floor(pendingPayoutsSummary.totalUsdt)))}`
-              : ""
-          }
+          Очередь выплат<span id="payoutQueueTotal">${escapeHtml(formatPayoutQueueTotal(pendingPayoutsSummary))}</span>
         </h2>
         <div id="payoutQueueContent" class="payout-queue-content">
           ${payoutQueueHtml}
@@ -11411,7 +11505,12 @@ ${getPanelFluidTypographyVars()}
 
       function shouldSkipPoll() {
         if (document.hidden) return true;
-        if (document.getElementById("panelSheetRoot")?.classList.contains("is-open")) return true;
+        // An open sheet holds a form, so the page stays still under it - except
+        // the payout queue, which the organiser watches for winners to come in.
+        if (document.getElementById("panelSheetRoot")?.classList.contains("is-open")) {
+          const queuePanel = document.getElementById("payoutQueuePanel");
+          if (!queuePanel || queuePanel.classList.contains("panel-hidden")) return true;
+        }
         if (document.querySelector("input:focus, select:focus, textarea:focus, [contenteditable=true]:focus")) {
           return true;
         }
@@ -11478,6 +11577,22 @@ ${getPanelFluidTypographyVars()}
             });
           }
 
+          if (typeof data.payoutQueueHtml === "string") {
+            const queueRoot = document.getElementById("payoutQueueContent");
+            if (queueRoot) {
+              const sheetScroll = document.querySelector("#panelSheetRoot .panel-sheet-scroll");
+              const sheetScrollTop = sheetScroll ? sheetScroll.scrollTop : 0;
+              const net = queueRoot.querySelector(".pl-queue")?.getAttribute("data-net") || "all";
+              queueRoot.innerHTML = data.payoutQueueHtml;
+              if (net !== "all") {
+                queueRoot.querySelector('.pl-net-filter .pl-seg-btn[data-net="' + net + '"]')?.click();
+              }
+              if (sheetScroll) sheetScroll.scrollTop = sheetScrollTop;
+            }
+            const queueTotal = document.getElementById("payoutQueueTotal");
+            if (queueTotal) queueTotal.textContent = data.payoutQueueTotal || "";
+          }
+
           root.dataset.version = data.version;
           window.scrollTo(0, scrollY);
           setupCopyButtons();
@@ -11524,6 +11639,18 @@ ${getPanelFluidTypographyVars()}
       form.addEventListener("submit", (event) => {
         if (submitting) {
           event.preventDefault();
+          return;
+        }
+        const projectOption = form.querySelector('select[name="projectId"]')?.selectedOptions?.[0];
+        const missingLink = projectOption?.dataset?.missingLink;
+        if (missingLink) {
+          event.preventDefault();
+          // Telegram's own alert; an old client throws on it, so the browser's then.
+          try {
+            window.Telegram.WebApp.showAlert(missingLink);
+          } catch (_error) {
+            window.alert(missingLink);
+          }
           return;
         }
         submitting = true;
@@ -11631,6 +11758,24 @@ app.get("/brand/background-dark.png", (req, res) => {
 });
 const panelRouter = express.Router();
 
+// Panel actions are form posts carrying a SameSite=None cookie, so a page on
+// another site could submit them in the organiser's name; see same-origin-post.js.
+panelRouter.use((req, res, next) => {
+  if (req.method !== "POST") {
+    next();
+    return;
+  }
+  const allowedHosts = [req.headers.host, WEB_PUBLIC_URL ? new URL(WEB_PUBLIC_URL).host : ""];
+  if (!isSameOriginPost(req.headers, allowedHosts)) {
+    console.warn(
+      `[panel] POST ${req.originalUrl} отклонён: чужой источник origin=${req.headers.origin || "-"} referer=${req.headers.referer || "-"}`,
+    );
+    res.status(403).type("text").send("Запрос пришёл не из панели.");
+    return;
+  }
+  next();
+});
+
 panelRouter.use("/uploads", webAuth.requireAuth, requireOrganizer, express.static(UPLOADS_DIR));
 
 app.post("/auth/session", (req, res) => {
@@ -11649,9 +11794,17 @@ app.post("/auth/session", (req, res) => {
   });
 });
 
+// The profile only reads, so it takes the shared snapshots - with the archive,
+// or a regular's finished draws would be missing from it.
 registerParticipantProfile(app, {
-  readData,
-  readUserProjectProfiles,
+  readData: readDataSnapshot,
+  readArchivedDraws: readArchivedDrawsSnapshot,
+  readUserProjectProfiles: readUserProjectProfilesSnapshot,
+  readProjects,
+  validateInitData,
+  BOT_TOKEN,
+  timezone: TIMEZONE,
+  isWinnerNotificationExpired,
   getUserProfileBundle,
   getWinnerDisplayName,
   shouldHideParticipant: (userId) => isPlatformAdmin(userId),
@@ -11665,6 +11818,9 @@ registerParticipantProfile(app, {
   formatRubAmount,
   convertUsdToRub: require("./rub-usdt-rate").convertUsdToRub,
 });
+
+// Where people drop out of the join flow - the admin's «Воронка» page.
+const joinFunnel = createJoinFunnelStore(getSqliteDb());
 
 registerJoinMiniApp(app, {
   validateInitData,
@@ -11701,6 +11857,7 @@ registerJoinMiniApp(app, {
   buildJoinReferralDirectLink: require("./join-referrals").buildJoinReferralDirectLink,
   isPlatformAdmin,
   setDrawParticipantAnonymous,
+  joinFunnel,
 });
 
 registerWinnersMiniApp(app, {
@@ -11725,7 +11882,13 @@ registerWinnersMiniApp(app, {
   isPlatformAdmin,
 });
 
-app.get("/", (_req, res) => {
+app.get("/", (req, res) => {
+  const miniAppTarget = getRootMiniAppRedirect(req.originalUrl);
+  if (miniAppTarget) {
+    console.warn(`[root] Mini App открыт по адресу сайта, а не /join/app — отправляю в участие (${String(req.query.tgWebAppStartParam).slice(0, 64)})`);
+    res.redirect(302, miniAppTarget);
+    return;
+  }
   res.type("html").send(renderLandingPage());
 });
 
@@ -12162,8 +12325,14 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       return;
     }
 
-    if (projectId && !getProjectById(projectId, ownerId)) {
+    const selectedProject = projectId ? getProjectById(projectId, ownerId) : null;
+    if (projectId && !selectedProject) {
       redirectWithMessage(res, "Выбранный проект не найден.");
+      return;
+    }
+    const missingProjectLink = describeMissingProjectLink(selectedProject);
+    if (missingProjectLink) {
+      redirectWithMessage(res, missingProjectLink);
       return;
     }
 
@@ -12821,6 +12990,7 @@ panelRouter.post("/draws/:id/deny-pay/:userId", webAuth.requireAuth, requireOrga
 app.use(PANEL_BASE, panelRouter);
 
 registerAdminDashboard(app, {
+  joinFunnel,
   botToken: BOT_TOKEN,
   supportBotToken: process.env.SUPPORT_BOT_TOKEN || "",
   cookieSecure: WEB_PUBLIC_URL.startsWith("https://"),
@@ -13456,11 +13626,27 @@ function printDesignPreviewUrls() {
 }
 
 async function bootstrap() {
+  // npm run dev:test: before anything talks to Telegram, make sure the token is
+  // not the live bot's (test-bot-guard.js).
+  if (process.env.TEST_BOT === "true") {
+    try {
+      const me = await assertSafeTestBot({
+        getMe: () => bot.telegram.getMe(),
+        configuredUsername: BOT_USERNAME,
+        dataDir: process.env.GIVEAWAY_DATA_DIR,
+      });
+      console.log(`[test-bot] тестовый бот @${me.username}, данные: ${process.env.GIVEAWAY_DATA_DIR}`);
+    } catch (error) {
+      console.error(`[test-bot] ${error.message}`);
+      process.exit(1);
+    }
+  }
   ensureStorage();
   migrateLegacyOwnership();
   migrateClearDeviceFraud();
   migrateBrandProjectTemplates();
   migratePokerdomLegacyWalletProfiles();
+  backfillPokerdomAccountsBeforeReferrals();
   backfillBrandHomeReferrals();
   const archiveResult = runDrawArchiveMaintenance();
   if (archiveResult.moved > 0) {
@@ -13473,7 +13659,7 @@ async function bootstrap() {
   await refreshRubUsdtRate(true);
 
   if (WEB_ONLY) {
-    app.listen(WEB_PORT, "0.0.0.0", () => {
+    app.listen(WEB_PORT, WEB_HOST, () => {
       printDesignPreviewUrls();
     });
     return;
@@ -13487,9 +13673,9 @@ async function bootstrap() {
     }
   }
 
-  app.listen(WEB_PORT, "0.0.0.0", () => {
+  app.listen(WEB_PORT, WEB_HOST, () => {
     const localBase = `http://localhost:${WEB_PORT}`;
-    console.log(`Веб-панель запущена: ${WEB_PUBLIC_URL || `http://0.0.0.0:${WEB_PORT}`}`);
+    console.log(`Веб-панель запущена: ${WEB_PUBLIC_URL || `http://${WEB_HOST}:${WEB_PORT}`} (слушает ${WEB_HOST}:${WEB_PORT})`);
     if (ENABLE_DEV_PREVIEW) {
       console.log(`  Превью Join:    ${localBase}/dev/preview/join`);
       console.log(`  Превью Winners: ${localBase}/dev/preview/winners`);

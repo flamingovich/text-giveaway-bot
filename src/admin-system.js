@@ -24,6 +24,25 @@ function scrub(line) {
     .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, "<ключ скрыт>");
 }
 
+// pm2 names a process's log after its id (giveaway-bot-error-<id>.log), and the
+// id changes whenever the process is created anew: the page kept reading -0
+// long after the bot had moved on to -1. The freshest file of that name is the
+// one being written; the rotated copies carry a date and are left alone.
+function findLatestLog(dir, name) {
+  const fallback = path.join(dir, `${name}-0.log`);
+  try {
+    const pattern = new RegExp(`^${name}-\\d+\\.log$`);
+    const newest = fs
+      .readdirSync(dir)
+      .filter((file) => pattern.test(file))
+      .map((file) => ({ file, mtime: fs.statSync(path.join(dir, file)).mtimeMs }))
+      .sort((left, right) => right.mtime - left.mtime)[0];
+    return newest ? path.join(dir, newest.file) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function readTail(file, bytes = LOG_TAIL_BYTES) {
   try {
     const size = fs.statSync(file).size;
@@ -293,8 +312,8 @@ function collectSystemState({ timezone, buildId, botUsername, schedulerIntervalM
     storage: readStorageState(),
     backups: readBackupState(),
     logs: {
-      errors: summariseLog(readTail(path.join(LOG_DIR, "giveaway-bot-error-0.log"))),
-      support: summariseLog(readTail(path.join(LOG_DIR, "support-bot-error-1.log"), 60 * 1024), 12),
+      errors: summariseLog(readTail(findLatestLog(LOG_DIR, "giveaway-bot-error"))),
+      support: summariseLog(readTail(findLatestLog(LOG_DIR, "support-bot-error"), 60 * 1024), 12),
     },
   };
 }
@@ -370,6 +389,7 @@ function buildPlainReport(state) {
 
 module.exports = {
   collectSystemState,
+  findLatestLog,
   buildPlainReport,
   summariseLog,
   formatDuration,
