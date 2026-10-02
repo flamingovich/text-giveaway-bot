@@ -11174,7 +11174,6 @@ ${getPanelFluidTypographyVars()}
       const form = document.getElementById("create-project-form");
       const cancelBtn = document.getElementById("project-edit-cancel");
       const submitLabel = document.getElementById("project-submit-label");
-      const submitBtn = document.getElementById("project-submit-btn");
       const nameInput = form?.querySelector('[name="name"]');
       const refInput = form?.querySelector('[name="refLink"]');
       const emojiInput = form?.querySelector('[name="emoji"]');
@@ -11190,9 +11189,6 @@ ${getPanelFluidTypographyVars()}
         if (promoInput) promoInput.value = "";
         cancelBtn.style.display = "none";
         submitLabel.textContent = "Сохранить";
-        if (submitBtn) {
-          submitBtn.querySelector(".draw-ico").innerHTML = ${JSON.stringify(renderFormIcon("edit"))};
-        }
       }
 
       document.querySelectorAll(".project-edit-btn").forEach((btn) => {
@@ -11207,9 +11203,6 @@ ${getPanelFluidTypographyVars()}
           if (promoInput) promoInput.value = btn.dataset.projectPromo || "";
           cancelBtn.style.display = "";
           submitLabel.textContent = "Сохранить";
-          if (submitBtn) {
-            submitBtn.querySelector(".draw-ico").innerHTML = ${JSON.stringify(renderFormIcon("edit"))};
-          }
           openProjectForm();
           form.scrollIntoView({ behavior: "smooth", block: "start" });
           refInput.focus();

@@ -24,3 +24,13 @@ test("the poll keeps running while the payout queue sheet is open", () => {
   assert.ok(source.includes('const queuePanel = document.getElementById("payoutQueuePanel");'));
   assert.ok(source.includes('if (!queuePanel || queuePanel.classList.contains("panel-hidden")) return true;'));
 });
+
+// The icons left the blue buttons, but the project form's pencil still swapped
+// the one on "Сохранить": querySelector found nothing, the script threw before
+// opening the form, and the pencil did nothing at all.
+test("no panel script reaches for the icons the buttons no longer have", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+  assert.doesNotMatch(source, /querySelector\(["']\.draw-ico["']\)/);
+});
