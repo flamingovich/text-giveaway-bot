@@ -20,6 +20,7 @@ const { getMiniAppStyles, getMiniAppInitScript, getMiniAppHeadScript, getMiniApp
 const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { normalizeAdminLabel, formatReferralOwnerLabel } = require("./admin-label");
 const { describeWinnerAccountId, shortenAccountId } = require("./winner-account-id");
+const { createPostEditQueue } = require("./post-edit-queue");
 const {
   getWinnerDirectChatUrl,
   buildWinnerChatLinkMessage,
@@ -2822,24 +2823,37 @@ async function deleteActiveDrawsDigestMessages(data, channelId) {
   setActiveDrawsDigestEntry(data, channelId, null);
 }
 
+// Every edit of a post in a channel - a draw's post, its reminder, the digest -
+// goes through this queue, one at a time per post (post-edit-queue.js): the
+// join update, the countdown and the stale counter's catch-up used to cancel
+// each other on Telegram's side.
+const runDrawPostEdit = createPostEditQueue();
+function drawPostEditKey(draw) {
+  return `${draw.channelId}:${draw.messageId}`;
+}
+
 async function editActiveDrawsDigestMessage(channelId, messageId, draws, options = {}) {
   // A reminder sent in the old shape becomes the new one on its next edit:
   // Telegram lets a plain text message be edited into a rich message, checked
   // against the live API. So the shape it was sent in does not decide this.
   if (canSendDigestAsRich()) {
-    await richMessageApi.editRichPost({
-      chatId: channelId,
-      messageId,
-      html: buildActiveDrawsDigestRichContent(draws, options),
-    });
+    await runDrawPostEdit(`${channelId}:${messageId}`, () =>
+      richMessageApi.editRichPost({
+        chatId: channelId,
+        messageId,
+        html: buildActiveDrawsDigestRichContent(draws, options),
+      }),
+    );
     return;
   }
 
   const content = buildActiveDrawsDigestTelegramContent(draws, options);
-  await bot.telegram.editMessageText(channelId, messageId, undefined, content.text, {
-    entities: content.entities,
-    link_preview_options: content.link_preview_options,
-  });
+  await runDrawPostEdit(`${channelId}:${messageId}`, () =>
+    bot.telegram.editMessageText(channelId, messageId, undefined, content.text, {
+      entities: content.entities,
+      link_preview_options: content.link_preview_options,
+    }),
+  );
 }
 
 async function syncActiveDrawsDigestAfterDrawChange(data, changedDraw) {
@@ -2977,7 +2991,9 @@ async function editDrawReminderMessage(draw) {
     link_preview_options: { is_disabled: true },
   };
   for (const messageId of draw.reminderMessageIds || []) {
-    await bot.telegram.editMessageText(draw.channelId, messageId, undefined, text, opts);
+    await runDrawPostEdit(`${draw.channelId}:${messageId}`, () =>
+      bot.telegram.editMessageText(draw.channelId, messageId, undefined, text, opts),
+    );
   }
 }
 
@@ -3950,13 +3966,15 @@ function overlayLiveDrawProgress(draw) {
 }
 
 async function editDrawPostAsRich(draw, includeWinners) {
-  const message = await withTelegramEditTimeout(() =>
-    richMessageApi.editRichPost({
-      chatId: draw.channelId,
-      messageId: draw.messageId,
-      html: buildDrawRichHtml(draw, includeWinners),
-      cover: getDrawRichCover(draw),
-    }),
+  const message = await runDrawPostEdit(drawPostEditKey(draw), () =>
+    withTelegramEditTimeout(() =>
+      richMessageApi.editRichPost({
+        chatId: draw.channelId,
+        messageId: draw.messageId,
+        html: buildDrawRichHtml(draw, includeWinners),
+        cover: getDrawRichCover(draw),
+      }),
+    ),
   );
   if (!draw.coverFileId) {
     draw.coverFileId = readCoverFileId(message) || "";
@@ -3970,13 +3988,15 @@ async function editDrawPostAsCaption(draw, includeWinners, keyboard) {
     { includeWinners, forCaption: true },
     { ...keyboard },
   );
-  await withTelegramEditTimeout(() =>
-    bot.telegram.editMessageCaption(
-      draw.channelId,
-      draw.messageId,
-      undefined,
-      captionOpts.caption,
-      captionOpts,
+  await runDrawPostEdit(drawPostEditKey(draw), () =>
+    withTelegramEditTimeout(() =>
+      bot.telegram.editMessageCaption(
+        draw.channelId,
+        draw.messageId,
+        undefined,
+        captionOpts.caption,
+        captionOpts,
+      ),
     ),
   );
   draw.messageType = "photo";
@@ -3984,13 +4004,15 @@ async function editDrawPostAsCaption(draw, includeWinners, keyboard) {
 
 async function editDrawPostAsText(draw, includeWinners, keyboard) {
   const textOpts = applyDrawPostContentToTelegramOpts(draw, { includeWinners }, { ...keyboard });
-  await withTelegramEditTimeout(() =>
-    bot.telegram.editMessageText(
-      draw.channelId,
-      draw.messageId,
-      undefined,
-      buildDrawMessage(draw, { includeWinners }),
-      textOpts,
+  await runDrawPostEdit(drawPostEditKey(draw), () =>
+    withTelegramEditTimeout(() =>
+      bot.telegram.editMessageText(
+        draw.channelId,
+        draw.messageId,
+        undefined,
+        buildDrawMessage(draw, { includeWinners }),
+        textOpts,
+      ),
     ),
   );
   draw.messageType = "text";
@@ -4858,8 +4880,10 @@ async function refreshDrawPostKeyboard(draw) {
       ? getFinishedKeyboard(draw).reply_markup
       : getKeyboardMarkup(draw.id, count);
 
-  await withTelegramEditTimeout(() =>
-    bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup),
+  await runDrawPostEdit(drawPostEditKey(draw), () =>
+    withTelegramEditTimeout(() =>
+      bot.telegram.editMessageReplyMarkup(draw.channelId, draw.messageId, undefined, markup),
+    ),
   );
   markDrawPostParticipantCount(draw, count);
   rememberDrawPostFingerprint(draw);
@@ -4996,7 +5020,7 @@ async function syncActiveDrawsDigestCountdowns(data) {
         });
         continue;
       }
-      if (/message to edit not found|message can't be edited/i.test(error.message || "")) {
+      if (/message to edit not found|message can't be edited|message was deleted/i.test(error.message || "")) {
         await deleteActiveDrawsDigestMessages(data, channelId);
         updated += 1;
         continue;

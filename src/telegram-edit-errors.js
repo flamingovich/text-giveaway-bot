@@ -9,22 +9,26 @@ function textOf(error) {
   return String(error?.message || error || "");
 }
 
-// Nothing is wrong with the post; the edit simply had nothing to do, or Telegram
-// asked us to slow down.
+// Nothing is wrong with the post; the edit simply had nothing to do, Telegram
+// asked us to slow down, or a newer edit of the same post took its place
+// ("canceled by new edit message request" - that one carries the latest state).
 function isIgnorableTelegramEditError(error) {
   const message = textOf(error);
   return (
     message.includes("message is not modified") ||
     message.includes("Too Many Requests") ||
-    message.includes("telegram_edit_timeout")
+    message.includes("telegram_edit_timeout") ||
+    message.includes("canceled by new edit message request")
   );
 }
 
 // The post is gone or frozen: repeating the call cannot change the outcome.
+// A deleted rich post answers "message was deleted" rather than "not found".
 function isPermanentTelegramEditError(error) {
   const message = textOf(error);
   return (
     message.includes("message to edit not found") ||
+    message.includes("message was deleted") ||
     message.includes("message can't be edited") ||
     message.includes("there is no text in the message to edit") ||
     message.includes("MESSAGE_ID_INVALID") ||
@@ -37,6 +41,7 @@ function isMissingTelegramMessageError(error) {
   const message = textOf(error);
   return (
     message.includes("message to edit not found") ||
+    message.includes("message was deleted") ||
     message.includes("message identifier is not specified")
   );
 }

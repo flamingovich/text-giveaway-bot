@@ -53,6 +53,9 @@ function createSupportBot(options) {
   const typingActionTimers = new Map();
   const statusAnimTimers = new Map();
   const idleCloseTimers = new Map();
+  // chatKey -> the operator search under way: { token, animationKey, messageId }.
+  const operatorSearches = new Map();
+  let operatorSearchCount = 0;
 
   const STATUS_DOT_FRAMES = ["", ".", "..", "..."];
   const STATUS_ANIM_MS = 480;
@@ -291,6 +294,7 @@ function createSupportBot(options) {
 
   async function endSupportChat(bot, chatId, state, from, reason = "closed") {
     const chatKey = String(chatId);
+    await cancelOperatorSearch(bot, chatId);
     clearChatTimers(chatKey);
     stopStatusAnimation(chatKey);
     await clearStatusMessage(bot, chatId, state);
@@ -414,6 +418,68 @@ function createSupportBot(options) {
     }
   }
 
+  // The "searching for an operator" pause runs beside the handler, not inside
+  // it. At night it lasts three to seven minutes, and awaited in the handler it
+  // held the whole bot: Telegraf takes no new updates until the ones in hand are
+  // done, so everyone else in support waited too, until its 90-second handler
+  // timeout gave up - 23 times in four nights. What the person writes meanwhile
+  // waits for the greeting, so the "operator" never answers before being found.
+  async function cancelOperatorSearch(bot, chatId) {
+    const chatKey = String(chatId);
+    const search = operatorSearches.get(chatKey);
+    if (!search) {
+      return;
+    }
+    operatorSearches.delete(chatKey);
+    stopStatusAnimation(search.animationKey);
+    await deleteMessageSafe(bot, chatId, search.messageId);
+  }
+
+  async function runOperatorSearch(bot, chatId, search, from) {
+    const chatKey = String(chatId);
+    const current = () => operatorSearches.get(chatKey) === search;
+    const message = await bot.telegram.sendMessage(chatId, buildSearchingText(0));
+    if (!current()) {
+      await deleteMessageSafe(bot, chatId, message.message_id);
+      return;
+    }
+    search.messageId = message.message_id;
+    startStatusAnimation(bot, search.animationKey, chatId, message.message_id, (frame) => buildSearchingText(frame));
+    await sleep(getOperatorSearchDelayMs());
+    // Cancelled meanwhile - a new /start or the chat closed - and cleaned up there.
+    if (!current()) {
+      return;
+    }
+    await cancelOperatorSearch(bot, chatId);
+
+    const state = mergeChatStateFromDisk(chatId);
+    if (state.sessionClosed) {
+      return;
+    }
+    state.greeted = true;
+    const greeting = buildGreeting(state.agentName);
+    appendTranscript(state, { role: "assistant", content: greeting, kind: "greeting" });
+    saveChats();
+    await bot.telegram.sendMessage(chatId, greeting);
+    touchChatActivity(bot, chatId, state);
+    if (state.pendingTexts?.length) {
+      scheduleReply(bot, chatId, from);
+    }
+  }
+
+  function startOperatorSearch(bot, chatId, from) {
+    const chatKey = String(chatId);
+    operatorSearchCount += 1;
+    const search = { token: operatorSearchCount, animationKey: `${chatKey}:search:${operatorSearchCount}`, messageId: null };
+    operatorSearches.set(chatKey, search);
+    runOperatorSearch(bot, chatId, search, from).catch((err) => {
+      if (operatorSearches.get(chatKey) === search) {
+        cancelOperatorSearch(bot, chatId).catch(() => {});
+      }
+      error("operator search error:", err.message);
+    });
+  }
+
   function scheduleTypingStart(bot, chatId) {
     const key = String(chatId);
     clearTypingStartTimer(key);
@@ -465,6 +531,7 @@ function createSupportBot(options) {
 
     const chatKey = String(ctx.chat.id);
     clearChatTimers(chatKey);
+    await cancelOperatorSearch(bot, ctx.chat.id);
     const state = mergeChatStateFromDisk(ctx.chat.id);
     syncChatUser(state, ctx.from);
     state.agentName = ai.pickRandomAgentName();
@@ -482,25 +549,9 @@ function createSupportBot(options) {
       return;
     }
 
-    const searchMessage = await ctx.reply(buildSearchingText(0));
-    startStatusAnimation(
-      bot,
-      `${chatKey}:search`,
-      ctx.chat.id,
-      searchMessage.message_id,
-      (frame) => buildSearchingText(frame),
-    );
-    await sleep(getOperatorSearchDelayMs());
-    stopStatusAnimation(`${chatKey}:search`);
-    await deleteMessageSafe(bot, ctx.chat.id, searchMessage.message_id);
-
-    state.greeted = true;
     state.hasUserMessage = false;
-    const greeting = buildGreeting(state.agentName);
-    appendTranscript(state, { role: "assistant", content: greeting, kind: "greeting" });
     saveChats();
-    await ctx.reply(greeting);
-    touchChatActivity(bot, ctx.chat.id, state);
+    startOperatorSearch(bot, ctx.chat.id, ctx.from);
   });
 
   bot.command("stop", async (ctx) => {
@@ -577,6 +628,10 @@ function createSupportBot(options) {
     state.pendingTexts.push(text);
     appendTranscript(state, { role: "user", content: text });
     saveChats();
+    // Still "looking for an operator": answered right after the greeting.
+    if (operatorSearches.has(chatKey)) {
+      return;
+    }
     scheduleReply(bot, chatId, ctx.from);
   });
 

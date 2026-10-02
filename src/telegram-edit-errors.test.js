@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
+  isIgnorableTelegramEditError,
+  isMissingTelegramMessageError,
   isPermanentTelegramEditError,
   isTransientTelegramEditError,
   isWrongTelegramMessageKindError,
@@ -70,4 +72,22 @@ test("a real refusal from Telegram is not called transient", () => {
   for (const e of [NO_TEXT, NO_CAPTION, GONE, err("400: Bad Request: chat not found")]) {
     assert.equal(isTransientTelegramEditError(e), false, e.message);
   }
+});
+
+// Seen on a channel digest whose post an admin deleted: a rich post answers
+// this instead of "message to edit not found", and read as passing it would be
+// retried on every join and every tick - the 1328-retries kind of loop.
+test("a deleted rich post is given up on", () => {
+  const deleted = err("400: Bad Request: message was deleted");
+  assert.equal(isPermanentTelegramEditError(deleted), true);
+  assert.equal(isMissingTelegramMessageError(deleted), true);
+  assert.equal(isTransientTelegramEditError(deleted), false);
+});
+
+// Two edits of one post met and Telegram kept the newer one; nothing is wrong
+// with the post, and the newer edit already carries the latest state.
+test("an edit replaced by a newer one is neither reported nor final", () => {
+  const replaced = err("400: Bad Request: canceled by new edit message request");
+  assert.equal(isIgnorableTelegramEditError(replaced), true);
+  assert.equal(isPermanentTelegramEditError(replaced), false);
 });
