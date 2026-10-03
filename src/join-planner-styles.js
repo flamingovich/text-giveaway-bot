@@ -182,6 +182,10 @@ const BUTTONS = `
     background: none;
     opacity: 1;
   }
+  /* One line always: a long brand name shrinks the words (fitGoLabel in the
+     page script) instead of breaking them onto a second line. */
+  body.join-flow .join-btn-go .join-btn-label { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+  body.join-flow .join-btn.join-btn-go { padding-left: .875rem; padding-right: .875rem; }
   body.join-flow .join-btn-go .join-btn-go-arrow {
     flex: none;
     width: 1rem;
@@ -878,6 +882,122 @@ const MOTION = `
   }
 `;
 
+// The screenshot step: the person shows their profile on the project instead
+// of typing the ID, and the bot reads it. The upload is a dashed tinted well;
+// while the picture is read a light passes over it, which is the "wait" and
+// stops with reduced motion.
+const SHOT = `
+  body.join-flow .join-shot,
+  body.join-flow .join-shot-view { display: flex; flex-direction: column; gap: .75rem; }
+  body.join-flow .join-shot-note { margin: .125rem .5rem 0; color: var(--label-2); font-size: .8125rem; line-height: 1.4; text-align: center; }
+  body.join-flow .join-shot-lead { margin: 0; color: var(--label); font-size: .9375rem; font-weight: 500; line-height: 1.35; text-align: center; }
+
+  body.join-flow .join-shot-drop {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .25rem;
+    margin: 0;
+    padding: 1.125rem 1rem;
+    border: 1.5px dashed color-mix(in srgb, var(--tint) 55%, transparent);
+    border-radius: var(--r-row);
+    color: var(--tint-ink);
+    background: color-mix(in srgb, var(--tint) 8%, transparent);
+    text-align: center;
+    cursor: pointer;
+    transition: background .2s var(--ease), transform .3s var(--spring);
+  }
+  body.join-flow .join-shot-drop:active { transform: scale(.98); background: color-mix(in srgb, var(--tint) 14%, transparent); }
+  body.join-flow .join-shot-drop input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  body.join-flow .join-shot-drop-icon { width: 1.75rem; height: 1.75rem; }
+  body.join-flow .join-shot-drop-title { font-size: 1.0625rem; font-weight: 600; }
+  body.join-flow .join-shot-drop-hint { color: var(--label-2); font-size: .75rem; }
+  /* Right under the request it explains, a little closer than the gap. */
+  body.join-flow .join-shot-view .join-guide-link { align-self: center; margin-top: -.375rem; }
+
+  body.join-flow .join-shot-thumb {
+    position: relative;
+    width: 7.5rem;
+    height: 12rem;
+    margin: 0 auto;
+    overflow: hidden;
+    border-radius: .875rem;
+    background: var(--fill);
+    box-shadow: 0 0 0 .5px var(--separator);
+  }
+  body.join-flow .join-shot-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+  body.join-flow .join-shot-scan {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -2.5rem;
+    height: 2.5rem;
+    background: linear-gradient(transparent, color-mix(in srgb, var(--tint) 45%, transparent), transparent);
+    animation: join-shot-scan 1.4s var(--ease) infinite;
+  }
+  @keyframes join-shot-scan { to { top: 100%; } }
+
+  body.join-flow .join-shot-result {
+    display: flex;
+    align-items: center;
+    gap: .875rem;
+    padding: .75rem;
+    border-radius: var(--r-row);
+    background: var(--fill);
+  }
+  body.join-flow .join-shot-result-thumb {
+    flex: none;
+    width: 3rem;
+    height: 4.5rem;
+    border-radius: .5rem;
+    object-fit: cover;
+    object-position: top;
+    background: var(--fill-strong);
+  }
+  body.join-flow .join-shot-result-text { display: grid; gap: .125rem; min-width: 0; }
+  body.join-flow .join-shot-result-label { color: var(--label-2); font-size: .8125rem; }
+  body.join-flow .join-shot-result-id {
+    color: var(--label);
+    font: 650 1.375rem/1.2 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    word-break: break-all;
+  }
+
+  body.join-flow .join-shot-error { display: grid; justify-items: center; gap: .375rem; padding: .25rem .5rem .5rem; text-align: center; }
+  body.join-flow .join-shot-error-mark {
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 50%;
+    color: var(--red);
+    background: color-mix(in srgb, var(--red) 14%, transparent);
+    font-size: 1.25rem;
+    font-weight: 800;
+  }
+  body.join-flow .join-shot-error-mark-info {
+    color: var(--tint-ink);
+    background: color-mix(in srgb, var(--tint) 14%, transparent);
+    font-family: Georgia, "Times New Roman", serif;
+    font-style: italic;
+  }
+  body.join-flow .join-shot-error-title { color: var(--label); font-size: 1.0625rem; font-weight: 650; }
+  body.join-flow .join-shot-error-text { margin: 0; color: var(--label-2); font-size: .875rem; line-height: 1.4; }
+
+  @media (prefers-reduced-motion: reduce) {
+    body.join-flow .join-shot-scan { animation: none; top: 0; height: 100%; opacity: .35; }
+  }
+`;
+
 // Without backdrop-filter, glass is just a see-through fill - give it a solid
 // one so text keeps its contrast.
 const FALLBACKS = `
@@ -891,7 +1011,7 @@ const FALLBACKS = `
 `;
 
 function getJoinPlannerStyles() {
-  return [TOKENS, BASE, SURFACES, PROGRESS, BUTTONS, INPUTS, REFERRAL, STEPS, NOTIFY, DONE, SHEETS, CAPTCHA, LOADING, PREVIEW, REVEAL, MOTION, FALLBACKS].join("\n");
+  return [TOKENS, BASE, SURFACES, PROGRESS, BUTTONS, INPUTS, REFERRAL, STEPS, NOTIFY, DONE, SHEETS, CAPTCHA, LOADING, PREVIEW, REVEAL, SHOT, MOTION, FALLBACKS].join("\n");
 }
 
 module.exports = { getJoinPlannerStyles };

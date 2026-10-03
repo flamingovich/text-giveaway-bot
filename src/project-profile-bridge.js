@@ -365,6 +365,16 @@ function ensureCrossOrganizerProjectProfile(userId, draw, ctx, setUserProjectPro
     payload.projectIdStepCompletedAt = projectIdStepCompletedAt;
   }
 
+  // The screenshot that backs the status travels with it, or the person would
+  // be asked for it again at every organiser of the brand (join-profile-shot.js).
+  const shotSource = ctx.directProfile?.profileShotVerifiedAt ? ctx.directProfile : sibling?.projectData;
+  if (shotSource?.profileShotVerifiedAt) {
+    payload.profileShotVerifiedAt = shotSource.profileShotVerifiedAt;
+    if (shotSource.profileShot) {
+      payload.profileShot = shotSource.profileShot;
+    }
+  }
+
   if (sibling?.projectId && sibling.projectId !== draw.projectId) {
     payload.inheritedFromProjectId = sibling.projectId;
   }

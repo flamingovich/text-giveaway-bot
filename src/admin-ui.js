@@ -500,6 +500,9 @@ a.row:hover, button.row:hover { background: color-mix(in oklab, var(--fill) 55%,
 .row-main { flex: 1; min-width: 0; }
 .row-title { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-sub { font-size: 13px; color: var(--label-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The profile screenshot a person's ID was read from: a phone-shaped thumbnail, the whole picture on a tap. */
+.shot-link { display: inline-block; margin-top: 8px; line-height: 0; }
+.shot-link img { width: 72px; height: 128px; object-fit: cover; object-position: top; border-radius: 10px; border: .5px solid var(--separator); }
 .row-value { flex: none; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 .row-value small { display: block; font-size: 12px; font-weight: 500; color: var(--label-2); }
 .row-chevron { flex: none; width: 15px; height: 15px; color: var(--label-3); stroke-width: 2.4; }

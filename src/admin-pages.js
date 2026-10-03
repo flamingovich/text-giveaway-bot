@@ -704,6 +704,11 @@ function renderUserCardPage(deps, card, helpers) {
                 : ""
           }
           ${project.idShapeMismatch ? `<div style="margin-top:6px">${UI.chip("ID в формате чужого проекта", "orange")}</div>` : ""}
+          ${
+            project.shotUrl
+              ? `<a class="shot-link" href="${escapeHtml(project.shotUrl)}" target="_blank" rel="noopener" title="Скриншот профиля"><img src="${escapeHtml(project.shotUrl)}" alt="Скриншот профиля" loading="lazy" /></a>`
+              : `<div class="row-sub">скриншота нет — статус не подтверждён</div>`
+          }
         </div>
         ${refChip(project.refStatus)}
       </div>`,

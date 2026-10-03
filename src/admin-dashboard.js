@@ -1,4 +1,7 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const { resolveShotFile } = require("./profile-shot-store");
+const { DATA_DIR } = require("./storage/paths");
 const { inferReferralOwnerId, normalizeProjectBrandName } = require("./project-profile-bridge");
 const {
   buildUserProjectActivityIndex,
@@ -798,6 +801,23 @@ function registerAdminDashboard(app, deps) {
     } catch {
       res.status(404).end();
     }
+  });
+
+  // A profile screenshot from the join (profile-shot-store.js): to the owner in
+  // the admin only, never cached outside the browser.
+  app.get("/admin/users/:userId/shot/:projectId", requireAuth, (req, res) => {
+    const userId = String(req.params.userId || "").trim();
+    const projectId = String(req.params.projectId || "").trim();
+    const profiles = deps.readUserProjectProfiles();
+    const projects = resolveUserProjects(profiles.users?.[userId]?.projects);
+    const file = /^\d+$/.test(userId) ? projects[projectId]?.profileShot?.file : null;
+    const absolute = file ? resolveShotFile(DATA_DIR, file) : null;
+    if (!absolute || !fs.existsSync(absolute)) {
+      res.status(404).end();
+      return;
+    }
+    res.set("Cache-Control", "private, no-store");
+    res.sendFile(absolute);
   });
 
   app.get("/admin/users/:userId", requireAuth, (req, res) => {

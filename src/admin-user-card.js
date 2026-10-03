@@ -173,6 +173,11 @@ function buildUserCard(deps, userId, options = {}) {
     firstTouchSource: projectData.firstTouchSource || "",
     nickname: projectData.referralNickname || "",
     accountId: projectData.projectAccountId || "",
+    // The screenshot the ID was read from, shown to the owner only here.
+    shotUrl: projectData.profileShot?.file
+      ? `/admin/users/${encodeURIComponent(userKey)}/shot/${encodeURIComponent(projectId)}`
+      : "",
+    shotVerifiedAt: projectData.profileShotVerifiedAt || "",
     wallet: projectData.trc20Address || "",
     updatedAt: projectData.updatedAt || "",
   }));

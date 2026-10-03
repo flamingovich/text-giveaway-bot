@@ -26,6 +26,16 @@ const { getBrandLogoUrls, renderBrandLogoHtml } = require("./brand-logos");
 const { extractClientIp } = require("./client-ip");
 const { isJoinCaptchaPassed } = require("./join-captcha");
 const { createRateLimiter } = require("./rate-limiter");
+const { askShotModel, judgeShotAnswer, describeShotRefusal } = require("./profile-shot-reader");
+const { decodeShotDataUrl, hashShot, findShotHashOwner, saveShotFile } = require("./profile-shot-store");
+const {
+  isProfileShotRequired,
+  needsProfileShot,
+  settledStatusOf,
+  refOnlyTurnsAway,
+  createPendingShots,
+} = require("./join-profile-shot");
+const { DATA_DIR } = require("./storage/paths");
 const { createJoinFunnelMiddleware } = require("./join-funnel");
 const { isParticipationUnregistered } = require("./unregistered-participation");
 const {
@@ -333,6 +343,10 @@ const JOIN_REF_STATUS_ERROR_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke=
 const JOIN_REF_STATUS_OK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></svg>`;
 // The round arrow at the end of a link out of the app (.join-btn-go). The
 // arrow is its own path so it can nudge towards where it points.
+// The screenshot upload's picture: a frame with a hill and a sun.
+const JOIN_SHOT_IMAGE_ICON =
+  '<svg class="join-shot-drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="9.5" r="1.6"/><path d="M20.5 15.5l-4.6-4.6a1.2 1.2 0 0 0-1.7 0L6 19.5"/></svg>';
+
 const JOIN_GO_ARROW_ICON = `<svg class="join-btn-go-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="join-btn-go-arrow-path" d="M7.5 16.5 16.5 7.5M9.5 7.5h7v7"/></svg>`;
 
 // The permission step's bell, with the clapper as its own path so it can lag
@@ -547,6 +561,52 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             <div class="join-stack-divider" aria-hidden="true"></div>
             <button type="button" class="join-btn join-btn-outline" id="registrationProjectIdNonRefBtn">Я не реферал</button>
             <button type="button" class="join-btn join-btn-outline" data-unregistered-open>Я не зарегистрирован</button>
+          </div>
+          <div id="registrationShotMode" class="join-shot hidden">
+            <div class="join-shot-view" data-shot-view="status">
+              <p class="join-shot-lead">Вы зарегистрированы на ${projectName} по ссылке стримера?</p>
+              <button type="button" class="join-btn join-btn-secondary" data-shot-status="ref"><span class="join-btn-label">Да, я реферал</span></button>
+              <button type="button" class="join-btn join-btn-outline" data-shot-status="nonref"><span class="join-btn-label">Нет, я не реферал</span></button>
+            </div>
+            <div class="join-shot-view hidden" data-shot-view="upload">
+              <p class="join-shot-lead">Пришлите скриншот вашего профиля ${projectName}, где видны никнейм и ID</p>
+              <button type="button" class="join-guide-link" id="shotGuideOpenBtn" aria-expanded="false">${JOIN_INFO_ICON}<span>Как узнать свой ID?</span></button>
+              <label class="join-shot-drop">
+                <input type="file" accept="image/*" id="shotFileInput" />
+                ${JOIN_SHOT_IMAGE_ICON}
+                <span class="join-shot-drop-title">Загрузить скриншот</span>
+              </label>
+            </div>
+            <div class="join-shot-view hidden" data-shot-view="reading">
+              <div class="join-shot-thumb"><img id="shotReadingThumb" alt="" /><span class="join-shot-scan"></span></div>
+              <p class="join-shot-lead">Читаем скриншот…</p>
+            </div>
+            <div class="join-shot-view hidden" data-shot-view="confirm">
+              <div class="join-shot-result">
+                <img class="join-shot-result-thumb" id="shotConfirmThumb" alt="" />
+                <div class="join-shot-result-text">
+                  <span class="join-shot-result-label">Ваш ID на ${projectName}</span>
+                  <strong class="join-shot-result-id" id="shotConfirmId">#W3N5E</strong>
+                </div>
+              </div>
+              <button type="button" class="join-btn join-btn-primary" id="shotConfirmBtn"><span class="join-btn-label">Да, это мой ID</span></button>
+              <button type="button" class="join-btn join-btn-outline" data-shot-retry><span class="join-btn-label">Загрузить другой скриншот</span></button>
+            </div>
+            <div class="join-shot-view hidden" data-shot-view="error">
+              <div class="join-shot-error">
+                <span class="join-shot-error-mark" aria-hidden="true">!</span>
+                <strong class="join-shot-error-title">Не получилось</strong>
+                <p class="join-shot-error-text" id="shotErrorText">Это не похоже на профиль ${projectName}. Откройте профиль на ${projectName} и сделайте скриншот, где видны ник и ID.</p>
+              </div>
+              <button type="button" class="join-btn join-btn-secondary" data-shot-retry><span class="join-btn-label">Загрузить другой скриншот</span></button>
+            </div>
+            <div class="join-shot-view hidden" data-shot-view="refonly">
+              <div class="join-shot-error">
+                <span class="join-shot-error-mark join-shot-error-mark-info" aria-hidden="true">i</span>
+                <strong class="join-shot-error-title">Только для рефералов</strong>
+                <p class="join-shot-error-text">Это розыгрыш для рефералов на ${projectName}. Зарегистрируйтесь по кнопке выше и сможете участвовать.</p>
+              </div>
+            </div>
           </div>
         </div>`,
         "",
@@ -2505,6 +2565,11 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       openProjectIdGuideSheet();
     });
 
+    // The same guide from the screenshot step: where the ID is in the profile.
+    bindClick("shotGuideOpenBtn", () => {
+      openGuideSheet("project_id", "Как узнать ID", projectIdGuideStepsCache, document.getElementById("shotGuideOpenBtn"));
+    });
+
     bindClick("joinGuideSheetCloseBtn", () => {
       closeGuideSheet();
     });
@@ -2543,6 +2608,18 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         return;
       }
       if (step === "registration") {
+        if (payload?.registrationMode === "shot") {
+          if (Array.isArray(payload.projectIdGuide) && payload.projectIdGuide.length) {
+            projectIdGuideStepsCache = payload.projectIdGuide;
+          }
+          // A settled status is not asked again: the weekly screenshot only.
+          enterShotMode(payload.refOnlyBlocked ? "refonly" : payload.shotStatusKnown ? "upload" : "status", {
+            refOnly: payload.refOnly === true,
+          });
+          showStep("registration");
+          return;
+        }
+        leaveShotMode();
         const mode = payload?.registrationMode || (payload?.projectIdGuide ? "project_id" : registrationMode);
         applyRegistrationMode(
           mode,
@@ -2916,6 +2993,249 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       selectJoinBoostLinkPreview();
     });
 
+    // The screenshot step (join-profile-shot.js): "are you a referral", the
+    // upload, the reading, "is this your ID", why not, and the refusal of a
+    // referrals-only draw. The picture is shrunk here before it is sent: a
+    // phone's screenshot is a few megabytes, a 1400 px JPEG a few hundred KB,
+    // well under the 1 MB the server takes in one request.
+    const shotMode = document.getElementById("registrationShotMode");
+    const shotReduceMotion = Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    let shotStatus = "ref";
+    let shotRefOnly = false;
+    let shotBusy = false;
+
+    // One screen gives way to the next: the new one rises in and the card
+    // eases to its new height instead of jumping to it.
+    function showShotView(view) {
+      if (!shotMode) return;
+      const card = shotMode.closest(".join-step-card");
+      const from = card ? card.offsetHeight : 0;
+      let shown = null;
+      shotMode.querySelectorAll("[data-shot-view]").forEach((el) => {
+        const on = el.getAttribute("data-shot-view") === view;
+        el.classList.toggle("hidden", !on);
+        if (on) shown = el;
+      });
+      // While the picture is read and its ID confirmed, the way to the site
+      // is a second filled button with nothing to do there.
+      document.getElementById("projectLink")?.classList.toggle("hidden", view === "reading" || view === "confirm");
+      if (shotReduceMotion || !shown || typeof shown.animate !== "function") return;
+      const ease = "cubic-bezier(0.2, 0.8, 0.2, 1)";
+      shown.animate(
+        [
+          { opacity: 0, transform: "translateY(10px)" },
+          { opacity: 1, transform: "none" },
+        ],
+        { duration: 320, easing: ease },
+      );
+      const to = card ? card.offsetHeight : 0;
+      if (card && from && to && from !== to) {
+        card.animate(
+          [
+            { height: from + "px", overflow: "hidden" },
+            { height: to + "px", overflow: "hidden" },
+          ],
+          { duration: 340, easing: ease },
+        );
+      }
+    }
+
+    // The link to the site stays on one line: when the words do not fit, they
+    // get smaller, down to 12 px, instead of wrapping.
+    function fitGoLabel() {
+      const label = document.querySelector("#projectLink .join-btn-label");
+      if (!label || !label.offsetWidth) return;
+      label.style.fontSize = "";
+      let size = parseFloat(getComputedStyle(label).fontSize) || 17;
+      while (label.scrollWidth > label.clientWidth + 1 && size > 12) {
+        size -= 0.5;
+        label.style.fontSize = size + "px";
+      }
+    }
+    // Whenever the button changes size - including when its step appears, as a
+    // hidden one measures nothing - the words are fitted again.
+    const goLinkEl = document.getElementById("projectLink");
+    if (goLinkEl && typeof ResizeObserver === "function") {
+      new ResizeObserver(() => fitGoLabel()).observe(goLinkEl);
+    } else {
+      window.addEventListener("resize", () => requestAnimationFrame(fitGoLabel));
+    }
+
+    // On this step the way to the site is the way to register there.
+    function setGoLabel(shot) {
+      const label = document.querySelector("#projectLink .join-btn-label");
+      if (!label) return;
+      const text = label.textContent;
+      label.textContent = shot
+        ? text.replace("Перейти на ", "Зарегистрироваться на ")
+        : text.replace("Зарегистрироваться на ", "Перейти на ");
+      requestAnimationFrame(fitGoLabel);
+    }
+
+    function enterShotMode(view, options) {
+      shotRefOnly = Boolean(options && options.refOnly);
+      setGoLabel(true);
+      document.getElementById("registrationRefMode")?.classList.add("hidden");
+      document.getElementById("registrationProjectIdMode")?.classList.add("hidden");
+      document.getElementById("projectIdGuideOpenBtn")?.classList.add("hidden");
+      shotMode?.classList.remove("hidden");
+      const input = document.getElementById("shotFileInput");
+      if (input) input.value = "";
+      showShotView(view);
+    }
+
+    function leaveShotMode() {
+      setGoLabel(false);
+      shotMode?.classList.add("hidden");
+      document.getElementById("projectLink")?.classList.remove("hidden");
+    }
+
+    function setShotThumbs(url) {
+      ["shotReadingThumb", "shotConfirmThumb"].forEach((id) => {
+        const img = document.getElementById(id);
+        if (!img) return;
+        if (url) {
+          img.src = url;
+          img.classList.remove("hidden");
+        } else {
+          img.removeAttribute("src");
+          img.classList.add("hidden");
+        }
+      });
+    }
+
+    function showShotError(text) {
+      const el = document.getElementById("shotErrorText");
+      if (el && text) el.textContent = text;
+      showShotView("error");
+    }
+
+    function shrinkShot(file) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          const scale = Math.min(1, 1400 / Math.max(img.naturalWidth, img.naturalHeight));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+          canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+          canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.8));
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error("Это не картинка. Пришлите скриншот."));
+        };
+        img.src = url;
+      });
+    }
+
+    async function readShot(file) {
+      if (!file || shotBusy) return;
+      shotBusy = true;
+      try {
+        let image;
+        try {
+          image = await shrinkShot(file);
+        } catch (error) {
+          showShotError(error.message);
+          return;
+        }
+        setShotThumbs(image);
+        showShotView("reading");
+        if (PAGE_MODE === "preview") {
+          // The preview pretends an answer after about as long as the real one takes.
+          await new Promise((resolve) => setTimeout(resolve, 1600));
+          showShotView("confirm");
+          return;
+        }
+        let data;
+        try {
+          data = await api(
+            "/api/join/" + encodeURIComponent(drawId) + "/profile-shot",
+            { image, status: shotStatus },
+            { timeoutMs: 45000 },
+          );
+        } catch (error) {
+          showShotError(error.message);
+          return;
+        }
+        if (data.shotAccountId) {
+          const idEl = document.getElementById("shotConfirmId");
+          if (idEl) idEl.textContent = data.shotAccountId;
+          showShotView("confirm");
+        } else if (data.shotRefOnly) {
+          showShotView("refonly");
+        } else if (data.shotError) {
+          showShotError(data.shotError);
+        } else if (data.step) {
+          leaveShotMode();
+          handleStep(data.step, data);
+        } else {
+          showShotError("");
+        }
+      } finally {
+        shotBusy = false;
+      }
+    }
+
+    async function confirmShot() {
+      const btn = document.getElementById("shotConfirmBtn");
+      if (!btn || btn.disabled) return;
+      if (PAGE_MODE === "preview") {
+        applyWalletStep(PREVIEW_WALLET_STEP);
+        showStep("trc20");
+        return;
+      }
+      btn.disabled = true;
+      btn.classList.add("is-loading");
+      try {
+        const data = await api("/api/join/" + encodeURIComponent(drawId) + "/profile-shot/confirm", {});
+        if (data.shotRefOnly) {
+          showShotView("refonly");
+          return;
+        }
+        leaveShotMode();
+        handleStep(data.step, data);
+      } catch (error) {
+        showShotError(error.message);
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove("is-loading");
+      }
+    }
+
+    if (shotMode) {
+      shotMode.addEventListener("click", (event) => {
+        const status = event.target.closest("[data-shot-status]");
+        if (status) {
+          shotStatus = status.getAttribute("data-shot-status") === "nonref" ? "nonref" : "ref";
+          showShotView(shotRefOnly && shotStatus === "nonref" ? "refonly" : "upload");
+          return;
+        }
+        if (event.target.closest("[data-shot-retry]")) {
+          const input = document.getElementById("shotFileInput");
+          if (input) input.value = "";
+          showShotView("upload");
+          return;
+        }
+        if (event.target.closest("#shotConfirmBtn")) {
+          confirmShot();
+        }
+      });
+      document.getElementById("shotFileInput")?.addEventListener("change", (event) => {
+        readShot(event.target.files && event.target.files[0]);
+      });
+      document.addEventListener("paste", (event) => {
+        const upload = shotMode.querySelector('[data-shot-view="upload"]');
+        if (shotMode.classList.contains("hidden") || !upload || upload.classList.contains("hidden")) return;
+        const items = Array.from((event.clipboardData && event.clipboardData.items) || []);
+        const image = items.find((item) => String(item.type).indexOf("image/") === 0);
+        if (image) readShot(image.getAsFile());
+      });
+    }
+
     (async () => {
       try {
         const healthRes = await fetch(apiUrl("/api/join/health"), { cache: "no-store" });
@@ -2978,6 +3298,12 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           { id: "registration_id", label: "Рег.+ID" },
           { id: "registration_id_pd", label: "Рег.+ID PD" },
           { id: "registration_id_lb", label: "Рег.+ID LB" },
+          { id: "shot_status", label: "Скрин: статус" },
+          { id: "shot_upload", label: "Скрин: загрузка" },
+          { id: "shot_reading", label: "Скрин: чтение" },
+          { id: "shot_confirm", label: "Скрин: ID" },
+          { id: "shot_error", label: "Скрин: ошибка" },
+          { id: "shot_refonly", label: "Только рефы" },
           { id: "trc20", label: "Кошелёк" },
           { id: "done", label: "Готово" },
           { id: "profile", label: "Профиль" },
@@ -2992,6 +3318,13 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             if (id === "captcha") {
               renderCaptcha();
             }
+            if (id.indexOf("shot_") === 0) {
+              applyPreviewBrand(null);
+              enterShotMode(id.slice(5));
+              showStep("registration");
+              return;
+            }
+            leaveShotMode();
             if (
               id === "registration" ||
               id === "registration_id" ||
@@ -3261,6 +3594,10 @@ function registerJoinMiniApp(app, deps) {
   // Ten id attempts in ten minutes: enough for typos, not for trying ids until
   // one belongs to somebody.
   const projectIdAttemptLimiter = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 10 });
+  // Each screenshot is a paid call to the model: ten in ten minutes is plenty
+  // for anyone getting it right, and caps what a script could spend.
+  const profileShotLimiter = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 10 });
+  const pendingShots = createPendingShots();
 
   function getReferrerIdFromRequest(req) {
     const raw = req.body?.referrerId;
@@ -3373,7 +3710,16 @@ function registerJoinMiniApp(app, deps) {
     }
 
     const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
-    if (joinCtx.canSkipRegistration) {
+    // The screenshot step and a referrals-only draw hold here too: this was the
+    // way a full old profile went straight in after the channel check.
+    if (refOnlyTurnsAway(draw, joinCtx)) {
+      session.step = "registration";
+      setJoinApiSession(userId, draw.id, session);
+      res.json(buildRegistrationStepResponse(draw, { refOnlyBlocked: true }));
+      return;
+    }
+    const shotPending = needsProfileShot(draw, joinCtx);
+    if (joinCtx.canSkipRegistration && !shotPending) {
       await completeJoinAfterProfileReady(draw, userId, session, req, res);
       return;
     }
@@ -3393,7 +3739,7 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    if (drawAsksProjectIdOnJoin(draw) && joinCtxHasSavedProjectIdStep(joinCtx, draw)) {
+    if (!shotPending && drawAsksProjectIdOnJoin(draw) && joinCtxHasSavedProjectIdStep(joinCtx, draw)) {
       inheritSavedProjectIdStep(userId, draw, joinCtx);
       if (draw.askWalletOnJoin === false) {
         await finishRegistrationJoin(draw, userId, session, req, res);
@@ -3409,7 +3755,7 @@ function registerJoinMiniApp(app, deps) {
 
     session.step = "registration";
     setJoinApiSession(userId, draw.id, session);
-    res.json(buildRegistrationStepResponse(draw));
+    res.json(buildRegistrationStepResponse(draw, shotStepExtra(draw, userId)));
   }
 
   function drawHasParticipant(draw, userId) {
@@ -3460,9 +3806,25 @@ function registerJoinMiniApp(app, deps) {
     return { step, ...extra };
   }
 
-  function buildRegistrationStepResponse(draw) {
-    const mode = drawAsksProjectIdOnJoin(draw) ? "project_id" : "referral";
+  // Someone whose status a screenshot already settled is only asked for a new
+  // screenshot (once a week), not "are you a referral" again.
+  function shotStepExtra(draw, userId) {
+    if (!isProfileShotRequired() || !draw.projectId) return {};
+    const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
+    return { shotStatusKnown: Boolean(settledStatusOf(joinCtx)) };
+  }
+
+  function buildRegistrationStepResponse(draw, extra = {}) {
     const project = draw.projectId ? getProjectById(draw.projectId) : null;
+    if (isProfileShotRequired() && draw.projectId) {
+      return buildJoinStepResponse("registration", {
+        registrationMode: "shot",
+        refOnly: draw.refOnly === true,
+        projectIdGuide: buildProjectIdGuideSteps(project),
+        ...extra,
+      });
+    }
+    const mode = drawAsksProjectIdOnJoin(draw) ? "project_id" : "referral";
     return buildJoinStepResponse("registration", {
       registrationMode: mode,
       projectIdGuide: mode === "project_id" ? buildProjectIdGuideSteps(project) : null,
@@ -3637,11 +3999,18 @@ function registerJoinMiniApp(app, deps) {
     const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
     const projectIdStepPending =
       drawAsksProjectIdOnJoin(draw) && !joinCtxHasSavedProjectIdStep(joinCtx, draw);
-    const canSkip =
-      joinCtx.canSkipRegistration ||
-      (draw.projectId &&
-        userParticipatedInProject(userId, draw.projectId, draw.id) &&
-        !projectIdStepPending);
+    const canSkipByProfile =
+      !needsProfileShot(draw, joinCtx) &&
+      (joinCtx.canSkipRegistration ||
+        (draw.projectId &&
+          userParticipatedInProject(userId, draw.projectId, draw.id) &&
+          !projectIdStepPending));
+    // Settled as "не реф" for this organiser, or another organiser's person on
+    // the brand: a referrals-only draw shows them why not, before any step.
+    if (refOnlyTurnsAway(draw, joinCtx)) {
+      return buildRegistrationStepResponse(draw, { refOnlyBlocked: true });
+    }
+    const canSkip = canSkipByProfile;
     let decision = decideJoinEntry({
       alreadyParticipant: false,
       canSkipRegistration: canSkip,
@@ -3739,6 +4108,14 @@ function registerJoinMiniApp(app, deps) {
     recaptchaSiteKey: RECAPTCHA_SITE_KEY,
     apiBase: deps.WEB_PUBLIC_URL || "",
     botUsername: BOT_USERNAME,
+  });
+
+  // A Mini App address typed without the last part (".../join/") answered
+  // "Cannot GET /join/". Telegram's own parameters ride in the query and the
+  // fragment, and a redirect keeps both.
+  app.get(["/join", "/join/"], (req, res) => {
+    const query = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : "";
+    res.redirect(302, `/join/app${query}`);
   });
 
   app.get("/join/app", (req, res) => {
@@ -3901,7 +4278,7 @@ function registerJoinMiniApp(app, deps) {
         return;
       }
       if (session.step === "registration" || session.step === "registration_confirm") {
-        res.json(buildRegistrationStepResponse(draw));
+        res.json(buildRegistrationStepResponse(draw, shotStepExtra(draw, userId)));
         return;
       }
       if (session.step === "await_ref_nickname") {
@@ -4118,6 +4495,22 @@ function registerJoinMiniApp(app, deps) {
     return isNonReferral;
   }
 
+  // "Да, я реферал" in a draw for referrals only: no roll - the roll would turn
+  // away honest referrals. The rule of one organiser per brand still holds.
+  function applyClaimedReferral(userId, session, draw) {
+    if (applyCrossOrganizerNonReferralIfNeeded(userId, session, draw)) {
+      return true;
+    }
+    setUserProjectProfile(userId, session.projectId, {
+      referralVerified: true,
+      selfReportedNonReferral: false,
+      referralCheckedAt: new Date().toISOString(),
+      referralOwnerId: getDrawOwnerId(draw),
+    });
+    session.skipReferralCheck = false;
+    return false;
+  }
+
   // The same outcome as "Я не реферал", decided by the account's age. The
   // session flag matters as much as the profile: the wallet step rewrites the
   // referral fields from it, and would otherwise put the referral status back.
@@ -4169,6 +4562,12 @@ function registerJoinMiniApp(app, deps) {
     }
     if (!drawAsksProjectIdOnJoin(draw)) {
       res.status(400).json({ error: "Для этого розыгрыша ID с проекта не требуется." });
+      return;
+    }
+    // A page opened before the screenshot step came in still offers the typed
+    // ID; it must not be a way around the screenshot.
+    if (isProfileShotRequired()) {
+      res.status(409).json({ error: "Шаг участия обновился. Закройте и откройте участие заново." });
       return;
     }
 
@@ -4251,6 +4650,11 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
+    if (isProfileShotRequired() && draw.projectId) {
+      res.status(409).json({ error: "Шаг участия обновился. Закройте и откройте участие заново." });
+      return;
+    }
+
     const action = String(req.body?.action || "opened");
     if (drawAsksProjectIdOnJoin(draw) && action !== "non_ref" && action !== "unregistered") {
       res.status(400).json({ error: "Введите ID с проекта." });
@@ -4271,6 +4675,147 @@ function registerJoinMiniApp(app, deps) {
       }
     } else {
       applyReferralRoll(userId, session, draw);
+    }
+    await finishRegistrationJoin(draw, userId, session, req, res);
+  });
+
+  // The screenshot step, first half: read the picture and say what ID it shows.
+  // Nothing is saved until the person confirms it.
+  app.post("/api/join/:drawId/profile-shot", requireJoinUser, async (req, res) => {
+    const userId = req.telegramUser.id;
+    const drawId = req.params.drawId;
+    const draw = getActiveDraw(drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
+    const entry = await resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    if (entry) {
+      res.json(entry);
+      return;
+    }
+    const session = getJoinApiSession(userId, drawId);
+    if (!session || session.step !== "registration" || !draw.projectId) {
+      res.status(400).json({ error: "Сессия устарела." });
+      return;
+    }
+    // A settled status is the answer, whatever the page sent.
+    const settled = settledStatusOf(resolveJoinProjectContext(userId, draw, getJoinProfileDeps()));
+    const status = settled || (req.body?.status === "nonref" ? "nonref" : "ref");
+    if (draw.refOnly === true && status === "nonref") {
+      res.json({ shotRefOnly: true });
+      return;
+    }
+    if (!profileShotLimiter.take(String(userId)).ok) {
+      res.status(429).json({ error: "Слишком много попыток. Подождите 10 минут." });
+      return;
+    }
+    const project = getProjectById(session.projectId);
+    const decoded = decodeShotDataUrl(req.body?.image);
+    if (!decoded.ok) {
+      res.json({ shotError: decoded.error });
+      return;
+    }
+    const sha256 = hashShot(decoded.buffer);
+    if (findShotHashOwner(readUserProjectProfiles(), sha256, userId)) {
+      console.warn(`[join] скрин профиля уже присылал другой участник: user=${userId} draw=${drawId}`);
+      res.json({ shotError: describeShotRefusal("duplicate_image", project) });
+      return;
+    }
+    let answer = null;
+    try {
+      answer = await askShotModel({ apiKey: process.env.OPENROUTER_API_KEY, imageDataUrl: req.body.image });
+    } catch (error) {
+      console.warn(`[join] скрин профиля не прочитан: user=${userId} draw=${drawId}: ${error.message}`);
+      res.json({ shotError: describeShotRefusal("unavailable", project) });
+      return;
+    }
+    const verdict = judgeShotAnswer(answer, project);
+    console.log(
+      `[join] скрин профиля: user=${userId} draw=${drawId} бренд=${answer?.brand || "?"} → ${verdict.ok ? "ID прочитан" : verdict.reason}`,
+    );
+    if (!verdict.ok) {
+      res.json({ shotError: describeShotRefusal(verdict.reason, project, verdict.brandSeen) });
+      return;
+    }
+    pendingShots.put(joinSessionKey(userId, drawId), {
+      dataUrl: req.body.image,
+      sha256,
+      accountId: verdict.accountId,
+      status,
+    });
+    res.json({ shotAccountId: verdict.accountId });
+  });
+
+  // Second half: the person said the ID is theirs. The picture is kept, the ID
+  // and the status saved, and the join goes on as after the typed ID before.
+  app.post("/api/join/:drawId/profile-shot/confirm", requireJoinUser, async (req, res) => {
+    const userId = req.telegramUser.id;
+    const drawId = req.params.drawId;
+    const draw = getActiveDraw(drawId);
+    if (!draw) {
+      res.status(404).json({ error: "Розыгрыш недоступен." });
+      return;
+    }
+    const entry = await resolveJoinEntry(draw, userId, req.joinParticipationMeta);
+    if (entry) {
+      res.json(entry);
+      return;
+    }
+    const session = getJoinApiSession(userId, drawId);
+    const pending = pendingShots.take(joinSessionKey(userId, drawId));
+    if (!session || session.step !== "registration" || !pending) {
+      res.status(400).json({ error: "Скриншот устарел. Загрузите его ещё раз." });
+      return;
+    }
+    const project = getProjectById(session.projectId);
+    const decoded = decodeShotDataUrl(pending.dataUrl);
+    const file = saveShotFile(DATA_DIR, userId, session.projectId, decoded, pending.sha256);
+    const duplicateOwner = findProjectAccountIdOwner(
+      readUserProjectProfiles(),
+      session.projectId,
+      pending.accountId,
+      userId,
+      project,
+    );
+
+    const now = new Date().toISOString();
+    const accountCreatedAt =
+      getProjectAccountIdKind(project) === "pokerdom" ? getPokerdomAccountCreatedAt(pending.accountId) : null;
+    const settled = settledStatusOf(resolveJoinProjectContext(userId, draw, getJoinProfileDeps()));
+    if (!settled) {
+      // The first screenshot settles the status, by the same rules as ever:
+      // the choice, the roll (none in a referrals-only draw), one organiser
+      // per brand, and a Pokerdom account from before June.
+      if (pending.status === "nonref") {
+        applySelfReportedNonReferral(userId, session);
+      } else if (draw.refOnly === true) {
+        applyClaimedReferral(userId, session, draw);
+      } else {
+        applyReferralRoll(userId, session, draw);
+      }
+      if (accountCreatedAt && isPokerdomAccountBeforeReferrals(pending.accountId)) {
+        applyAccountPredatesReferralsNonReferral(userId, session);
+      }
+    } else {
+      // Settled before: the weekly screenshot renews the ID, never the status.
+      session.skipReferralCheck = settled === "nonref";
+    }
+    setUserProjectProfile(userId, session.projectId, {
+      projectAccountId: pending.accountId,
+      projectAccountIdSavedAt: now,
+      projectAccountIdDuplicate: Boolean(duplicateOwner),
+      projectIdStepCompletedAt: now,
+      profileShot: { file, sha256: pending.sha256, savedAt: now },
+      profileShotVerifiedAt: now,
+      ...(settled ? {} : { verifiedStatus: session.skipReferralCheck ? "nonref" : "ref", verifiedStatusAt: now }),
+      ...(accountCreatedAt ? { projectAccountCreatedAt: accountCreatedAt.toISOString() } : {}),
+    });
+    // In a draw for referrals only, someone the rules made "не реф" - another
+    // organiser's referral, a Pokerdom account from before June - stops here.
+    if (draw.refOnly === true && session.skipReferralCheck === true) {
+      res.json({ shotRefOnly: true });
+      return;
     }
     await finishRegistrationJoin(draw, userId, session, req, res);
   });
@@ -4308,7 +4853,9 @@ function registerJoinMiniApp(app, deps) {
       networkId === "trc20"
         ? await checkWalletHasTransactions(address)
         : { ok: false, hasTransactions: false, txCount: 0 };
-    const forceNonReferralByWallet = walletCheck.ok && walletCheck.hasTransactions;
+    // A status a screenshot settled is not undone by a wallet with a history.
+    const settledStatus = getUserProjectProfile(userId, session.projectId)?.verifiedStatus || "";
+    const forceNonReferralByWallet = !settledStatus && walletCheck.ok && walletCheck.hasTransactions;
     const ownerId = getDrawOwnerId(draw);
     // Checked again here: the step can be reached with an id inherited from
     // another organiser's copy of the brand, without the roll ever running.
@@ -4320,7 +4867,7 @@ function registerJoinMiniApp(app, deps) {
     // An unregistered join keeps the wallet but records no referral status at
     // all: writing one would mark registration complete and skip the question
     // on the next draw, which is exactly what the choice is not supposed to do.
-    const referralFields = session.unregistered
+    const referralFields = session.unregistered || settledStatus
       ? {}
       : crossOrganizer
         ? buildCrossOrganizerNonReferralPatch({ brandHomeOwnerId: session.brandHomeOwnerId })

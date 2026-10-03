@@ -21,6 +21,7 @@ const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { normalizeAdminLabel, formatReferralOwnerLabel } = require("./admin-label");
 const { describeWinnerAccountId, shortenAccountId } = require("./winner-account-id");
 const { createPostEditQueue } = require("./post-edit-queue");
+const { needsProfileShot, refOnlyTurnsAway } = require("./join-profile-shot");
 const {
   getWinnerDirectChatUrl,
   buildWinnerChatLinkMessage,
@@ -5708,13 +5709,17 @@ async function tryAutoJoinDraw(draw, userId) {
   const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const projectIdStepPending =
     drawAsksProjectIdOnJoin(draw) && !joinCtxHasCompletedProjectIdStep(joinCtx, project);
+  // The screenshot step and a referrals-only draw are the mini app's to show
+  // (join-profile-shot.js): here they only mean "go through the steps".
   const canSkip =
-    joinCtx.canSkipRegistration ||
-    Boolean(
-      draw.projectId &&
-        userParticipatedInProject(userId, draw.projectId, draw.id) &&
-        !projectIdStepPending,
-    );
+    !needsProfileShot(draw, joinCtx) &&
+    !refOnlyTurnsAway(draw, joinCtx) &&
+    (joinCtx.canSkipRegistration ||
+      Boolean(
+        draw.projectId &&
+          userParticipatedInProject(userId, draw.projectId, draw.id) &&
+          !projectIdStepPending,
+      ));
   if (!canSkip) {
     return { joined: false };
   }
@@ -5855,7 +5860,8 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
       walletTxCount: walletCheck.txCount,
       walletHasTransactions: forceNonReferralByWallet,
     };
-    if (forceNonReferralByWallet) {
+    // A status a profile screenshot settled is not undone by the wallet's history.
+    if (forceNonReferralByWallet && !getUserProjectProfile(userId, draw.projectId)?.verifiedStatus) {
       profilePayload.selfReportedNonReferral = true;
       profilePayload.referralVerified = false;
       profilePayload.referralOwnerId = null;
@@ -10308,6 +10314,14 @@ ${getPanelFluidTypographyVars()}
                 </span>
               </label>
             </div>
+            <div class="draw-field draw-check-field draw-check-disabled" id="refOnlyWrap">
+              <label class="draw-check-label">
+                <input class="draw-check" type="checkbox" name="refOnly" value="1" disabled />
+                <span class="draw-check-text">
+                  <span class="draw-check-title">Только для рефов</span>
+                </span>
+              </label>
+            </div>
             <div class="draw-field draw-check-field">
               <label class="draw-check-label">
                 <input class="draw-check" type="checkbox" name="showProjectInPost" value="1" checked />
@@ -10842,17 +10856,34 @@ ${getPanelFluidTypographyVars()}
 
       let hadProject = Boolean(String(projectSelect.value || "").trim());
 
+      // "Только для рефов" means nothing without a project either.
+      const refOnlyWrap = document.getElementById("refOnlyWrap");
+      const refOnlyBox = document.querySelector('#create-draw-form input[name="refOnly"]');
+
+      // A referrals-only draw asks for the profile screenshot, not a typed
+      // ID: the two are separate ways of joining, so one locks the other out.
+      let refOnlyWasOn = false;
+
       function syncAskProjectId() {
         const hasProject = Boolean(String(projectSelect.value || "").trim());
-        checkbox.disabled = !hasProject;
-        wrap.classList.toggle("draw-check-disabled", !hasProject);
-        if (!hasProject) {
+        if (refOnlyBox && refOnlyWrap) {
+          refOnlyBox.disabled = !hasProject;
+          refOnlyWrap.classList.toggle("draw-check-disabled", !hasProject);
+          if (!hasProject) refOnlyBox.checked = false;
+        }
+        const refOnlyOn = Boolean(refOnlyBox && refOnlyBox.checked);
+        checkbox.disabled = !hasProject || refOnlyOn;
+        wrap.classList.toggle("draw-check-disabled", checkbox.disabled);
+        if (!hasProject || refOnlyOn) {
           checkbox.checked = false;
-        } else if (!hadProject) {
+        } else if (!hadProject || refOnlyWasOn) {
           checkbox.checked = true;
         }
         hadProject = hasProject;
+        refOnlyWasOn = refOnlyOn;
       }
+
+      refOnlyBox?.addEventListener("change", syncAskProjectId);
 
       checkbox.addEventListener("change", () => {
         if (!checkbox.disabled) {
@@ -12360,7 +12391,10 @@ panelRouter.post("/draws", webAuth.requireAuth, requireOrganizer, upload.single(
       winnerConfirmValue: normalizedWinnerConfirmValue,
       winnerConfirmUnit: normalizedWinnerConfirmUnit,
       askWalletOnJoin: String(body.askWalletOnJoin || "") === "1",
-      askProjectIdOnJoin: String(body.askProjectIdOnJoin || "") === "1",
+      // Referrals only asks for the screenshot, never the typed ID (see the form).
+      askProjectIdOnJoin: String(body.askProjectIdOnJoin || "") === "1" && String(body.refOnly || "") !== "1",
+      // Only the "не реф" are kept out, and only a project has referrals.
+      refOnly: Boolean(projectId) && String(body.refOnly || "") === "1",
       showProjectInPost: String(body.showProjectInPost || "") === "1",
       publishTarget,
     };
