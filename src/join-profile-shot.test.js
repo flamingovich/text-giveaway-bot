@@ -5,8 +5,7 @@ const {
   isProfileShotRequired,
   needsProfileShot,
   settledStatusOf,
-  isJoinCtxNonReferral,
-  refOnlyTurnsAway,
+  refuseRegistrationAction,
   createPendingShots,
 } = require("./join-profile-shot");
 
@@ -48,16 +47,21 @@ test("the settled status is this organiser's own", () => {
   assert.equal(settledStatusOf({}), "");
 });
 
-// The base starts anew: an old "не реф" with no screenshot may still settle
-// as a referral; a settled one, or another organiser's person, may not.
-test("a referrals-only draw turns away the settled 'не реф' and others' people", () => {
-  const refOnly = { ...DRAW, refOnly: true };
-  assert.equal(refOnlyTurnsAway(refOnly, { directProfile: { verifiedStatus: "nonref" } }), true);
-  assert.equal(refOnlyTurnsAway(refOnly, { isCrossOrganizerNonReferral: true, directProfile: {} }), true);
-  assert.equal(refOnlyTurnsAway(refOnly, { directProfile: { selfReportedNonReferral: true } }), false);
-  assert.equal(refOnlyTurnsAway(refOnly, { directProfile: { verifiedStatus: "ref" } }), false);
-  assert.equal(refOnlyTurnsAway(DRAW, { directProfile: { verifiedStatus: "nonref" } }), false);
-  assert.equal(isJoinCtxNonReferral({ directProfile: { projectAccountPredatesReferrals: true } }), false);
+// Without an account there is no profile to show, so "Я не зарегистрирован"
+// survives the screenshot step - everywhere but a draw for referrals only.
+test("'Я не зарегистрирован' is a way in, except in a referrals-only draw", () => {
+  assert.equal(refuseRegistrationAction(DRAW, "unregistered", ON), null);
+  const refused = refuseRegistrationAction({ ...DRAW, refOnly: true }, "unregistered", ON);
+  assert.equal(refused.status, 400);
+  assert.equal(refuseRegistrationAction({ ...DRAW, refOnly: true }, "unregistered", { JOIN_PROFILE_SHOT: "false" }).status, 400);
+});
+
+// A page opened before the step came in must not be a way around it.
+test("the other answers of the old step wait for a screenshot", () => {
+  assert.equal(refuseRegistrationAction(DRAW, "non_ref", ON).status, 409);
+  assert.equal(refuseRegistrationAction(DRAW, "opened", ON).status, 409);
+  assert.equal(refuseRegistrationAction(DRAW, "non_ref", { JOIN_PROFILE_SHOT: "false" }), null);
+  assert.equal(refuseRegistrationAction({ id: "d2", projectId: null }, "opened", ON), null);
 });
 
 test("a picture waits for confirmation half an hour at most", () => {

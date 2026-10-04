@@ -984,12 +984,6 @@ const SHOT = `
     font-size: 1.25rem;
     font-weight: 800;
   }
-  body.join-flow .join-shot-error-mark-info {
-    color: var(--tint-ink);
-    background: color-mix(in srgb, var(--tint) 14%, transparent);
-    font-family: Georgia, "Times New Roman", serif;
-    font-style: italic;
-  }
   body.join-flow .join-shot-error-title { color: var(--label); font-size: 1.0625rem; font-weight: 650; }
   body.join-flow .join-shot-error-text { margin: 0; color: var(--label-2); font-size: .875rem; line-height: 1.4; }
 

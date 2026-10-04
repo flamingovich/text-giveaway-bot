@@ -21,7 +21,7 @@ const { getAvatarFallbackStyle } = require("./avatar-fallback");
 const { normalizeAdminLabel, formatReferralOwnerLabel } = require("./admin-label");
 const { describeWinnerAccountId, shortenAccountId } = require("./winner-account-id");
 const { createPostEditQueue } = require("./post-edit-queue");
-const { needsProfileShot, refOnlyTurnsAway } = require("./join-profile-shot");
+const { needsProfileShot } = require("./join-profile-shot");
 const {
   getWinnerDirectChatUrl,
   buildWinnerChatLinkMessage,
@@ -5709,11 +5709,10 @@ async function tryAutoJoinDraw(draw, userId) {
   const project = draw.projectId ? getProjectById(draw.projectId) : null;
   const projectIdStepPending =
     drawAsksProjectIdOnJoin(draw) && !joinCtxHasCompletedProjectIdStep(joinCtx, project);
-  // The screenshot step and a referrals-only draw are the mini app's to show
-  // (join-profile-shot.js): here they only mean "go through the steps".
+  // The screenshot step is the mini app's to show (join-profile-shot.js): here
+  // it only means "go through the steps".
   const canSkip =
     !needsProfileShot(draw, joinCtx) &&
-    !refOnlyTurnsAway(draw, joinCtx) &&
     (joinCtx.canSkipRegistration ||
       Boolean(
         draw.projectId &&

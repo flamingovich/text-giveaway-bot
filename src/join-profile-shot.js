@@ -12,9 +12,12 @@
 //   - The screenshot is asked for again once a week, to keep the ID current;
 //     the status question is not asked again.
 //
-// A draw can also be for referrals only. It turns away whoever is settled as
-// "не реф" for its organiser, or is another organiser's person on the brand;
-// an old unsettled "не реф" may still settle it with a screenshot.
+// A draw can also be "for referrals only". It turns nobody with an account
+// away: whoever says "не реф", is settled as one, or is another organiser's
+// person on the brand goes in as "не реф" after the same screenshot. What it
+// takes away is "Я не зарегистрирован" and the 20% roll. Turning the "не реф"
+// away only taught people to answer "реф": on the first such draw 17 of its 29
+// participants had earlier said "не реф" to the same organiser themselves.
 //
 // JOIN_PROFILE_SHOT=false in .env turns the step off without a deploy: the join
 // is back to the typed ID.
@@ -51,12 +54,21 @@ function settledStatusOf(joinCtx) {
   return status === "ref" || status === "nonref" ? status : "";
 }
 
-function isJoinCtxNonReferral(joinCtx) {
-  return Boolean(joinCtx?.isCrossOrganizerNonReferral) || settledStatusOf(joinCtx) === "nonref";
-}
-
-function refOnlyTurnsAway(draw, joinCtx) {
-  return draw?.refOnly === true && isJoinCtxNonReferral(joinCtx);
+// The answers of the step without a screenshot ("Я не реферал", the referral
+// button, "Я не зарегистрирован"), or why one is refused. Where the screenshot
+// is asked, only "Я не зарегистрирован" is left of them: there is no profile
+// to show. A draw for referrals only is for people with an account on the
+// brand, so there it is refused whatever the step.
+function refuseRegistrationAction(draw, action, env = process.env) {
+  if (action === "unregistered") {
+    return draw?.refOnly === true
+      ? { status: 400, error: "В этом розыгрыше участвуют только зарегистрированные на проекте." }
+      : null;
+  }
+  if (isProfileShotRequired(env) && draw?.projectId) {
+    return { status: 409, error: "Шаг участия обновился. Закройте и откройте участие заново." };
+  }
+  return null;
 }
 
 // Pictures read but not yet confirmed, a few hundred kilobytes each: kept in
@@ -100,7 +112,6 @@ module.exports = {
   settledStatusOf,
   joinCtxHasProfileShot,
   needsProfileShot,
-  isJoinCtxNonReferral,
-  refOnlyTurnsAway,
+  refuseRegistrationAction,
   createPendingShots,
 };

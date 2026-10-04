@@ -32,7 +32,7 @@ const {
   isProfileShotRequired,
   needsProfileShot,
   settledStatusOf,
-  refOnlyTurnsAway,
+  refuseRegistrationAction,
   createPendingShots,
 } = require("./join-profile-shot");
 const { DATA_DIR } = require("./storage/paths");
@@ -567,6 +567,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
               <p class="join-shot-lead">Вы зарегистрированы на ${projectName} по ссылке стримера?</p>
               <button type="button" class="join-btn join-btn-secondary" data-shot-status="ref"><span class="join-btn-label">Да, я реферал</span></button>
               <button type="button" class="join-btn join-btn-outline" data-shot-status="nonref"><span class="join-btn-label">Нет, я не реферал</span></button>
+              <button type="button" class="join-btn join-btn-outline" id="shotUnregisteredBtn" data-unregistered-open>Я не зарегистрирован</button>
             </div>
             <div class="join-shot-view hidden" data-shot-view="upload">
               <p class="join-shot-lead">Пришлите скриншот вашего профиля ${projectName}, где видны никнейм и ID</p>
@@ -599,13 +600,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
                 <p class="join-shot-error-text" id="shotErrorText">Это не похоже на профиль ${projectName}. Откройте профиль на ${projectName} и сделайте скриншот, где видны ник и ID.</p>
               </div>
               <button type="button" class="join-btn join-btn-secondary" data-shot-retry><span class="join-btn-label">Загрузить другой скриншот</span></button>
-            </div>
-            <div class="join-shot-view hidden" data-shot-view="refonly">
-              <div class="join-shot-error">
-                <span class="join-shot-error-mark join-shot-error-mark-info" aria-hidden="true">i</span>
-                <strong class="join-shot-error-title">Только для рефералов</strong>
-                <p class="join-shot-error-text">Это розыгрыш для рефералов на ${projectName}. Зарегистрируйтесь по кнопке выше и сможете участвовать.</p>
-              </div>
             </div>
           </div>
         </div>`,
@@ -2613,7 +2607,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             projectIdGuideStepsCache = payload.projectIdGuide;
           }
           // A settled status is not asked again: the weekly screenshot only.
-          enterShotMode(payload.refOnlyBlocked ? "refonly" : payload.shotStatusKnown ? "upload" : "status", {
+          enterShotMode(payload.shotStatusKnown ? "upload" : "status", {
             refOnly: payload.refOnly === true,
           });
           showStep("registration");
@@ -2994,14 +2988,14 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     // The screenshot step (join-profile-shot.js): "are you a referral", the
-    // upload, the reading, "is this your ID", why not, and the refusal of a
-    // referrals-only draw. The picture is shrunk here before it is sent: a
+    // upload, the reading, "is this your ID" and why not. A draw for referrals
+    // only differs in having no "Я не зарегистрирован". The picture is shrunk
+    // here before it is sent: a
     // phone's screenshot is a few megabytes, a 1400 px JPEG a few hundred KB,
     // well under the 1 MB the server takes in one request.
     const shotMode = document.getElementById("registrationShotMode");
     const shotReduceMotion = Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
     let shotStatus = "ref";
-    let shotRefOnly = false;
     let shotBusy = false;
 
     // One screen gives way to the next: the new one rises in and the card
@@ -3073,7 +3067,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     function enterShotMode(view, options) {
-      shotRefOnly = Boolean(options && options.refOnly);
+      document.getElementById("shotUnregisteredBtn")?.classList.toggle("hidden", Boolean(options && options.refOnly));
       setGoLabel(true);
       document.getElementById("registrationRefMode")?.classList.add("hidden");
       document.getElementById("registrationProjectIdMode")?.classList.add("hidden");
@@ -3165,8 +3159,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           const idEl = document.getElementById("shotConfirmId");
           if (idEl) idEl.textContent = data.shotAccountId;
           showShotView("confirm");
-        } else if (data.shotRefOnly) {
-          showShotView("refonly");
         } else if (data.shotError) {
           showShotError(data.shotError);
         } else if (data.step) {
@@ -3192,10 +3184,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       btn.classList.add("is-loading");
       try {
         const data = await api("/api/join/" + encodeURIComponent(drawId) + "/profile-shot/confirm", {});
-        if (data.shotRefOnly) {
-          showShotView("refonly");
-          return;
-        }
         leaveShotMode();
         handleStep(data.step, data);
       } catch (error) {
@@ -3211,7 +3199,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
         const status = event.target.closest("[data-shot-status]");
         if (status) {
           shotStatus = status.getAttribute("data-shot-status") === "nonref" ? "nonref" : "ref";
-          showShotView(shotRefOnly && shotStatus === "nonref" ? "refonly" : "upload");
+          showShotView("upload");
           return;
         }
         if (event.target.closest("[data-shot-retry]")) {
@@ -3303,7 +3291,7 @@ function renderJoinPage(drawId, draw, project, options = {}) {
           { id: "shot_reading", label: "Скрин: чтение" },
           { id: "shot_confirm", label: "Скрин: ID" },
           { id: "shot_error", label: "Скрин: ошибка" },
-          { id: "shot_refonly", label: "Только рефы" },
+          { id: "shot_refonly", label: "Скрин: для рефов" },
           { id: "trc20", label: "Кошелёк" },
           { id: "done", label: "Готово" },
           { id: "profile", label: "Профиль" },
@@ -3320,7 +3308,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             }
             if (id.indexOf("shot_") === 0) {
               applyPreviewBrand(null);
-              enterShotMode(id.slice(5));
+              // "Для рефов" is the status question without "Я не зарегистрирован".
+              enterShotMode(id === "shot_refonly" ? "status" : id.slice(5), { refOnly: id === "shot_refonly" });
               showStep("registration");
               return;
             }
@@ -3710,14 +3699,8 @@ function registerJoinMiniApp(app, deps) {
     }
 
     const joinCtx = resolveJoinProjectContext(userId, draw, getJoinProfileDeps());
-    // The screenshot step and a referrals-only draw hold here too: this was the
-    // way a full old profile went straight in after the channel check.
-    if (refOnlyTurnsAway(draw, joinCtx)) {
-      session.step = "registration";
-      setJoinApiSession(userId, draw.id, session);
-      res.json(buildRegistrationStepResponse(draw, { refOnlyBlocked: true }));
-      return;
-    }
+    // The screenshot step holds here too: this was the way a full old profile
+    // went straight in after the channel check.
     const shotPending = needsProfileShot(draw, joinCtx);
     if (joinCtx.canSkipRegistration && !shotPending) {
       await completeJoinAfterProfileReady(draw, userId, session, req, res);
@@ -4005,11 +3988,6 @@ function registerJoinMiniApp(app, deps) {
         (draw.projectId &&
           userParticipatedInProject(userId, draw.projectId, draw.id) &&
           !projectIdStepPending));
-    // Settled as "не реф" for this organiser, or another organiser's person on
-    // the brand: a referrals-only draw shows them why not, before any step.
-    if (refOnlyTurnsAway(draw, joinCtx)) {
-      return buildRegistrationStepResponse(draw, { refOnlyBlocked: true });
-    }
     const canSkip = canSkipByProfile;
     let decision = decideJoinEntry({
       alreadyParticipant: false,
@@ -4650,12 +4628,12 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
 
-    if (isProfileShotRequired() && draw.projectId) {
-      res.status(409).json({ error: "Шаг участия обновился. Закройте и откройте участие заново." });
+    const action = String(req.body?.action || "opened");
+    const refusal = refuseRegistrationAction(draw, action);
+    if (refusal) {
+      res.status(refusal.status).json({ error: refusal.error });
       return;
     }
-
-    const action = String(req.body?.action || "opened");
     if (drawAsksProjectIdOnJoin(draw) && action !== "non_ref" && action !== "unregistered") {
       res.status(400).json({ error: "Введите ID с проекта." });
       return;
@@ -4702,10 +4680,6 @@ function registerJoinMiniApp(app, deps) {
     // A settled status is the answer, whatever the page sent.
     const settled = settledStatusOf(resolveJoinProjectContext(userId, draw, getJoinProfileDeps()));
     const status = settled || (req.body?.status === "nonref" ? "nonref" : "ref");
-    if (draw.refOnly === true && status === "nonref") {
-      res.json({ shotRefOnly: true });
-      return;
-    }
     if (!profileShotLimiter.take(String(userId)).ok) {
       res.status(429).json({ error: "Слишком много попыток. Подождите 10 минут." });
       return;
@@ -4786,9 +4760,13 @@ function registerJoinMiniApp(app, deps) {
     if (!settled) {
       // The first screenshot settles the status, by the same rules as ever:
       // the choice, the roll (none in a referrals-only draw), one organiser
-      // per brand, and a Pokerdom account from before June.
+      // per brand, and a Pokerdom account from before June. "Не реф" is checked
+      // for the brand's other organiser too, so the panel shows whose
+      // referral the person is instead of a bare "не реф".
       if (pending.status === "nonref") {
-        applySelfReportedNonReferral(userId, session);
+        if (!applyCrossOrganizerNonReferralIfNeeded(userId, session, draw)) {
+          applySelfReportedNonReferral(userId, session);
+        }
       } else if (draw.refOnly === true) {
         applyClaimedReferral(userId, session, draw);
       } else {
@@ -4811,12 +4789,6 @@ function registerJoinMiniApp(app, deps) {
       ...(settled ? {} : { verifiedStatus: session.skipReferralCheck ? "nonref" : "ref", verifiedStatusAt: now }),
       ...(accountCreatedAt ? { projectAccountCreatedAt: accountCreatedAt.toISOString() } : {}),
     });
-    // In a draw for referrals only, someone the rules made "не реф" - another
-    // organiser's referral, a Pokerdom account from before June - stops here.
-    if (draw.refOnly === true && session.skipReferralCheck === true) {
-      res.json({ shotRefOnly: true });
-      return;
-    }
     await finishRegistrationJoin(draw, userId, session, req, res);
   });
 
