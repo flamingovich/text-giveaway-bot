@@ -27,17 +27,57 @@ const EVM = {
 const EVM_LIMIT = 100;
 const DEFAULT_DEADLINE_MS = 8000;
 
-function createWalletInspector({ fetchImpl = fetch, now = () => Date.now() } = {}) {
+// The free explorers answer 429 to bursts. Every request to a host waits its
+// turn: the background check and a winner's address share one pace, so the
+// background can never leave the explorer refusing the check that refuses an
+// address. Gaps measured on the production server's address.
+const HOST_GAP_MS = {
+  "apilist.tronscanapi.com": 1500,
+  "api.binplorer.com": 4000,
+  "api.ethplorer.io": 4000,
+};
+const DEFAULT_GAP_MS = 1500;
+
+function createWalletInspector({
+  fetchImpl = fetch,
+  now = () => Date.now(),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const nextSlot = new Map();
+
+  // A turn that would come after the deadline is not waited for.
+  async function waitTurn(host, deadline) {
+    const gap = HOST_GAP_MS[host] || DEFAULT_GAP_MS;
+    const at = Math.max(now(), nextSlot.get(host) || 0);
+    if (at >= deadline) {
+      throw new Error(`${host}: очередь запросов длиннее времени проверки`);
+    }
+    nextSlot.set(host, at + gap);
+    if (at > now()) {
+      await sleep(at - now());
+    }
+  }
+
   async function getJson(url, deadline) {
-    const left = deadline - now();
-    if (left <= 0) {
-      throw new Error("время проверки вышло");
+    const host = new URL(url).host;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await waitTurn(host, deadline);
+      const left = deadline - now();
+      if (left <= 0) {
+        throw new Error("время проверки вышло");
+      }
+      const res = await fetchImpl(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(left) });
+      if (res.status === 429 && attempt === 0) {
+        // Backs the whole host off, not only this request.
+        nextSlot.set(host, Math.max(nextSlot.get(host) || 0, now() + 3 * (HOST_GAP_MS[host] || DEFAULT_GAP_MS)));
+        continue;
+      }
+      if (!res.ok) {
+        throw new Error(`${host}: ${res.status}`);
+      }
+      return res.json();
     }
-    const res = await fetchImpl(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(left) });
-    if (!res.ok) {
-      throw new Error(`${new URL(url).host}: ${res.status}`);
-    }
-    return res.json();
+    throw new Error(`${host}: 429`);
   }
 
   async function tronHistory(address, deadline) {
@@ -74,15 +114,6 @@ function createWalletInspector({ fetchImpl = fetch, now = () => Date.now() } = {
     return { transfers: rows, complete };
   }
 
-  async function tronTag(address, deadline) {
-    try {
-      const r = await getJson(`https://apilist.tronscanapi.com/api/account/tag?address=${address}`, deadline);
-      return r?.publicTag || r?.blueTag || r?.greyTag || null;
-    } catch {
-      return null;
-    }
-  }
-
   async function evmHistory(network, address, deadline) {
     const cfg = EVM[network];
     const me = normalizeAddress(address);
@@ -109,8 +140,10 @@ function createWalletInspector({ fetchImpl = fetch, now = () => Date.now() } = {
     const deadline = now() + deadlineMs;
     const me = normalizeAddress(address);
     if (/^T/.test(me)) {
-      const [history, selfTag] = await Promise.all([tronHistory(me, deadline), tronTag(me, deadline)]);
-      return { ...history, network: "trc20", selfTag, verdict: judgeWallet({ address: me, ...history, selfTag }) };
+      // The address's own tag is not asked for: a deposit address has none,
+      // and the request would double the load the explorer limits.
+      const history = await tronHistory(me, deadline);
+      return { ...history, network: "trc20", selfTag: null, verdict: judgeWallet({ address: me, ...history }) };
     }
     const networks = network === "bep20" || network === "erc20" ? [network, network === "bep20" ? "erc20" : "bep20"] : ["bep20", "erc20"];
     const answers = await Promise.allSettled(networks.map((net) => evmHistory(net, me, deadline)));
@@ -130,4 +163,4 @@ function createWalletInspector({ fetchImpl = fetch, now = () => Date.now() } = {
   return { inspect };
 }
 
-module.exports = { createWalletInspector, TRON_USDT };
+module.exports = { createWalletInspector, TRON_USDT, HOST_GAP_MS };

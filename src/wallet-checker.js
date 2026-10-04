@@ -19,7 +19,7 @@ function createWalletChecker({
   listPayouts,
   logger = console,
   now = () => Date.now(),
-  perTick = 4,
+  perTick = 2,
   staleMs = DEFAULT_STALE_MS,
 }) {
   let running = false;
