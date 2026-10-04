@@ -309,6 +309,11 @@ const WINNERS = `
     font-size: min(.8125rem, calc((100cqw - 42px) / (var(--len, 42) * 0.6)));
     letter-spacing: 0;
   }
+  /* What kind of wallet it is (wallet-kind.js): a quiet caption under the address. */
+  body .pl-wal-kind { color: var(--label-2); font-size: .75rem; font-weight: 500; }
+  body .pl-wal-kind.is-ok { color: var(--green); }
+  body .pl-wal-kind.is-warn { color: var(--orange); }
+  body .pl-wal-kind.is-danger { color: var(--red); }
   body button.pl-copy {
     color: var(--tint-ink);
     background: none;

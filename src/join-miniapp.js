@@ -55,6 +55,7 @@ const {
   validateDepositAddress,
   getInvalidAddressError,
   buildJoinWalletStepPayload,
+  buildNotProjectDepositAddressText,
 } = require("./deposit-guide");
 const {
   drawAsksProjectIdOnJoin,
@@ -3529,6 +3530,8 @@ function registerJoinMiniApp(app, deps) {
     isPlatformAdmin = () => false,
     setDrawParticipantAnonymous = null,
     joinFunnel = null,
+    // (address, network) -> wallet-kind.js verdict, or null when nobody answered.
+    inspectDepositAddress = null,
   } = deps;
 
   async function verifyRecaptchaToken(token) {
@@ -4819,6 +4822,18 @@ function registerJoinMiniApp(app, deps) {
     if (!validateDepositAddress(address, networkId)) {
       res.status(400).json({ error: getInvalidAddressError(networkId) });
       return;
+    }
+    // An exchange's or a person's own wallet is never the project's deposit
+    // address (wallet-kind.js). Someone without an account has no cashier to
+    // copy from, so their address is only labelled. Why it was refused is not
+    // said: the reason would teach what passes.
+    if (inspectDepositAddress && !session.unregistered) {
+      const verdict = await inspectDepositAddress(address, networkId);
+      if (verdict?.reject) {
+        console.warn(`[join] адрес не похож на пополнение проекта: user=${userId} draw=${drawId} вид=${verdict.kind}`);
+        res.status(400).json({ error: buildNotProjectDepositAddressText(project?.name, networkId) });
+        return;
+      }
     }
 
     const walletCheck =

@@ -95,6 +95,10 @@ const {
   normalizeProjectAccountId,
 } = require("./project-account-id");
 const { checkWalletHasTransactions } = require("./tron-wallet-check");
+const { createWalletInspector } = require("./wallet-inspect");
+const { createWalletCheckStore } = require("./wallet-check-store");
+const { createWalletChecker } = require("./wallet-checker");
+const { describeWalletVerdict } = require("./wallet-kind");
 const {
   BRAND_PROJECT_TEMPLATES,
   resolveDepositNetworkForProject,
@@ -104,6 +108,7 @@ const {
   validateDepositAddress,
   buildWinnerDepositAddressRequestHtml: buildDepositAddressRequestHtml,
   buildWinnerInvalidAddressHtml,
+  buildNotProjectDepositAddressHtml,
   buildBotGuideStepTexts,
   getBotGuideImagePaths,
   buildBotGuideFooterNote,
@@ -5805,6 +5810,22 @@ function findAwaitingWinnerDepositAddress(userId) {
   return best;
 }
 
+// The verdict on an address someone just sent, saved for the payout queue's
+// label. A service that does not answer in time lets the address through:
+// keeping out a winner whose address is fine costs more than a late label,
+// and the background check (wallet-checker.js) looks at it again.
+async function inspectDepositAddressForStep(address, networkId) {
+  try {
+    const result = await walletInspector.inspect(address, networkId);
+    walletChecks.saveCheck(address, result.network, result.verdict);
+    return result.verdict;
+  } catch (error) {
+    walletChecks.saveCheck(address, networkId, null, error.message);
+    console.warn(`[wallet] адрес не проверен при отправке: ${error.message}`);
+    return null;
+  }
+}
+
 async function tryHandleWinnerDepositAddressMessage(ctx) {
   const userId = ctx.from?.id;
   if (!userId) {
@@ -5821,18 +5842,26 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
     return false;
   }
 
-  const { data, draw, notify } = pending;
-  const project = draw.projectId ? getProjectById(draw.projectId) : null;
-  const networkId = resolveDepositNetworkForProject(project, notify.requiredDepositNetwork);
+  const project = pending.draw.projectId ? getProjectById(pending.draw.projectId) : null;
+  const networkId = resolveDepositNetworkForProject(project, pending.notify.requiredDepositNetwork);
 
   if (!validateDepositAddress(text, networkId)) {
     await replyHtmlWithEmojiFallback(ctx, buildWinnerInvalidAddressHtml(networkId));
     return true;
   }
 
-  const liveNotify = draw.winnerNotifications?.[String(userId)];
-  if (!liveNotify || liveNotify.status !== "awaiting_address") {
-    return false;
+  // An exchange's or a person's own wallet is never the project's deposit
+  // address (wallet-kind.js); someone who joined without an account has no
+  // cashier to copy from, so theirs is only labelled for the owner.
+  if (!isParticipationUnregistered(pending.draw, userId)) {
+    const verdict = await inspectDepositAddressForStep(text, networkId);
+    if (verdict?.reject) {
+      console.warn(`[winner] адрес не похож на пополнение проекта: user=${userId} draw=${pending.draw.id} вид=${verdict.kind}`);
+      await replyHtmlWithEmojiFallback(ctx, buildNotProjectDepositAddressHtml(project?.name, networkId), {
+        reply_markup: getWinnerDepositAddressKeyboard(pending.draw).reply_markup,
+      });
+      return true;
+    }
   }
 
   const walletCheck =
@@ -5840,6 +5869,18 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
       ? await checkWalletHasTransactions(text)
       : { ok: false, hasTransactions: false, txCount: 0 };
   const forceNonReferralByWallet = walletCheck.ok && walletCheck.hasTransactions;
+
+  // Read again after the network calls: a document held across them would
+  // overwrite whatever was saved meanwhile (CLAUDE.md, «Хранилище и гонки»).
+  const fresh = findAwaitingWinnerDepositAddress(userId);
+  if (!fresh || fresh.draw.id !== pending.draw.id) {
+    return false;
+  }
+  const { data, draw } = fresh;
+  const liveNotify = draw.winnerNotifications?.[String(userId)];
+  if (!liveNotify || liveNotify.status !== "awaiting_address") {
+    return false;
+  }
   const checkedAt = new Date().toISOString();
 
   liveNotify.trc20Address = text;
@@ -6392,6 +6433,51 @@ function startScheduler() {
   runSchedulerTickOnce();
   startSchedulerGuard();
   console.log(`[boot] scheduler started (${CHECK_INTERVAL_MS}ms)`);
+  startWalletChecker();
+}
+
+// The payout queue's wallet labels and the follow-up of paid prizes
+// (wallet-checker.js). Its own timer: an explorer that hangs must not hold up
+// the scheduler's tick.
+const WALLET_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+let walletCheckTimer = null;
+
+function listWinnerAddresses({ paid }) {
+  const userProfiles = readUserProjectProfilesSnapshot();
+  const draws = [...(readDataSnapshot().draws || []), ...(readArchivedDrawsSnapshot().draws || [])];
+  const result = [];
+  for (const draw of draws) {
+    if (draw.status !== DRAW_STATUS.FINISHED || !isMoneyPrizeType(draw.prizeType)) continue;
+    for (const winnerId of draw.winnerIds || []) {
+      const notify = draw.winnerNotifications?.[String(winnerId)] || {};
+      if (Boolean(notify.paidAt) !== paid || notify.paymentDeniedAt || (!paid && notify.status === "forfeited")) continue;
+      const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
+      const shown = getWinnerPanelTrcDisplay(draw, notify, projectData);
+      if (!shown.copyable) continue;
+      const network =
+        normalizeDepositNetwork(notify.depositNetwork) ||
+        normalizeDepositNetwork(notify.requiredDepositNetwork) ||
+        normalizeDepositNetwork(projectData.depositNetwork) ||
+        null;
+      result.push({ drawId: draw.id, userId: winnerId, address: shown.text, network, paidAt: Date.parse(notify.paidAt || "") });
+    }
+  }
+  return result;
+}
+
+function startWalletChecker() {
+  if (walletCheckTimer || !getSqliteDb()) {
+    return;
+  }
+  const checker = createWalletChecker({
+    store: walletChecks,
+    inspector: walletInspector,
+    listQueue: () => listWinnerAddresses({ paid: false }),
+    listPayouts: () => listWinnerAddresses({ paid: true }).filter((item) => Number.isFinite(item.paidAt)),
+  });
+  walletCheckTimer = setInterval(() => checker.tick(), WALLET_CHECK_INTERVAL_MS);
+  walletCheckTimer.unref?.();
+  checker.tick();
 }
 
 const PANEL_RETURN_TARGETS = new Set(["payoutQueue"]);
@@ -6736,8 +6822,23 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   // A prize that pays nothing - burnt, or flagged by anti-fraud - shows no "$0" block.
   const payBlockHtml = isMoneyPrizeType(draw.prizeType) && payoutUsdt <= 0 ? "" : payHtml;
   // A burnt prize, anti-fraud included, is not paid out, so its address is no use here.
+  // What kind of wallet it is (wallet-kind.js), checked in the background.
+  const walletKind = trcDisplay.copyable && !isPrizeForfeited ? describeWalletVerdict(walletChecks.getCheck(trcAddress)) : null;
+  const walletKindHtml = walletKind
+    ? `<div class="pl-wal-kind is-${walletKind.tone}"${walletKind.title ? ` title="${escapeHtml(walletKind.title)}"` : ""}>${escapeHtml(walletKind.text)}</div>`
+    : "";
   const walletHtml = trcDisplay.copyable && !isPrizeForfeited
-    ? `<div class="pl-wal"><code style="--len:${trcAddress.length}">${escapeHtml(trcAddress)}</code><button type="button" class="winner-copy-btn pl-copy" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button></div>`
+    ? `<div class="pl-wal"><code style="--len:${trcAddress.length}">${escapeHtml(trcAddress)}</code><button type="button" class="winner-copy-btn pl-copy" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button></div>${walletKindHtml}`
+    : "";
+  // A past prize of this person went to an exchange or their own wallet: a
+  // caption beside the wallet's, the badge row has no room left for it.
+  const pastPayoutFlag = walletChecks.userFlag(winnerId);
+  const pastPayoutHtml = pastPayoutFlag
+    ? `<div class="pl-wal-kind is-danger">${escapeHtml(
+        pastPayoutFlag.outcome === "exchange"
+          ? `Прошлый приз ушёл на биржу${pastPayoutFlag.platform ? ` ${pastPayoutFlag.platform}` : ""}`
+          : "Прошлый приз ушёл на личный кошелёк",
+      )}</div>`
     : "";
   const canMarkPaid =
     !isPayoutResolved &&
@@ -6845,7 +6946,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
         <div class="pl-badges">${refBadge}${statusBadge}${anonymousBadge}${antiFraudBadges}</div>
         ${payBlockHtml}
       </div>
-      ${walletHtml}
+      ${walletHtml}${pastPayoutHtml}
       ${actionsHtml}
     </article>
   `;
@@ -7063,6 +7164,9 @@ function buildPanelLiveFingerprint(draws, userProfiles, panelContext = null) {
       prize: draw.prize || "",
     };
   });
+  // Wallet labels come from the background check, not from the draws: its
+  // revision makes an open panel pick them up.
+  payload.push({ walletRevision: walletChecks.revision() });
   return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16);
 }
 
@@ -11750,6 +11854,11 @@ registerParticipantProfile(app, {
 // Where people drop out of the join flow - the admin's «Воронка» page.
 const joinFunnel = createJoinFunnelStore(getSqliteDb());
 
+// What kind of wallet a payout address is (wallet-kind.js): refused at the
+// door when certain, labelled in the payout queue, followed after payment.
+const walletChecks = createWalletCheckStore(getSqliteDb());
+const walletInspector = createWalletInspector();
+
 registerJoinMiniApp(app, {
   validateInitData,
   BOT_TOKEN,
@@ -11786,6 +11895,7 @@ registerJoinMiniApp(app, {
   isPlatformAdmin,
   setDrawParticipantAnonymous,
   joinFunnel,
+  inspectDepositAddress: WEB_ONLY ? null : inspectDepositAddressForStep,
 });
 
 registerWinnersMiniApp(app, {

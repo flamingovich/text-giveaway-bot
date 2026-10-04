@@ -5,6 +5,7 @@ const ASSETS_ROOT = path.join(__dirname, "..", "assets", "trc20-guide");
 const RP_GUIDE_DIR = path.join(ASSETS_ROOT, "rp_guide");
 
 const { emoji: pe } = require("./premium-emoji-text");
+const { isValidTronAddress } = require("./tron-address");
 
 const DEPOSIT_NETWORKS = {
   trc20: {
@@ -15,7 +16,7 @@ const DEPOSIT_NETWORKS = {
     addressPrefix: "T",
     addressExample: "TWn.....8Nd",
     validate(address) {
-      return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(String(address || "").trim());
+      return isValidTronAddress(address);
     },
     rpStep3Image: "rp_step3_trc20.jpg",
   },
@@ -229,6 +230,28 @@ function buildWinnerInvalidAddressHtml(networkId) {
   ].join("\n");
 }
 
+function escapeGuideHtml(text) {
+  return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// The refusal of an address that is not the project's deposit address
+// (wallet-kind.js). It says where the right one is, not why this one is wrong.
+function buildNotProjectDepositAddressText(projectName, networkId) {
+  const network = getDepositNetworkMeta(networkId);
+  const name = String(projectName || "").trim() || "проекта";
+  return `Это не похоже на адрес пополнения ${name}. Откройте кассу ${name} → Пополнить → USDT ${network.shortLabel}, скопируйте адрес оттуда и пришлите его.`;
+}
+
+function buildNotProjectDepositAddressHtml(projectName, networkId) {
+  const network = getDepositNetworkMeta(networkId);
+  const name = escapeGuideHtml(String(projectName || "").trim() || "проекта");
+  return [
+    `${pe("cross")}  <b>Это не похоже на адрес пополнения ${name}.</b>`,
+    "",
+    `Откройте кассу ${name} → Пополнить → USDT ${network.shortLabel}, скопируйте адрес оттуда и пришлите его.`,
+  ].join("\n");
+}
+
 function buildBotGuideStepTexts(project, networkId, projectLinkHtml) {
   const network = getDepositNetworkMeta(networkId);
   const pokerdom = isPokerdomProject(project);
@@ -312,6 +335,8 @@ module.exports = {
   buildJoinWalletStepPayload,
   buildWinnerDepositAddressRequestHtml,
   buildWinnerInvalidAddressHtml,
+  buildNotProjectDepositAddressText,
+  buildNotProjectDepositAddressHtml,
   buildBotGuideStepTexts,
   getBotGuideImagePaths,
   buildBotGuideFooterNote,

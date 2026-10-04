@@ -453,6 +453,8 @@ function getPanelLookStyles() {
       border: 1px solid var(--pl-line-soft);
       background: var(--pl-card);
     }
+    /* The kind of wallet, under the address; its colours are the planner's. */
+    :root body .pl-wal-kind { margin: 5px 4px 0; line-height: 1.3; }
     :root body .pl-wal code {
       min-width: 0;
       padding: 0;
