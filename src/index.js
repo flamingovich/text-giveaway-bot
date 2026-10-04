@@ -98,7 +98,7 @@ const { checkWalletHasTransactions } = require("./tron-wallet-check");
 const { createWalletInspector } = require("./wallet-inspect");
 const { createWalletCheckStore } = require("./wallet-check-store");
 const { createWalletChecker } = require("./wallet-checker");
-const { describeWalletVerdict } = require("./wallet-kind");
+const { describeWalletVerdict, describePastPayoutFlag } = require("./wallet-kind");
 const {
   BRAND_PROJECT_TEMPLATES,
   resolveDepositNetworkForProject,
@@ -6726,12 +6726,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   const { meta, projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
   const fullName = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
   const displayName = fullName || (meta.username ? `@${meta.username}` : `ID ${winnerId}`);
-  const usernameLine = meta.username ? `@${meta.username}` : "без username";
-  const usernameMetaHtml = fullName
-    ? `<span class="pl-win-meta">${escapeHtml(usernameLine)}</span>`
-    : !meta.username
-      ? `<span class="pl-win-meta">без username</span>`
-      : "";
+  // No username, no line: the name then sits in the middle beside the avatar
+  // (the owner asked for "без username" gone).
+  const usernameMetaHtml = fullName && meta.username ? `<span class="pl-win-meta">${escapeHtml(`@${meta.username}`)}</span>` : "";
   const initial = (fullName || meta.username || String(winnerId)).charAt(0).toUpperCase() || "?";
   const avatar = meta.avatarFileId
     ? `<img src="${PANEL_BASE}/avatar/${encodeURIComponent(String(winnerId))}" alt="" class="pl-av" data-fallback="${escapeHtml(initial)}" data-fallback-style="${escapeHtml(getAvatarFallbackStyle(winnerId))}" />`
@@ -6822,23 +6819,27 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
   // A prize that pays nothing - burnt, or flagged by anti-fraud - shows no "$0" block.
   const payBlockHtml = isMoneyPrizeType(draw.prizeType) && payoutUsdt <= 0 ? "" : payHtml;
   // A burnt prize, anti-fraud included, is not paid out, so its address is no use here.
-  // What kind of wallet it is (wallet-kind.js), checked in the background.
+  // What kind of wallet it is (wallet-kind.js), checked in the background, and
+  // whether this person's past prize left the project: badges like "Реф", on a
+  // row of their own under the address - the top row has no room for more.
   const walletKind = trcDisplay.copyable && !isPrizeForfeited ? describeWalletVerdict(walletChecks.getCheck(trcAddress)) : null;
-  const walletKindHtml = walletKind
-    ? `<div class="pl-wal-kind is-${walletKind.tone}"${walletKind.title ? ` title="${escapeHtml(walletKind.title)}"` : ""}>${escapeHtml(walletKind.text)}</div>`
+  const pastPayoutFlag = walletChecks.userFlag(winnerId);
+  const walletTags = [
+    walletKind ? { text: walletKind.text, tone: walletKind.tone, title: walletKind.title } : null,
+    pastPayoutFlag ? { text: describePastPayoutFlag(pastPayoutFlag), tone: "danger", title: "" } : null,
+  ].filter(Boolean);
+  const walletTagsHtml = walletTags.length
+    ? `<div class="pl-wal-tags">${walletTags
+        .map(
+          (tag) =>
+            `<span class="winner-badge${tag.tone === "muted" ? "" : ` winner-badge-${tag.tone}`}"${
+              tag.title ? ` title="${escapeHtml(tag.title)}"` : ""
+            }>${escapeHtml(tag.text)}</span>`,
+        )
+        .join("")}</div>`
     : "";
   const walletHtml = trcDisplay.copyable && !isPrizeForfeited
-    ? `<div class="pl-wal"><code style="--len:${trcAddress.length}">${escapeHtml(trcAddress)}</code><button type="button" class="winner-copy-btn pl-copy" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button></div>${walletKindHtml}`
-    : "";
-  // A past prize of this person went to an exchange or their own wallet: a
-  // caption beside the wallet's, the badge row has no room left for it.
-  const pastPayoutFlag = walletChecks.userFlag(winnerId);
-  const pastPayoutHtml = pastPayoutFlag
-    ? `<div class="pl-wal-kind is-danger">${escapeHtml(
-        pastPayoutFlag.outcome === "exchange"
-          ? `Прошлый приз ушёл на биржу${pastPayoutFlag.platform ? ` ${pastPayoutFlag.platform}` : ""}`
-          : "Прошлый приз ушёл на личный кошелёк",
-      )}</div>`
+    ? `<div class="pl-wal"><code style="--len:${trcAddress.length}">${escapeHtml(trcAddress)}</code><button type="button" class="winner-copy-btn pl-copy" title="Копировать" aria-label="Копировать адрес" data-copy="${escapeHtml(trcAddress)}">${renderFormIcon("copy")}</button></div>`
     : "";
   const canMarkPaid =
     !isPayoutResolved &&
@@ -6946,7 +6947,7 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
         <div class="pl-badges">${refBadge}${statusBadge}${anonymousBadge}${antiFraudBadges}</div>
         ${payBlockHtml}
       </div>
-      ${walletHtml}${pastPayoutHtml}
+      ${walletHtml}${walletTagsHtml}
       ${actionsHtml}
     </article>
   `;

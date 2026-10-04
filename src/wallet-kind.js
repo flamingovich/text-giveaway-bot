@@ -222,33 +222,46 @@ function judgePayoutOutcome({ address, transfers = [], complete = false, selfTag
   return { outcome: "unclear", platform: verdict.platform };
 }
 
-/** The owner's label in the payout queue. → { text, tone: ok | warn | danger | muted, title } */
+// The owner's names for the cashiers in KNOWN_WALLETS.
+const CASHIER_LABELS = { "Pokerdom?": "Pokerdom", "BEEF/IRIS?": "Роялы", "LuckyBear?": "LuckyBear" };
+
+/** The owner's label in the payout queue (his wording). → { text, tone: ok | warn | danger | muted, title } */
 function describeWalletVerdict(verdict) {
   if (!verdict) {
     return null;
   }
   if (verdict.error && !verdict.kind) {
-    return { text: "адрес не проверен", tone: "muted", title: "сервис проверки не ответил — проверю позже" };
+    return { text: "Не проверен", tone: "muted", title: "сервис проверки не ответил — проверю позже" };
   }
   const title = verdict.reason || "";
   switch (verdict.kind) {
     case "new":
-      return { text: "новый адрес", tone: "muted", title };
+      return { text: "Пустой кошелёк", tone: "muted", title };
     case "sitting":
-      return { text: "деньги лежат", tone: "muted", title };
+      return { text: "Деньги лежат", tone: "muted", title };
     case "cashier":
-      return { text: verdict.platform ? `касса · ${verdict.platform}` : "похоже на кассу", tone: "ok", title };
+      return { text: CASHIER_LABELS[verdict.platform] || verdict.platform || "Наверное казино", tone: "ok", title };
     case "cryptobot":
       return { text: "CryptoBot", tone: "muted", title };
     case "exchange":
-      return { text: verdict.platform ? `биржа · ${verdict.platform}` : "биржа", tone: "danger", title };
+      return { text: verdict.platform || "Биржа", tone: "danger", title };
     case "personal":
-      return { text: "личный кошелёк", tone: "danger", title };
+      return { text: "Личный кошелек", tone: "danger", title };
     case "service":
-      return { text: `сервис · ${verdict.platform}`, tone: "warn", title };
+      return { text: verdict.platform || "Сервис", tone: "warn", title };
     default:
-      return { text: "неясно", tone: "muted", title };
+      return { text: "Неизвестно", tone: "muted", title };
   }
+}
+
+/** The badge for a person whose past prize left the project. */
+function describePastPayoutFlag(flag) {
+  if (!flag) {
+    return null;
+  }
+  return flag.outcome === "exchange"
+    ? `Прошлый приз ушел на ${flag.platform || "биржу"}`
+    : "Прошлый приз ушел на Личный";
 }
 
 module.exports = {
@@ -260,4 +273,5 @@ module.exports = {
   judgeWallet,
   judgePayoutOutcome,
   describeWalletVerdict,
+  describePastPayoutFlag,
 };

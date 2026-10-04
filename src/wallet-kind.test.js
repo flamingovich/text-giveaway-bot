@@ -90,10 +90,22 @@ test("after a payout: untouched, into the cashier, or past the project", () => {
   assert.equal(judgePayoutOutcome({ address: ME, transfers: spent, complete: true, paidAt }).outcome, "personal");
 });
 
-test("the owner's labels", () => {
-  assert.equal(describeWalletVerdict({ kind: "exchange", platform: "Bybit" }).text, "биржа · Bybit");
+test("the owner's labels, in his words", () => {
+  const { describePastPayoutFlag } = require("./wallet-kind");
+  const text = (verdict) => describeWalletVerdict(verdict).text;
+  assert.equal(text({ kind: "cashier", platform: "Pokerdom?" }), "Pokerdom");
+  assert.equal(text({ kind: "cashier", platform: "BEEF/IRIS?" }), "Роялы");
+  assert.equal(text({ kind: "cashier", platform: "LuckyBear?" }), "LuckyBear");
+  assert.equal(text({ kind: "cashier", platform: null }), "Наверное казино");
+  assert.equal(text({ kind: "new" }), "Пустой кошелёк");
+  assert.equal(text({ kind: "sitting" }), "Деньги лежат");
+  assert.equal(text({ kind: "service", platform: "FixedFloat" }), "FixedFloat");
+  assert.equal(text({ kind: "unclear" }), "Неизвестно");
+  assert.equal(text({ kind: "exchange", platform: "Bybit" }), "Bybit");
   assert.equal(describeWalletVerdict({ kind: "exchange", platform: "Bybit" }).tone, "danger");
-  assert.equal(describeWalletVerdict({ kind: "cashier", platform: null }).text, "похоже на кассу");
-  assert.equal(describeWalletVerdict({ kind: null, error: "429" }).text, "адрес не проверен");
+  assert.equal(text({ kind: "personal" }), "Личный кошелек");
+  assert.equal(text({ kind: null, error: "429" }), "Не проверен");
   assert.equal(describeWalletVerdict(null), null);
+  assert.equal(describePastPayoutFlag({ outcome: "exchange", platform: "Bybit" }), "Прошлый приз ушел на Bybit");
+  assert.equal(describePastPayoutFlag({ outcome: "personal" }), "Прошлый приз ушел на Личный");
 });
