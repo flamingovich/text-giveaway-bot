@@ -447,14 +447,15 @@ function getPanelLookStyles() {
       justify-content: space-between;
       gap: 8px;
       min-width: 0;
-      min-height: 40px;
-      padding: 6px 6px 6px 10px;
+      min-height: 34px;
+      padding: 3px 5px 3px 10px;
       border-radius: 9px;
       border: 1px solid var(--pl-line-soft);
       background: var(--pl-card);
     }
-    /* The wallet's badges, under the address; they wrap rather than cut. */
-    :root body .pl-wal-tags { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; }
+    /* The wallet's badges, under the address; they wrap rather than cut. The
+       card's own gap spaces them, the same above and below (the owner's ask). */
+    :root body .pl-wal-tags { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; }
     :root body .pl-wal code {
       min-width: 0;
       padding: 0;

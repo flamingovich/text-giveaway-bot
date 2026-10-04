@@ -6721,6 +6721,8 @@ function getWinnerReferralBadgeHtml(winnerId, draw, userProfiles, project, proje
   return `<span class="winner-badge winner-badge-ok">Реф</span>`;
 }
 
+const SHOW_REQUEST_ADDRESS_AGAIN = false;
+
 function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, antiFraudSignals, options = {}) {
   const returnPanelField = renderReturnPanelField(options.returnPanel);
   const { meta, projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
@@ -6859,8 +6861,9 @@ function renderWinnerCard(draw, winnerId, userProfiles, winnerNotifications, ant
     actions.push(["deny-pay", "Отказано", " pl-btn-danger"]);
   }
   // Offered next to "Оплатил" on purpose: the address turning out to be wrong
-  // is discovered at the moment of paying, not before it.
-  if (canAskAddressAgain) {
+  // is discovered at the moment of paying, not before it. Hidden for now at
+  // the owner's request (October 2026); the route behind it stays.
+  if (canAskAddressAgain && SHOW_REQUEST_ADDRESS_AGAIN) {
     actions.push([
       "request-address",
       "Запросить адрес повторно",
