@@ -19,12 +19,13 @@ function createWalletChecker({
   listPayouts,
   logger = console,
   now = () => Date.now(),
-  perTick = 3,
+  perTick = 4,
   staleMs = DEFAULT_STALE_MS,
 }) {
   let running = false;
 
   async function checkPayouts(budget) {
+    if (budget <= 0) return 0;
     let used = 0;
     for (const row of store.duePayouts(budget)) {
       used += 1;
@@ -48,7 +49,7 @@ function createWalletChecker({
   }
 
   async function labelQueue(budget) {
-    if (budget <= 0) return;
+    if (budget <= 0) return 0;
     const seen = new Set();
     const queue = (listQueue() || []).filter((item) => item.address && !seen.has(item.address) && seen.add(item.address));
     const checks = store.getChecks(queue.map((item) => item.address));
@@ -58,7 +59,8 @@ function createWalletChecker({
       const age = now() - known.checkedAt;
       return known.error && !known.kind ? age > ERROR_RETRY_MS : age > staleMs;
     });
-    for (const item of due.slice(0, budget)) {
+    const batch = due.slice(0, budget);
+    for (const item of batch) {
       try {
         const result = await inspector.inspect(item.address, item.network, { deadlineMs: 20000 });
         store.saveCheck(item.address, result.network, result.verdict);
@@ -66,6 +68,7 @@ function createWalletChecker({
         store.saveCheck(item.address, item.network, null, error.message);
       }
     }
+    return batch.length;
   }
 
   async function tick() {
@@ -75,8 +78,10 @@ function createWalletChecker({
       for (const payout of listPayouts() || []) {
         store.upsertPayout(payout);
       }
-      const used = await checkPayouts(perTick);
-      await labelQueue(perTick - used);
+      // The queue first: its labels are what the owner looks at before paying;
+      // the follow-up of old prizes takes what is left of the tick.
+      const used = await labelQueue(perTick);
+      await checkPayouts(perTick - used);
     } catch (error) {
       logger.error(`[wallet] проверка кошельков: ${error.message}`);
     } finally {

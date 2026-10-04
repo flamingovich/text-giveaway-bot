@@ -83,13 +83,14 @@ test("the background check labels the queue and follows payouts, a few at a time
     listPayouts: () => [{ drawId: "d0", userId: 5, address: "TP", paidAt: now() - 30 * 24 * HOUR }],
     logger: { warn() {}, error() {} },
   });
+  // The queue first: its labels are what the owner looks at before paying.
   await checker.tick();
-  assert.deepEqual(asked, ["TP", "TQ1", "TFAIL"]);
+  assert.deepEqual(asked, ["TQ1", "TFAIL", "TQ2"]);
   assert.equal(store.getChecks(["TFAIL"]).get("TFAIL").error, "429");
   asked.length = 0;
   await checker.tick();
-  // Labelled ones wait for staleness; the failed one waits half an hour.
-  assert.deepEqual(asked, ["TQ2"]);
+  // Labelled ones wait for staleness, the failed one half an hour: the payout's turn.
+  assert.deepEqual(asked, ["TP"]);
 });
 
 // The live panel redraws when the revision moves: a check that finds the same

@@ -6439,7 +6439,7 @@ function startScheduler() {
 // The payout queue's wallet labels and the follow-up of paid prizes
 // (wallet-checker.js). Its own timer: an explorer that hangs must not hold up
 // the scheduler's tick.
-const WALLET_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+const WALLET_CHECK_INTERVAL_MS = 60 * 1000;
 let walletCheckTimer = null;
 
 function listWinnerAddresses({ paid }) {
