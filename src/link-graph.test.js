@@ -17,12 +17,12 @@ test("a shared wallet, project ID or screenshot links people for certain", () =>
   };
   const clusters = buildClusters(collectLinkEvidence({ userProfiles }));
   const byUser = (id) => clusters.find((c) => c.users.includes(id));
-  // The wallet ties 1 and 2; the Pokerdom ID ties 1 and 3, whoever the organiser.
-  assert.deepEqual(byUser("1").users, ["1", "2", "3"]);
+  // The wallet ties 1 and 2; the ID ties 1, 3 and 4, whoever the organiser and
+  // whatever the brand; the screenshot ties 4 and 5.
+  assert.deepEqual(byUser("1").users, ["1", "2", "3", "4", "5"]);
   assert.equal(byUser("1").strong, true);
-  // The same letters on another brand are another account.
-  assert.deepEqual(byUser("4").users, ["4", "5"]);
-  assert.deepEqual(kinds(byUser("4")), ["shot"]);
+  // The same ID on another brand is the same made-up account: one cluster.
+  assert.deepEqual(byUser("4").users, ["1", "2", "3", "4", "5"]);
 });
 
 test("a network shared in two draws links; one draw, or a crowd, does not", () => {

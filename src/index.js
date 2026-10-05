@@ -92,6 +92,8 @@ const {
   sharesProfileShot,
   buildDeviceOwners,
   sharesDevice,
+  buildAccountIdIndex,
+  sharesProjectAccountId,
 } = require("./draw-anti-fraud");
 const { decideJoinEntry } = require("./join-entry-decision");
 const {
@@ -101,6 +103,8 @@ const {
   evaluateIpManyProjectIdsFraud,
   joinCtxHasCompletedProjectIdStep,
   normalizeProjectAccountId,
+  detectStoredProjectAccountIdKind,
+  isFillerProjectAccountId,
 } = require("./project-account-id");
 const { checkWalletHasTransactions } = require("./tron-wallet-check");
 const { createWalletInspector } = require("./wallet-inspect");
@@ -1286,7 +1290,38 @@ function getGlobalDeviceOwners() {
   return deviceOwnersMemo.owners;
 }
 
+// Every project ID with its holders and brands, for the rule that a shared ID
+// marks a person everywhere. Built once per profiles document read.
+const accountIdIndexMemo = new WeakMap();
+function getAccountIdIndex(userProfiles) {
+  if (!userProfiles || typeof userProfiles !== "object") {
+    return null;
+  }
+  if (!accountIdIndexMemo.has(userProfiles)) {
+    accountIdIndexMemo.set(
+      userProfiles,
+      buildAccountIdIndex(userProfiles, {
+        normalize: (raw) => normalizeProjectAccountId(raw, detectStoredProjectAccountIdKind(raw)) || "",
+        brandOf: (projectId) => (/^brand_([a-z]+)_/.exec(resolveProjectId(projectId) || "") || [])[1] || null,
+        isFiller: (id) => isFillerProjectAccountId(String(id).replace(/^#/, "")),
+      }),
+    );
+  }
+  return accountIdIndexMemo.get(userProfiles);
+}
+
+// The owner's own and test accounts the anti-fraud leaves alone
+// (ANTIFRAUD_EXEMPT_USER_IDS in .env, comma-separated).
+const ANTIFRAUD_EXEMPT_USER_IDS = new Set(
+  String(process.env.ANTIFRAUD_EXEMPT_USER_IDS || "")
+    .split(/[\s,]+/)
+    .filter(Boolean),
+);
+
 function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = null, notifyInfo = null) {
+  if (ANTIFRAUD_EXEMPT_USER_IDS.has(String(winnerId))) {
+    return { labels: [], hasFraudFlag: false };
+  }
   const labels = [];
   const signals = precomputedSignals || collectDrawParticipantSignals(draw, userProfiles);
   const globalWalletOwners =
@@ -1322,6 +1357,11 @@ function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = n
   // One phone behind several accounts: the same device, or the same
   // fingerprint from the same network (device-signals.js).
   if (sharesDevice(winnerId, getGlobalDeviceOwners())) {
+    labels.push("Мультиаккаунт");
+  }
+
+  // The same project ID as someone else, or on two brands: everywhere.
+  if (sharesProjectAccountId(winnerId, getAccountIdIndex(userProfiles))) {
     labels.push("Мультиаккаунт");
   }
 
@@ -6500,6 +6540,102 @@ function startScheduler() {
   startSchedulerGuard();
   console.log(`[boot] scheduler started (${CHECK_INTERVAL_MS}ms)`);
   startWalletChecker();
+  startPayoutCancelCheck();
+}
+
+// A winner the anti-fraud took for a multi-account after the win and before
+// the payment. getWinnerAntiFraud already keeps the prize out of the queue;
+// this tells the person once and records the cancellation (the owner's
+// wording). Only "Мультиаккаунт" - a shared wallet, ID, screenshot or device;
+// a shared network alone never cancels anything.
+//
+// Two steps on purpose: without ANTIFRAUD_CANCEL_PAYOUTS=true in .env it only
+// logs who would be cancelled, so the owner sees the list before anyone is
+// written to.
+const PAYOUT_CANCEL_INTERVAL_MS = 10 * 60 * 1000;
+let payoutCancelTimer = null;
+let lastPayoutCancelPreview = "";
+
+function buildPayoutCancelledHtml(draw) {
+  const postLink = buildDrawPostLink(draw);
+  const giveawayWord = postLink ? `<a href="${escapeHtml(postLink)}"><b>розыгрыш</b></a>` : "<b>розыгрыш</b>";
+  return [
+    `${pe("shield")} <b>Ваша выплата за </b>${giveawayWord}<b> отменена</b>, так как "Система-антифрод" распознала Вас в мошенничестве.`,
+    "",
+    `<blockquote>${pe("phone")} Если это не так, или Вы считаете, что произошла ошибка, то пишите в поддержку - <b>@rollerbot_support_bot</b></blockquote>`,
+  ].join("\n");
+}
+
+function listFlaggedPendingPayouts() {
+  const userProfiles = readUserProjectProfiles();
+  const panelContext = createPanelAntiFraudContext(userProfiles);
+  const draws = [...(readDataSnapshot().draws || []), ...(readArchivedDrawsSnapshot().draws || [])];
+  const targets = [];
+  for (const draw of draws) {
+    if (draw.status !== DRAW_STATUS.FINISHED || !isMoneyPrizeType(draw.prizeType)) continue;
+    const signals = getPanelAntiFraudSignals(panelContext, draw, userProfiles);
+    for (const winnerId of draw.winnerIds || []) {
+      const notify = draw.winnerNotifications?.[String(winnerId)];
+      if (!notify || notify.paidAt || notify.paymentDeniedAt || notify.antiFraudFlag || notify.status === "forfeited") continue;
+      if (!(notify.status === "confirmed" || notify.status === "awaiting_address" || notify.verifiedAt)) continue;
+      if (isWinnerNotificationExpired(notify, draw)) continue;
+      const antiFraud = getWinnerAntiFraud(draw, winnerId, userProfiles, signals, notify);
+      if (antiFraud.labels.includes("Мультиаккаунт")) {
+        targets.push({ draw, winnerId: String(winnerId) });
+      }
+    }
+  }
+  return targets;
+}
+
+// Read again and written alone: the message went out over the network first.
+function markPayoutCancelled(drawId, winnerId, messageSent) {
+  const data = readData();
+  const archivedData = readArchivedDraws();
+  let draw = (data.draws || []).find((item) => item.id === drawId);
+  const inArchive = !draw;
+  if (!draw) draw = (archivedData.draws || []).find((item) => item.id === drawId);
+  const notify = draw?.winnerNotifications?.[String(winnerId)];
+  if (!notify || notify.paidAt || notify.paymentDeniedAt) return;
+  const at = new Date().toISOString();
+  notify.status = "forfeited";
+  notify.antiFraudFlag = true;
+  notify.forfeitureReason = "antifraud";
+  notify.forfeitedAt = at;
+  notify.antiFraudCancelledAt = at;
+  notify.antiFraudCancelMessageSent = Boolean(messageSent);
+  persistOwnedDrawContext({ data, archivedData, draw, inArchive });
+}
+
+async function runPayoutCancelCheck() {
+  const targets = listFlaggedPendingPayouts();
+  if (process.env.ANTIFRAUD_CANCEL_PAYOUTS !== "true") {
+    const preview = targets.map((t) => `${t.winnerId}@${t.draw.id}`).join(",");
+    if (preview !== lastPayoutCancelPreview) {
+      lastPayoutCancelPreview = preview;
+      console.log(`[antifraud] к отмене (выключено, только список): ${targets.length} — ${preview || "никого"}`);
+    }
+    return;
+  }
+  for (const target of targets) {
+    let sent = false;
+    try {
+      await sendHtmlWithEmojiFallback(target.winnerId, buildPayoutCancelledHtml(target.draw));
+      sent = true;
+    } catch (error) {
+      console.warn(`[antifraud] сообщение об отмене не доставлено: user=${target.winnerId}: ${error.message}`);
+    }
+    markPayoutCancelled(target.draw.id, target.winnerId, sent);
+    console.log(`[antifraud] выплата отменена: user=${target.winnerId} draw=${target.draw.id} сообщение=${sent ? "да" : "нет"}`);
+  }
+}
+
+function startPayoutCancelCheck() {
+  if (payoutCancelTimer) return;
+  const run = () => runPayoutCancelCheck().catch((error) => console.error(`[antifraud] отмена выплат: ${error.message}`));
+  payoutCancelTimer = setInterval(run, PAYOUT_CANCEL_INTERVAL_MS);
+  payoutCancelTimer.unref?.();
+  setTimeout(run, 60 * 1000).unref?.();
 }
 
 // The payout queue's wallet labels and the follow-up of paid prizes

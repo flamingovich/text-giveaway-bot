@@ -75,3 +75,30 @@ test("a fingerprint shared on one network by a crowd is a public Wi-Fi", () => {
   for (let i = 1; i <= 6; i++) meta[i] = { fpHash: "iphone", ipHash: "mall" };
   assert.equal(sharesDevice(1, buildDeviceOwners([{ participantMeta: meta }])), false);
 });
+
+// Two people cannot hold one account; one person cannot have the same ID on
+// two brands, each issues its own. Either way everyone holding it is flagged.
+test("a project ID shared by people, or by brands, flags its holders", () => {
+  const { buildAccountIdIndex, sharesProjectAccountId } = require("./draw-anti-fraud");
+  const profiles = {
+    users: {
+      1: { projects: { brand_iris_7: { projectAccountId: "#ab1cd" } } },
+      2: { projects: { brand_iris_8: { projectAccountId: "#AB1CD" } } },
+      3: { projects: { brand_iris_7: { projectAccountId: "#TEST1" }, brand_beef_7: { projectAccountId: "#test1" } } },
+      4: { projects: { brand_iris_7: { projectAccountId: "#Q9W8E" }, brand_iris_8: { projectAccountId: "#Q9W8E" } } },
+      5: { projects: { brand_beef_7: { projectAccountId: "#11111" } } },
+      6: { projects: { brand_beef_8: { projectAccountId: "#11111" } } },
+    },
+  };
+  const index = buildAccountIdIndex(profiles, {
+    normalize: (raw) => String(raw || "").trim().toUpperCase(),
+    brandOf: (projectId) => (/^brand_([a-z]+)_/.exec(projectId) || [])[1] || null,
+    isFiller: (id) => /^#?(.)\1+$/.test(id),
+  });
+  assert.equal(sharesProjectAccountId(1, index), true);
+  assert.equal(sharesProjectAccountId(2, index), true);
+  assert.equal(sharesProjectAccountId(3, index), true);
+  // One person, one brand, two organisers' copies: the same account.
+  assert.equal(sharesProjectAccountId(4, index), false);
+  assert.equal(sharesProjectAccountId(5, index), false);
+});

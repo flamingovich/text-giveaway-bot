@@ -110,6 +110,39 @@ function sharesDevice(userId, owners) {
   return false;
 }
 
+// One project ID: two people can never hold the same account, nor one person
+// the same ID on two brands - every brand issues its own (the owner's rule,
+// October 2026). It marks the person in every draw and with every organiser,
+// as a shared wallet does: before, a shared IRIS ID was not looked at when the
+// same person won on Pokerdom. Fillers ("11111", "abcde") are left out: typed
+// to pass the step, they say nothing about who is who.
+function buildAccountIdIndex(userProfiles, { normalize, brandOf, isFiller = () => false }) {
+  const byId = new Map();
+  const idsOf = new Map();
+  for (const [userId, node] of Object.entries(userProfiles?.users || {})) {
+    for (const [projectId, data] of Object.entries(node?.projects || {})) {
+      const id = normalize(data?.projectAccountId);
+      if (!id || isFiller(id)) continue;
+      const entry = byId.get(id) || { users: new Set(), brands: new Set() };
+      entry.users.add(String(userId));
+      const brand = brandOf(projectId);
+      if (brand) entry.brands.add(brand);
+      byId.set(id, entry);
+      if (!idsOf.has(String(userId))) idsOf.set(String(userId), new Set());
+      idsOf.get(String(userId)).add(id);
+    }
+  }
+  return { byId, idsOf };
+}
+
+function sharesProjectAccountId(userId, index) {
+  for (const id of index?.idsOf?.get(String(userId)) || []) {
+    const entry = index.byId.get(id);
+    if (entry && (entry.users.size > 1 || entry.brands.size > 1)) return true;
+  }
+  return false;
+}
+
 function hasNormalParticipantProfile(projectData, draw) {
   if (!draw?.projectId) {
     return true;
@@ -217,6 +250,8 @@ module.exports = {
   sharesProfileShot,
   buildDeviceOwners,
   sharesDevice,
+  buildAccountIdIndex,
+  sharesProjectAccountId,
   hasNormalParticipantProfile,
   evaluateIpFraud,
 };

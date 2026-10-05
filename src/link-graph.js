@@ -80,10 +80,11 @@ function collectLinkEvidence({
     for (const [projectId, data] of Object.entries(node?.projects || {})) {
       ownAddress(data?.trc20Address, userId);
       ownAddress(data?.antifraudTrc20Address, userId);
+      // One ID is one account wherever it is typed: every brand issues its own.
       const accountId = normalizeAccountId(data?.projectAccountId);
       if (accountId) {
         const brand = brandSlugOf(projectId, projectsById);
-        add(`account:${brand}:${accountId}`, "account", `${brand} ${accountId}`, userId);
+        add(`account:${accountId}`, "account", `${brand} ${accountId}`, userId);
       }
       const sha = data?.profileShot?.sha256;
       if (sha) add(`shot:${sha}`, "shot", `скрин ${sha.slice(0, 8)}`, userId);
