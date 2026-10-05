@@ -33,3 +33,22 @@ test("three or more on one address above a tenth of the draw are still flagged",
   assert.equal(result.shouldFlag, true);
   assert.equal(result.trigger, "ip_share_ratio");
 });
+
+// The owner's rule: one picture sent from several accounts makes them all one
+// cluster of multi-accounts - the first sender included.
+test("everyone sharing a profile screenshot is flagged, the first one too", () => {
+  const { buildGlobalShotOwners, sharesProfileShot } = require("./draw-anti-fraud");
+  const profiles = {
+    users: {
+      1: { projects: { brand_beef_9: { profileShot: { sha256: "aaa" } } } },
+      2: { projects: { brand_beef_9: { profileShot: { sha256: "aaa" } } } },
+      3: { projects: { brand_beef_9: { profileShot: { sha256: "bbb" } }, brand_beef_8: { profileShot: { sha256: "bbb" } } } },
+    },
+  };
+  const owners = buildGlobalShotOwners(profiles);
+  assert.equal(sharesProfileShot(profiles, 1, owners), true);
+  assert.equal(sharesProfileShot(profiles, 2, owners), true);
+  // One person's own picture on two organisers' copies of a brand is not a cluster.
+  assert.equal(sharesProfileShot(profiles, 3, owners), false);
+  assert.equal(sharesProfileShot(profiles, 4, owners), false);
+});

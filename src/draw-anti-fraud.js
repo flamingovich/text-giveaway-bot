@@ -32,6 +32,40 @@ function buildGlobalWalletOwners(userProfiles, normalizeWalletAddress = defaultN
   return map;
 }
 
+// One picture sent by several people: the same file down to the byte, so one
+// person behind several accounts, or a screenshot passed around. The owner's
+// rule: everyone sharing it is one cluster of multi-accounts - they still take
+// part, their prize is zero (October 2026).
+function listProfileShotHashes(userNode) {
+  const out = [];
+  for (const projectData of Object.values(userNode?.projects || {})) {
+    const sha = projectData?.profileShot?.sha256;
+    if (sha && !out.includes(sha)) {
+      out.push(sha);
+    }
+  }
+  return out;
+}
+
+function buildGlobalShotOwners(userProfiles) {
+  const map = new Map();
+  for (const [userId, node] of Object.entries(userProfiles?.users || {})) {
+    for (const sha of listProfileShotHashes(node)) {
+      if (!map.has(sha)) {
+        map.set(sha, new Set());
+      }
+      map.get(sha).add(String(userId));
+    }
+  }
+  return map;
+}
+
+function sharesProfileShot(userProfiles, userId, globalShotOwners) {
+  return listProfileShotHashes(userProfiles?.users?.[String(userId)]).some(
+    (sha) => (globalShotOwners.get(sha)?.size || 0) > 1,
+  );
+}
+
 function hasNormalParticipantProfile(projectData, draw) {
   if (!draw?.projectId) {
     return true;
@@ -134,6 +168,9 @@ module.exports = {
   IP_FRAUD_SHARE_RATIO,
   listProjectWalletAddresses,
   buildGlobalWalletOwners,
+  listProfileShotHashes,
+  buildGlobalShotOwners,
+  sharesProfileShot,
   hasNormalParticipantProfile,
   evaluateIpFraud,
 };

@@ -84,7 +84,13 @@ const {
   formatUsdPrizeForPost,
   formatRefLinkDisplay,
 } = require("./draw-post-emojis");
-const { evaluateIpFraud, listProjectWalletAddresses, buildGlobalWalletOwners } = require("./draw-anti-fraud");
+const {
+  evaluateIpFraud,
+  listProjectWalletAddresses,
+  buildGlobalWalletOwners,
+  buildGlobalShotOwners,
+  sharesProfileShot,
+} = require("./draw-anti-fraud");
 const { decideJoinEntry } = require("./join-entry-decision");
 const {
   drawAsksProjectIdOnJoin,
@@ -1185,7 +1191,7 @@ function getDrawParticipantMeta(draw, userId) {
   return draw.participantMeta[String(userId)] || null;
 }
 
-function collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners = null) {
+function collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners = null, globalShotOwners = null) {
   const byIp = new Map();
   const byWallet = new Map();
   const byProjectAccountId = new Map();
@@ -1220,6 +1226,7 @@ function collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners = 
     byProjectAccountId,
     globalWalletOwners:
       globalWalletOwners || buildGlobalWalletOwners(userProfiles, normalizeWalletAddress),
+    globalShotOwners: globalShotOwners || buildGlobalShotOwners(userProfiles),
     globalProjectAccountIdOwners:
       draw.projectId && buildGlobalProjectAccountIdOwners(userProfiles, draw.projectId),
   };
@@ -1227,6 +1234,7 @@ function collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners = 
 
 function createPanelAntiFraudContext(userProfiles) {
   const globalWalletOwners = buildGlobalWalletOwners(userProfiles, normalizeWalletAddress);
+  const globalShotOwners = buildGlobalShotOwners(userProfiles);
   const drawSignalsCache = new Map();
   return {
     getDrawSignals(draw) {
@@ -1234,7 +1242,7 @@ function createPanelAntiFraudContext(userProfiles) {
       if (!drawSignalsCache.has(key)) {
         drawSignalsCache.set(
           key,
-          collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners),
+          collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners, globalShotOwners),
         );
       }
       return drawSignalsCache.get(key);
@@ -1282,6 +1290,12 @@ function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = n
     return (globalWalletOwners.get(wallet)?.size || 0) > 1;
   });
   if (multiAccount) {
+    labels.push("Мультиаккаунт");
+  }
+
+  // The same profile screenshot as someone else's: the whole cluster.
+  const globalShotOwners = signals.globalShotOwners || buildGlobalShotOwners(userProfiles);
+  if (sharesProfileShot(userProfiles, winnerId, globalShotOwners)) {
     labels.push("Мультиаккаунт");
   }
 
@@ -1940,6 +1954,21 @@ function buildWinnerWinMessageHtml(draw, payoutPrize, options = {}) {
   return [
     `<b>${pe("party")}</b><b> Вы выиграли в </b>${giveawayWord}<b>.</b>`,
     prizeHtml,
+  ].join("\n");
+}
+
+// A flagged winner sent their address: it is kept, the prize is not paid.
+// "Мультиаккаунт" is named only when that is the reason; a missing channel
+// subscription burns the prize too and must not be called multi-accounting.
+function buildWinnerAntiFraudAddressHtml(labels = []) {
+  const multi = labels.includes("Мультиаккаунт") || labels.includes("Бот по IP");
+  const why = multi
+    ? `так как "Система-антифрод" распознала Вас как мультиаккаунт.`
+    : `так как сработала "Система-антифрод".`;
+  return [
+    `${pe("shield")} <b>Ваш приз — 0</b>, ${why}`,
+    "",
+    `<blockquote>${pe("phone")} Если это не так, или Вы считаете, что произошла ошибка, то пишите в поддержку - <b>@rollerbot_support_bot</b></blockquote>`,
   ].join("\n");
 }
 
@@ -5921,14 +5950,9 @@ async function tryHandleWinnerDepositAddressMessage(ctx) {
     liveNotify.forfeitedAt = checkedAt;
     liveNotify.payoutPrize = getWinnerPayoutText(draw, projectData, { hasFraudFlag: true, winnerId: userId });
     writeDataPreservingLiveWinners(data);
-    await ctx.reply(
-      [
-        "⚠️ Адрес сохранён, но приз аннулирован антифрод-системой.",
-        antiFraud.labels.length ? `Причина: ${antiFraud.labels.join(", ")}.` : "",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
+    // The same words as the win message for a flagged winner: the prize is
+    // zero, why, and where to go if it is a mistake (the owner's wording).
+    await replyHtmlWithEmojiFallback(ctx, buildWinnerAntiFraudAddressHtml(antiFraud.labels));
     return true;
   }
 

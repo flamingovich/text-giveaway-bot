@@ -4694,10 +4694,11 @@ function registerJoinMiniApp(app, deps) {
       return;
     }
     const sha256 = hashShot(decoded.buffer);
+    // Someone else's very picture is taken without a word: the anti-fraud
+    // makes everyone sharing it one cluster of multi-accounts, whose prize is
+    // zero (draw-anti-fraud.js). Refusing it only taught them to take a new one.
     if (findShotHashOwner(readUserProjectProfiles(), sha256, userId)) {
-      console.warn(`[join] скрин профиля уже присылал другой участник: user=${userId} draw=${drawId}`);
-      res.json({ shotError: describeShotRefusal("duplicate_image", project) });
-      return;
+      console.warn(`[join] скрин профиля совпал с чужим — мультиаккаунт: user=${userId} draw=${drawId}`);
     }
     let answer = null;
     try {

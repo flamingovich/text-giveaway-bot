@@ -120,8 +120,6 @@ function describeShotRefusal(reason, project, brandSeen = "") {
       return `На скриншоте не видно ID. Сделайте скриншот профиля ${name}, где видны никнейм и ID.`;
     case "bad_id":
       return `Не получилось разобрать ID. Сделайте скриншот профиля ${name} почётче, где видны никнейм и ID.`;
-    case "duplicate_image":
-      return "Этот скриншот уже прислал другой участник. Пришлите скриншот своего профиля.";
     case "unavailable":
       return "Не получилось прочитать скриншот — попробуйте ещё раз через минуту.";
     case "not_profile":
