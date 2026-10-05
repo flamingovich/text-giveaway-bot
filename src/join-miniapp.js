@@ -50,6 +50,7 @@ const {
   buildCrossOrganizerNonReferralPatch,
 } = require("./project-profile-bridge");
 const { checkWalletHasTransactions } = require("./tron-wallet-check");
+const { readClientSignals } = require("./device-signals");
 const {
   resolveDepositNetworkForProject,
   validateDepositAddress,
@@ -862,6 +863,103 @@ function renderJoinPage(drawId, draw, project, options = {}) {
 
     let joinReferrerId = null;
 
+    // The device and its fingerprint for the anti-fraud (device-signals.js).
+    // A random id kept in Telegram's DeviceStorage outlives a cleared WebView
+    // cache; localStorage is the fallback. Neither ever holds the user's data.
+    let joinDeviceId = "";
+    let joinFingerprint = "";
+    const DEVICE_KEY = "rb_device";
+    function newDeviceId() {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+      return "d" + Date.now().toString(16) + Math.random().toString(16).slice(2, 14);
+    }
+    function readLocalDevice() {
+      try {
+        return window.localStorage.getItem(DEVICE_KEY) || "";
+      } catch (e) {
+        return "";
+      }
+    }
+    function writeLocalDevice(value) {
+      try {
+        window.localStorage.setItem(DEVICE_KEY, value);
+      } catch (e) {}
+    }
+    function deviceStorage() {
+      const tg = window.Telegram && window.Telegram.WebApp;
+      if (!tg || !tg.DeviceStorage || typeof tg.isVersionAtLeast !== "function" || !tg.isVersionAtLeast("9.0")) return null;
+      return tg.DeviceStorage;
+    }
+    function readTelegramDevice() {
+      const storage = deviceStorage();
+      if (!storage) return Promise.resolve("");
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(""), 800);
+        try {
+          storage.getItem(DEVICE_KEY, (error, value) => {
+            clearTimeout(timer);
+            resolve(error ? "" : String(value || ""));
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          resolve("");
+        }
+      });
+    }
+    async function loadDeviceId() {
+      const fromTelegram = await readTelegramDevice();
+      const id = fromTelegram || readLocalDevice() || newDeviceId();
+      writeLocalDevice(id);
+      const storage = deviceStorage();
+      if (storage && fromTelegram !== id) {
+        try {
+          storage.setItem(DEVICE_KEY, id, function () {});
+        } catch (e) {}
+      }
+      return id;
+    }
+    function webglRenderer() {
+      try {
+        const gl = document.createElement("canvas").getContext("webgl");
+        const info = gl && gl.getExtension("WEBGL_debug_renderer_info");
+        return info ? [gl.getParameter(info.UNMASKED_VENDOR_WEBGL), gl.getParameter(info.UNMASKED_RENDERER_WEBGL)].join("/") : "";
+      } catch (e) {
+        return "";
+      }
+    }
+    function canvasPrint() {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 220;
+        canvas.height = 30;
+        const ctx = canvas.getContext("2d");
+        ctx.textBaseline = "top";
+        ctx.font = "14px Arial";
+        ctx.fillStyle = "#f60";
+        ctx.fillRect(100, 1, 62, 20);
+        ctx.fillStyle = "#069";
+        ctx.fillText("RollerBot Розыгрыш 0x55d3", 2, 15);
+        return canvas.toDataURL();
+      } catch (e) {
+        return "";
+      }
+    }
+    async function computeFingerprint() {
+      const parts = [
+        screen.width, screen.height, window.devicePixelRatio, screen.colorDepth,
+        navigator.hardwareConcurrency || "", navigator.deviceMemory || "", navigator.maxTouchPoints || 0,
+        (navigator.languages || []).join(","), Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+        navigator.platform || "", webglRenderer(), canvasPrint(),
+      ].join("|");
+      if (!window.crypto || !window.crypto.subtle) return "";
+      const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(parts));
+      return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+    const deviceSignalsReady = Promise.all([
+      loadDeviceId().then((id) => { joinDeviceId = id; }).catch(() => {}),
+      computeFingerprint().then((fp) => { joinFingerprint = fp; }).catch(() => {}),
+    ]);
+
     function parseJoinStartParamClient(raw) {
       const value = String(raw || "").trim();
       if (!value) return { drawId: "", referrerId: null };
@@ -1528,6 +1626,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
+        // A second at most: the join must not wait for the fingerprint.
+        await Promise.race([deviceSignalsReady, new Promise((resolve) => setTimeout(resolve, 1000))]);
         const res = await fetch(apiUrl(path), {
           method: "POST",
           signal: controller.signal,
@@ -1540,6 +1640,8 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             ...body,
             initData: initData(),
             ...(joinReferrerId ? { referrerId: joinReferrerId } : {}),
+            ...(joinDeviceId ? { dev: joinDeviceId } : {}),
+            ...(joinFingerprint ? { fp: joinFingerprint } : {}),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -3604,6 +3706,7 @@ function registerJoinMiniApp(app, deps) {
     const referrerId = getReferrerIdFromRequest(req);
     return {
       ipAddress: extractClientIp(req),
+      ...readClientSignals(req.body),
       ...(referrerId ? { referrerId } : {}),
     };
   }

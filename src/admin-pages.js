@@ -979,7 +979,7 @@ function renderReferralsPage(stats) {
 // ── links ──────────────────────────────────────────────────────────────────
 
 const LINK_LEGEND = `<div class="lg-chips" style="margin-bottom:6px">
-  <span class="lg-chip lg-wallet">${icon("wallet")}кошелёк, ID проекта, скрин — обнуляют приз</span>
+  <span class="lg-chip lg-wallet">${icon("wallet")}кошелёк, ID проекта, скрин, устройство — обнуляют приз</span>
   <span class="lg-chip lg-ip">${icon("pulse")}одна сеть — только показ</span>
   <span class="lg-chip lg-chain">${icon("link")}блокчейн — только показ</span>
   <span class="lg-chip lg-referral">${icon("gift")}приглашение</span>
@@ -1013,7 +1013,7 @@ function renderLinksPage(view) {
     <div class="grid cols-4">
       ${UI.stat({ label: "Кластеров", value: t.clusters, iconName: "link", tone: "purple", i: 0 })}
       ${UI.stat({ label: "Людей в них", value: t.people, iconName: "users", tone: "blue", i: 1 })}
-      ${UI.stat({ label: "Обнуляют приз", value: t.strong, note: "общий кошелёк, ID или скрин", iconName: "shield", tone: "red", i: 2 })}
+      ${UI.stat({ label: "Обнуляют приз", value: t.strong, note: "общий кошелёк, ID, скрин или устройство", iconName: "shield", tone: "red", i: 2 })}
       ${UI.stat({ label: "Выплат в кластерах", value: t.paidInClusters, note: `${count(t.withWins)} кластеров с победами`, iconName: "wallet", tone: "orange", i: 3 })}
     </div>
     ${UI.card({

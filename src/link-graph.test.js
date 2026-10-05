@@ -92,3 +92,15 @@ test("only untagged counterparties above dust are kept", () => {
   );
   assert.deepEqual(kept, [{ address: "TFriend", in: 1, out: 1 }]);
 });
+
+test("one phone links for certain; a mobile carrier's address does not", () => {
+  const meta = (pairs) => Object.fromEntries(pairs.map(([u, m]) => [u, m]));
+  const draws = [
+    { id: "d1", participantMeta: meta([[1, { deviceHash: "dev" }], [2, { deviceHash: "dev" }], [3, { ipHash: "cell", netKey: "mts" }], [4, { ipHash: "cell", netKey: "mts" }]]) },
+    { id: "d2", participantMeta: meta([[3, { ipHash: "cell", netKey: "mts" }], [4, { ipHash: "cell", netKey: "mts" }], [5, { fpHash: "fp", ipHash: "home" }], [6, { fpHash: "fp", ipHash: "home" }]]) },
+  ];
+  const clusters = buildClusters(collectLinkEvidence({ draws, userProfiles: { users: {} }, networkTypes: new Map([["mts", "mobile"]]) }));
+  const sets = clusters.map((c) => c.users.join(",")).sort();
+  assert.deepEqual(sets, ["1,2", "5,6"]);
+  assert.ok(clusters.every((c) => c.strong));
+});

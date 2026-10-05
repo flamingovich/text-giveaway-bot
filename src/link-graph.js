@@ -6,22 +6,27 @@
 //
 //   wallet  - the same payout address;
 //   account - the same ID on a brand's project;
-//   shot    - the same profile screenshot, byte for byte.
+//   shot    - the same profile screenshot, byte for byte;
+//   device  - the same device id (kept in Telegram's DeviceStorage);
+//   fpnet   - the same device fingerprint behind the same network: identical
+//             phones share a fingerprint, but not a home network as well.
 //
 // Two more make a cluster but zero nothing (the owner's decision: shown, not
 // punished - a wrong IP must not cost an honest winner the prize):
 //
 //   ip      - the same network in at least two draws together. One draw is not
-//             enough (a flat, a café), and a network shared by more than five
-//             people is a mobile carrier's or a public Wi-Fi, not a person;
+//             enough (a flat, a café), a network shared by more than five
+//             people is a public Wi-Fi, and a mobile carrier's or a VPN's
+//             (device-signals.js) puts strangers behind one address;
 //   chain   - money on the blockchain: one wallet funding the deposit
 //             addresses of a few of ours, or one of ours paying into another's.
 //
 // Referrals only draw a line inside a cluster: inviting a friend is what the
 // mini app asks for, and on its own it says nothing.
 
-const STRONG = new Set(["wallet", "account", "shot"]);
-const CLUSTERING = new Set(["wallet", "account", "shot", "ip", "chain"]);
+const STRONG = new Set(["wallet", "account", "shot", "device", "fpnet"]);
+const CLUSTERING = new Set(["wallet", "account", "shot", "device", "fpnet", "ip", "chain"]);
+const MAX_FPNET_PEOPLE = 5;
 const MAX_IP_PEOPLE = 5;
 const MIN_IP_DRAWS = 2;
 // A counterparty of more of ours than this is infrastructure: a cashier's
@@ -47,7 +52,14 @@ const brandSlugOf = (projectId, projectsById) => {
  *   projects       - the projects list (for old project ids' brands);
  *   counterparties - [{ address, links: [{ address, in, out }] }] from wallet checks.
  */
-function collectLinkEvidence({ draws = [], userProfiles = {}, projects = [], counterparties = [], normalizeAccountId = (v) => String(v || "").trim().toUpperCase() }) {
+function collectLinkEvidence({
+  draws = [],
+  userProfiles = {},
+  projects = [],
+  counterparties = [],
+  networkTypes = new Map(),
+  normalizeAccountId = (v) => String(v || "").trim().toUpperCase(),
+}) {
   const evidence = new Map();
   const projectsById = new Map(projects.map((p) => [String(p.id), p]));
   const add = (key, kind, label, userId, meta = null) => {
@@ -80,11 +92,20 @@ function collectLinkEvidence({ draws = [], userProfiles = {}, projects = [], cou
 
   // Same network: counted per draw, so a pair is linked only after two draws together.
   const ipDraws = new Map();
+  const ipNetwork = new Map();
+  const fpNet = new Map();
   for (const draw of draws) {
     for (const [userId, notify] of Object.entries(draw.winnerNotifications || {})) {
       ownAddress(notify?.trc20Address, userId);
     }
     for (const [userId, meta] of Object.entries(draw.participantMeta || {})) {
+      if (meta?.deviceHash) add(`device:${meta.deviceHash}`, "device", "одно устройство", userId);
+      if (meta?.fpHash && meta?.ipHash) {
+        const users = fpNet.get(`${meta.fpHash}|${meta.ipHash}`) || new Set();
+        users.add(String(userId));
+        fpNet.set(`${meta.fpHash}|${meta.ipHash}`, users);
+      }
+      if (meta?.ipHash && meta?.netKey) ipNetwork.set(meta.ipHash, meta.netKey);
       if (!meta?.ipHash) continue;
       const users = ipDraws.get(meta.ipHash) || new Map();
       const set = users.get(String(userId)) || new Set();
@@ -98,8 +119,14 @@ function collectLinkEvidence({ draws = [], userProfiles = {}, projects = [], cou
       add(`ref:${pair[0]}>${pair[1]}`, "referral", "пригласил", pair[1], { from: pair[0], to: pair[1] });
     }
   }
+  for (const [key, users] of fpNet) {
+    if (users.size < 2 || users.size > MAX_FPNET_PEOPLE) continue;
+    users.forEach((u) => add(`fpnet:${key}`, "fpnet", "отпечаток + сеть", u));
+  }
   for (const [ipHash, users] of ipDraws) {
     if (users.size < 2 || users.size > MAX_IP_PEOPLE) continue;
+    const type = networkTypes.get(ipNetwork.get(ipHash));
+    if (type === "mobile" || type === "hosting") continue;
     const list = [...users.entries()];
     for (let i = 0; i < list.length; i++) {
       for (let j = i + 1; j < list.length; j++) {
@@ -216,6 +243,7 @@ module.exports = {
   MAX_IP_PEOPLE,
   MIN_IP_DRAWS,
   MAX_CHAIN_PEOPLE,
+  MAX_FPNET_PEOPLE,
   collectLinkEvidence,
   buildClusters,
   summarizeCounterparties,

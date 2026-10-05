@@ -9,6 +9,8 @@ const KIND_INFO = {
   wallet: { title: "Общий кошелёк", tone: "red", icon: "wallet" },
   account: { title: "Общий ID проекта", tone: "red", icon: "person" },
   shot: { title: "Один скрин профиля", tone: "red", icon: "doc" },
+  device: { title: "Одно устройство", tone: "red", icon: "cpu" },
+  fpnet: { title: "Отпечаток + сеть", tone: "red", icon: "cpu" },
   ip: { title: "Одна сеть", tone: "blue", icon: "pulse" },
   chain: { title: "Связь в блокчейне", tone: "orange", icon: "link" },
   referral: { title: "Пригласил", tone: "gray", icon: "gift" },
@@ -32,6 +34,10 @@ function describeEvidence(entry) {
     }
     case "shot":
       return { title: info.title, detail: "тот же файл", full: entry.label };
+    case "device":
+      return { title: info.title, detail: "тот же телефон", full: "один и тот же ID устройства в Telegram" };
+    case "fpnet":
+      return { title: info.title, detail: "тот же телефон и сеть", full: "одинаковый отпечаток устройства из одной сети" };
     case "ip":
       return { title: info.title, detail: `${entry.meta?.draws || 2} розыгр. вместе`, full: "один IP в нескольких розыгрышах" };
     case "chain":
@@ -60,8 +66,8 @@ function countPrizes(draws) {
 }
 
 /** Everything the two pages show. */
-function buildLinksView({ draws = [], userProfiles = {}, projects = [], counterparties = [], normalizeAccountId }) {
-  const evidence = collectLinkEvidence({ draws, userProfiles, projects, counterparties, normalizeAccountId });
+function buildLinksView({ draws = [], userProfiles = {}, projects = [], counterparties = [], networkTypes, normalizeAccountId }) {
+  const evidence = collectLinkEvidence({ draws, userProfiles, projects, counterparties, networkTypes, normalizeAccountId });
   const clusters = buildClusters(evidence);
   const { wins, paid } = countPrizes(draws);
   const users = userProfiles.users || {};
@@ -306,7 +312,7 @@ function renderClusterGraph(cluster, { icon, avatarStyle, width = 760, height = 
 const LINK_GRAPH_STYLES = `
 .lg { width: 100%; height: auto; display: block; }
 .lg-edge { stroke-width: 1.6; stroke-linecap: round; opacity: .55; }
-.lg-wallet, .lg-account, .lg-shot { --kind: var(--red); }
+.lg-wallet, .lg-account, .lg-shot, .lg-device, .lg-fpnet { --kind: var(--red); }
 .lg-ip { --kind: var(--blue); }
 .lg-chain { --kind: var(--orange); }
 .lg-referral { --kind: var(--gray); }

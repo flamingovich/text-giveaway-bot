@@ -66,6 +66,50 @@ function sharesProfileShot(userProfiles, userId, globalShotOwners) {
   );
 }
 
+// One phone behind several accounts (device-signals.js): the same device id,
+// or the same fingerprint from the same network. The owner's rule: zeroed
+// automatically, like a shared wallet (October 2026). A fingerprint shared by
+// more than five people on one network is a run of identical phones on a
+// public Wi-Fi, not one person.
+const MAX_FPNET_PEOPLE = 5;
+
+function buildDeviceOwners(draws) {
+  const byDevice = new Map();
+  const byFpNet = new Map();
+  const add = (map, key, userId) => {
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key).add(String(userId));
+  };
+  const devicesOf = new Map();
+  const fpNetsOf = new Map();
+  for (const draw of draws || []) {
+    for (const [userId, meta] of Object.entries(draw?.participantMeta || {})) {
+      if (meta?.deviceHash) {
+        add(byDevice, meta.deviceHash, userId);
+        add(devicesOf, String(userId), meta.deviceHash);
+      }
+      if (meta?.fpHash && meta?.ipHash) {
+        const key = `${meta.fpHash}|${meta.ipHash}`;
+        add(byFpNet, key, userId);
+        add(fpNetsOf, String(userId), key);
+      }
+    }
+  }
+  return { byDevice, byFpNet, devicesOf, fpNetsOf };
+}
+
+function sharesDevice(userId, owners) {
+  const key = String(userId);
+  for (const device of owners?.devicesOf?.get(key) || []) {
+    if ((owners.byDevice.get(device)?.size || 0) > 1) return true;
+  }
+  for (const fpNet of owners?.fpNetsOf?.get(key) || []) {
+    const size = owners.byFpNet.get(fpNet)?.size || 0;
+    if (size > 1 && size <= MAX_FPNET_PEOPLE) return true;
+  }
+  return false;
+}
+
 function hasNormalParticipantProfile(projectData, draw) {
   if (!draw?.projectId) {
     return true;
@@ -171,6 +215,8 @@ module.exports = {
   listProfileShotHashes,
   buildGlobalShotOwners,
   sharesProfileShot,
+  buildDeviceOwners,
+  sharesDevice,
   hasNormalParticipantProfile,
   evaluateIpFraud,
 };

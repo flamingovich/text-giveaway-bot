@@ -90,6 +90,8 @@ const {
   buildGlobalWalletOwners,
   buildGlobalShotOwners,
   sharesProfileShot,
+  buildDeviceOwners,
+  sharesDevice,
 } = require("./draw-anti-fraud");
 const { decideJoinEntry } = require("./join-entry-decision");
 const {
@@ -106,6 +108,7 @@ const { createWalletCheckStore } = require("./wallet-check-store");
 const { createWalletChecker } = require("./wallet-checker");
 const { describeWalletVerdict, describePastPayoutFlag } = require("./wallet-kind");
 const { summarizeCounterparties } = require("./link-graph");
+const { createSignalHasher, createNetworkTypes } = require("./device-signals");
 const {
   BRAND_PROJECT_TEMPLATES,
   resolveDepositNetworkForProject,
@@ -1267,6 +1270,22 @@ function getWinnerEffectiveWallets(projectData, notifyInfo = null) {
   return wallets;
 }
 
+// Devices across every draw, worked out again only when a draw document was
+// rewritten: the snapshots stay the same objects until then.
+let deviceOwnersMemo = { active: null, archived: null, owners: null };
+function getGlobalDeviceOwners() {
+  const active = readDataSnapshot();
+  const archived = readArchivedDrawsSnapshot();
+  if (deviceOwnersMemo.active !== active || deviceOwnersMemo.archived !== archived) {
+    deviceOwnersMemo = {
+      active,
+      archived,
+      owners: buildDeviceOwners([...(active?.draws || []), ...(archived?.draws || [])]),
+    };
+  }
+  return deviceOwnersMemo.owners;
+}
+
 function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = null, notifyInfo = null) {
   const labels = [];
   const signals = precomputedSignals || collectDrawParticipantSignals(draw, userProfiles);
@@ -1297,6 +1316,12 @@ function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = n
   // The same profile screenshot as someone else's: the whole cluster.
   const globalShotOwners = signals.globalShotOwners || buildGlobalShotOwners(userProfiles);
   if (sharesProfileShot(userProfiles, winnerId, globalShotOwners)) {
+    labels.push("Мультиаккаунт");
+  }
+
+  // One phone behind several accounts: the same device, or the same
+  // fingerprint from the same network (device-signals.js).
+  if (sharesDevice(winnerId, getGlobalDeviceOwners())) {
     labels.push("Мультиаккаунт");
   }
 
@@ -5579,6 +5604,11 @@ async function safeDeleteMessage(chatId, messageId) {
   }
 }
 
+// A secret of its own if one is set; the bot token otherwise, which changes
+// only with the bot - and with it every stored hash would stop matching.
+const signalHash = createSignalHasher(process.env.SIGNAL_SECRET || BOT_TOKEN);
+const networkTypes = createNetworkTypes(WEB_ONLY ? null : getSqliteDb(), { hash: signalHash });
+
 function hashFingerprintValue(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
@@ -5598,6 +5628,17 @@ function upsertDrawParticipantMeta(draw, userId, participationMeta = {}) {
 
   if (ipHash) {
     next.ipHash = ipHash;
+  }
+  // The device, its fingerprint and the network's type for the anti-fraud
+  // (device-signals.js): hashed with a server secret, never stored as sent.
+  const deviceHash = signalHash(participationMeta.deviceId);
+  const fpHash = signalHash(participationMeta.fingerprint);
+  const netKey = networkTypes.keyOf(participationMeta.ipAddress);
+  if (deviceHash) next.deviceHash = deviceHash;
+  if (fpHash) next.fpHash = fpHash;
+  if (netKey) {
+    next.netKey = netKey;
+    networkTypes.note(participationMeta.ipAddress);
   }
   if (ipHash) {
     next.updatedAt = new Date().toISOString();
@@ -13147,6 +13188,7 @@ registerAdminDashboard(app, {
   formatRubAmount,
   formatUsdAmount,
   listWalletCounterparties: () => walletChecks.allCounterparties(),
+  listNetworkTypes: () => networkTypes.allTypes(),
 });
 
 app.use((err, req, res, next) => {

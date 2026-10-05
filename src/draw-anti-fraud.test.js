@@ -52,3 +52,26 @@ test("everyone sharing a profile screenshot is flagged, the first one too", () =
   assert.equal(sharesProfileShot(profiles, 3, owners), false);
   assert.equal(sharesProfileShot(profiles, 4, owners), false);
 });
+
+// One phone behind several accounts: the device id alone, or the fingerprint
+// together with the network - identical iPhones share the fingerprint only.
+test("a shared device, or fingerprint and network together, flags everyone on it", () => {
+  const { buildDeviceOwners, sharesDevice } = require("./draw-anti-fraud");
+  const draws = [
+    { participantMeta: { 1: { deviceHash: "dev1" }, 2: { deviceHash: "dev1" }, 3: { fpHash: "fp", ipHash: "home" }, 4: { fpHash: "fp", ipHash: "home" }, 5: { fpHash: "fp", ipHash: "other" } } },
+  ];
+  const owners = buildDeviceOwners(draws);
+  assert.equal(sharesDevice(1, owners), true);
+  assert.equal(sharesDevice(2, owners), true);
+  assert.equal(sharesDevice(3, owners), true);
+  assert.equal(sharesDevice(4, owners), true);
+  assert.equal(sharesDevice(5, owners), false);
+  assert.equal(sharesDevice(6, owners), false);
+});
+
+test("a fingerprint shared on one network by a crowd is a public Wi-Fi", () => {
+  const { buildDeviceOwners, sharesDevice } = require("./draw-anti-fraud");
+  const meta = {};
+  for (let i = 1; i <= 6; i++) meta[i] = { fpHash: "iphone", ipHash: "mall" };
+  assert.equal(sharesDevice(1, buildDeviceOwners([{ participantMeta: meta }])), false);
+});
