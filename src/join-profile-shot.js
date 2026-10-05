@@ -15,7 +15,8 @@
 // A draw can also be "for referrals only". It turns nobody with an account
 // away: whoever says "не реф", is settled as one, or is another organiser's
 // person on the brand goes in as "не реф" after the same screenshot. What it
-// takes away is "Я не зарегистрирован" and the 20% roll. Turning the "не реф"
+// takes away is the 20% roll. No draw that asks for the screenshot offers
+// "Я не зарегистрирован". Turning the "не реф"
 // away only taught people to answer "реф": on the first such draw 17 of its 29
 // participants had earlier said "не реф" to the same organiser themselves.
 //
@@ -56,14 +57,12 @@ function settledStatusOf(joinCtx) {
 
 // The answers of the step without a screenshot ("Я не реферал", the referral
 // button, "Я не зарегистрирован"), or why one is refused. Where the screenshot
-// is asked, only "Я не зарегистрирован" is left of them: there is no profile
-// to show. A draw for referrals only is for people with an account on the
-// brand, so there it is refused whatever the step.
+// is asked none of them is left - "Я не зарегистрирован" included: such a draw
+// is for people with an account (the owner's rule, October 2026). A draw for
+// referrals only refuses "Я не зарегистрирован" whatever the step.
 function refuseRegistrationAction(draw, action, env = process.env) {
-  if (action === "unregistered") {
-    return draw?.refOnly === true
-      ? { status: 400, error: "В этом розыгрыше участвуют только зарегистрированные на проекте." }
-      : null;
+  if (action === "unregistered" && draw?.refOnly === true) {
+    return { status: 400, error: "В этом розыгрыше участвуют только зарегистрированные на проекте." };
   }
   if (isProfileShotRequired(env) && draw?.projectId) {
     return { status: 409, error: "Шаг участия обновился. Закройте и откройте участие заново." };

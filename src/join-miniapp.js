@@ -569,7 +569,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
               <p class="join-shot-lead">Вы зарегистрированы на ${projectName} по ссылке стримера?</p>
               <button type="button" class="join-btn join-btn-secondary" data-shot-status="ref"><span class="join-btn-label">Да, я реферал</span></button>
               <button type="button" class="join-btn join-btn-outline" data-shot-status="nonref"><span class="join-btn-label">Нет, я не реферал</span></button>
-              <button type="button" class="join-btn join-btn-outline" id="shotUnregisteredBtn" data-unregistered-open>Я не зарегистрирован</button>
             </div>
             <div class="join-shot-view hidden" data-shot-view="upload">
               <p class="join-shot-lead">Пришлите скриншот вашего профиля ${projectName}, где видны никнейм и ID</p>
@@ -3091,9 +3090,10 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     });
 
     // The screenshot step (join-profile-shot.js): "are you a referral", the
-    // upload, the reading, "is this your ID" and why not. A draw for referrals
-    // only differs in having no "Я не зарегистрирован". The picture is shrunk
-    // here before it is sent: a
+    // upload, the reading, "is this your ID" and why not. There is no "Я не
+    // зарегистрирован" here: a draw that asks for the screenshot is for people
+    // with an account (the owner's rule). The picture is shrunk here before it
+    // is sent: a
     // phone's screenshot is a few megabytes, a 1400 px JPEG a few hundred KB,
     // well under the 1 MB the server takes in one request.
     const shotMode = document.getElementById("registrationShotMode");
@@ -3170,7 +3170,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
     }
 
     function enterShotMode(view, options) {
-      document.getElementById("shotUnregisteredBtn")?.classList.toggle("hidden", Boolean(options && options.refOnly));
       setGoLabel(true);
       document.getElementById("registrationRefMode")?.classList.add("hidden");
       document.getElementById("registrationProjectIdMode")?.classList.add("hidden");
@@ -3411,7 +3410,6 @@ function renderJoinPage(drawId, draw, project, options = {}) {
             }
             if (id.indexOf("shot_") === 0) {
               applyPreviewBrand(null);
-              // "Для рефов" is the status question without "Я не зарегистрирован".
               enterShotMode(id === "shot_refonly" ? "status" : id.slice(5), { refOnly: id === "shot_refonly" });
               showStep("registration");
               return;

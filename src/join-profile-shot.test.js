@@ -47,13 +47,13 @@ test("the settled status is this organiser's own", () => {
   assert.equal(settledStatusOf({}), "");
 });
 
-// Without an account there is no profile to show, so "Я не зарегистрирован"
-// survives the screenshot step - everywhere but a draw for referrals only.
-test("'Я не зарегистрирован' is a way in, except in a referrals-only draw", () => {
-  assert.equal(refuseRegistrationAction(DRAW, "unregistered", ON), null);
-  const refused = refuseRegistrationAction({ ...DRAW, refOnly: true }, "unregistered", ON);
-  assert.equal(refused.status, 400);
+// The owner's rule: a draw that asks for the screenshot is for people with an
+// account - "Я не зарегистрирован" is gone from it, and refused if a stale page sends it.
+test("'Я не зарегистрирован' is refused where the screenshot is asked", () => {
+  assert.equal(refuseRegistrationAction(DRAW, "unregistered", ON).status, 409);
+  assert.equal(refuseRegistrationAction({ ...DRAW, refOnly: true }, "unregistered", ON).status, 400);
   assert.equal(refuseRegistrationAction({ ...DRAW, refOnly: true }, "unregistered", { JOIN_PROFILE_SHOT: "false" }).status, 400);
+  assert.equal(refuseRegistrationAction(DRAW, "unregistered", { JOIN_PROFILE_SHOT: "false" }), null);
 });
 
 // A page opened before the step came in must not be a way around it.
