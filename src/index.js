@@ -105,6 +105,7 @@ const { createWalletInspector } = require("./wallet-inspect");
 const { createWalletCheckStore } = require("./wallet-check-store");
 const { createWalletChecker } = require("./wallet-checker");
 const { describeWalletVerdict, describePastPayoutFlag } = require("./wallet-kind");
+const { summarizeCounterparties } = require("./link-graph");
 const {
   BRAND_PROJECT_TEMPLATES,
   resolveDepositNetworkForProject,
@@ -5846,7 +5847,7 @@ function findAwaitingWinnerDepositAddress(userId) {
 async function inspectDepositAddressForStep(address, networkId) {
   try {
     const result = await walletInspector.inspect(address, networkId);
-    walletChecks.saveCheck(address, result.network, result.verdict);
+    walletChecks.saveCheck(address, result.network, result.verdict, null, summarizeCounterparties(result.transfers, address));
     return result.verdict;
   } catch (error) {
     walletChecks.saveCheck(address, networkId, null, error.message);
@@ -13145,6 +13146,7 @@ registerAdminDashboard(app, {
   listProjectWalletAddresses,
   formatRubAmount,
   formatUsdAmount,
+  listWalletCounterparties: () => walletChecks.allCounterparties(),
 });
 
 app.use((err, req, res, next) => {

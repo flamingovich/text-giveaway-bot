@@ -76,6 +76,7 @@ const NAV_GROUPS = [
     label: "Люди",
     items: [
       { id: "users", href: "/admin/users", label: "Пользователи", icon: "users", tone: "green" },
+      { id: "links", href: "/admin/links", label: "Связи", icon: "link", tone: "purple" },
       { id: "support", href: "/admin/support", label: "Поддержка", icon: "support", tone: "teal" },
     ],
   },

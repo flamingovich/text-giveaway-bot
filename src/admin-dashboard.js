@@ -18,6 +18,8 @@ const SYS = require("./admin-system");
 const REFERRALS = require("./admin-referrals");
 const PROJECT_STATS = require("./admin-projects");
 const FUNNEL = require("./admin-funnel");
+const LINKS = require("./admin-links");
+const { normalizeProjectAccountId } = require("./project-account-id");
 const {
   renderLoginPage,
   renderAdminNotFound,
@@ -27,6 +29,8 @@ const {
   renderUserCardPage,
   renderProjectsPage,
   renderReferralsPage,
+  renderLinksPage,
+  renderLinkClusterPage,
   renderSystemPage,
   renderSupportListPage,
   renderSupportChatPage,
@@ -767,6 +771,49 @@ function registerAdminDashboard(app, deps) {
     } catch (error) {
       console.error("[admin] GET /admin/referrals:", error);
       res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать статистику приглашений."));
+    }
+  });
+
+  // The clusters are rebuilt from every draw and profile: kept five minutes,
+  // the page is opened rarely and the picture does not change by the minute.
+  let linksCache = null;
+  function getLinksView() {
+    if (linksCache && Date.now() - linksCache.at < 5 * 60 * 1000) {
+      return linksCache.view;
+    }
+    const view = LINKS.buildLinksView({
+      draws: collectAllDraws(deps),
+      userProfiles: (deps.readUserProjectProfilesSnapshot || deps.readUserProjectProfiles)(),
+      projects: deps.readProjects().projects || [],
+      counterparties: deps.listWalletCounterparties ? deps.listWalletCounterparties() : [],
+      normalizeAccountId: (value) => normalizeProjectAccountId(value) || "",
+    });
+    linksCache = { at: Date.now(), view };
+    return view;
+  }
+
+  app.get("/admin/links", requireAuth, (_req, res) => {
+    try {
+      res.type("html").send(renderLinksPage(getLinksView()));
+    } catch (error) {
+      console.error("[admin] GET /admin/links:", error);
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать связи."));
+    }
+  });
+
+  // Any member's id opens their cluster.
+  app.get("/admin/links/:userId", requireAuth, (req, res) => {
+    try {
+      const userId = String(req.params.userId || "");
+      const cluster = getLinksView().clusters.find((item) => item.members.some((m) => m.identity.userId === userId));
+      if (!cluster) {
+        res.status(404).type("html").send(renderAdminNotFound("Этот человек ни с кем не связан."));
+        return;
+      }
+      res.type("html").send(renderLinkClusterPage(cluster));
+    } catch (error) {
+      console.error("[admin] GET /admin/links/:userId:", error);
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать кластер."));
     }
   });
 

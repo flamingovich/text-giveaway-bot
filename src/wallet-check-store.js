@@ -26,6 +26,8 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
       savePayoutOutcome() {},
       postponePayout() {},
       flaggedUsers: () => new Map(),
+      allCounterparties: () => [],
+      missingCounterparties: () => [],
       revision: () => 0,
     };
   }
@@ -58,12 +60,17 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
     CREATE INDEX IF NOT EXISTS wallet_payouts_due ON wallet_payouts (next_check_at);
     CREATE INDEX IF NOT EXISTS wallet_payouts_user ON wallet_payouts (user_id);
   `);
+  // Added after the first release: who the address exchanged money with, for
+  // the links between people (link-graph.js).
+  if (!db.prepare("PRAGMA table_info(wallet_checks)").all().some((c) => c.name === "counterparties")) {
+    db.exec("ALTER TABLE wallet_checks ADD COLUMN counterparties TEXT");
+  }
 
   // A failed check keeps the verdict it had: the label must not go blank
   // because a service did not answer once.
   const upsertCheck = db.prepare(`
-    INSERT INTO wallet_checks (address, network, kind, platform, reject, reason, error, checked_at, changed_at)
-    VALUES (@address, @network, @kind, @platform, @reject, @reason, @error, @checkedAt, @checkedAt)
+    INSERT INTO wallet_checks (address, network, kind, platform, reject, reason, error, checked_at, changed_at, counterparties)
+    VALUES (@address, @network, @kind, @platform, @reject, @reason, @error, @checkedAt, @checkedAt, @counterparties)
     ON CONFLICT (address) DO UPDATE SET
       network = COALESCE(excluded.network, network),
       kind = COALESCE(excluded.kind, kind),
@@ -72,7 +79,8 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
       reason = COALESCE(excluded.reason, reason),
       error = excluded.error,
       checked_at = excluded.checked_at,
-      changed_at = CASE WHEN @changed THEN excluded.checked_at ELSE changed_at END
+      changed_at = CASE WHEN @changed THEN excluded.checked_at ELSE changed_at END,
+      counterparties = COALESCE(excluded.counterparties, counterparties)
   `);
   const insertPayout = db.prepare(`
     INSERT INTO wallet_payouts (draw_id, user_id, address, network, paid_at, next_check_at, updated_at)
@@ -86,6 +94,10 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
     "UPDATE wallet_payouts SET outcome = ?, outcome_platform = ?, checks = ?, next_check_at = ?, updated_at = CASE WHEN outcome IS ? THEN updated_at ELSE ? END WHERE draw_id = ? AND user_id = ?",
   );
   const selectCheck = db.prepare("SELECT * FROM wallet_checks WHERE address = ?");
+  const selectMissingCounterparties = db.prepare(
+    "SELECT address, network FROM wallet_checks WHERE counterparties IS NULL AND kind IS NOT NULL ORDER BY checked_at LIMIT ?",
+  );
+  const selectCounterparties = db.prepare("SELECT address, counterparties FROM wallet_checks WHERE counterparties IS NOT NULL");
   const selectUserFlag = db.prepare(
     "SELECT user_id AS userId, draw_id AS drawId, outcome, outcome_platform AS platform FROM wallet_payouts WHERE user_id = ? AND outcome IN ('exchange','personal') ORDER BY paid_at DESC LIMIT 1",
   );
@@ -97,7 +109,7 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
   // What the owner sees of a row: only a change in it moves the revision.
   const shown = (row) => (row ? JSON.stringify([row.kind, row.platform, Boolean(row.reject), row.kind ? null : Boolean(row.error)]) : "");
 
-  function saveCheck(address, network, verdict, error = null) {
+  function saveCheck(address, network, verdict, error = null, counterparties = null) {
     const before = selectCheck.get(address);
     const after = before
       ? verdict
@@ -114,6 +126,7 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
       reason: verdict ? verdict.reason || null : null,
       error: error ? String(error).slice(0, 200) : null,
       checkedAt: now(),
+      counterparties: counterparties ? JSON.stringify(counterparties) : null,
     });
   }
 
@@ -202,12 +215,29 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
     return result;
   }
 
+  // Addresses checked before counterparties were kept: filled in when the
+  // background check has a free turn.
+  function missingCounterparties(limit = 2) {
+    return selectMissingCounterparties.all(limit);
+  }
+
+  /** [{ address, links: [{ address, in, out }] }] for every address with any. */
+  function allCounterparties() {
+    return selectCounterparties.all().map((row) => {
+      try {
+        return { address: row.address, links: JSON.parse(row.counterparties) };
+      } catch {
+        return { address: row.address, links: [] };
+      }
+    });
+  }
+
   // Changes whenever a label could: the live panel compares it to refresh.
   function revision() {
     return selectRevision.get()?.at || 0;
   }
 
-  return { saveCheck, getChecks, getCheck, userFlag, checkedAt, upsertPayout, duePayouts, savePayoutOutcome, postponePayout, flaggedUsers, revision };
+  return { saveCheck, getChecks, getCheck, userFlag, checkedAt, upsertPayout, duePayouts, savePayoutOutcome, postponePayout, flaggedUsers, allCounterparties, missingCounterparties, revision };
 }
 
 module.exports = { createWalletCheckStore, RECHECK_AFTER_PAY_MS };

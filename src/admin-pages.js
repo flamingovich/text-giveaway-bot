@@ -8,6 +8,7 @@ const F = require("./admin-format");
 const SYS = require("./admin-system");
 const FUNNEL = require("./admin-funnel");
 const { getChatTranscript, formatSupportChatName } = require("./support-transcripts");
+const LINKS = require("./admin-links");
 
 const { escapeHtml, icon } = UI;
 
@@ -975,6 +976,107 @@ function renderReferralsPage(stats) {
   });
 }
 
+// ── links ──────────────────────────────────────────────────────────────────
+
+const LINK_LEGEND = `<div class="lg-chips" style="margin-bottom:6px">
+  <span class="lg-chip lg-wallet">${icon("wallet")}кошелёк, ID проекта, скрин — обнуляют приз</span>
+  <span class="lg-chip lg-ip">${icon("pulse")}одна сеть — только показ</span>
+  <span class="lg-chip lg-chain">${icon("link")}блокчейн — только показ</span>
+  <span class="lg-chip lg-referral">${icon("gift")}приглашение</span>
+</div>`;
+
+function renderLinksPage(view) {
+  const t = view.totals;
+  const faces = (members) =>
+    `<div class="lg-faces">${members
+      .slice(0, 5)
+      .map((m) => UI.avatar(m.identity, "sm"))
+      .join("")}</div>`;
+  const rows = view.clusters
+    .map((cluster) => {
+      const names = cluster.members
+        .slice(0, 3)
+        .map((m) => m.identity.title)
+        .join(", ");
+      const more = cluster.members.length > 3 ? ` и ещё ${cluster.members.length - 3}` : "";
+      return `<a class="row" href="/admin/links/${encodeURIComponent(cluster.id)}" style="--inset:20px">
+        ${faces(cluster.members)}
+        <div class="row-main">
+          <div class="row-title">${escapeHtml(names + more)}</div>
+          <div class="lg-chips" style="margin-top:5px">${LINKS.renderKindChips(cluster.kinds, icon)}</div>
+        </div>
+        <div class="row-value">${count(cluster.members.length)}<small>${count(cluster.wins)} поб. · ${count(cluster.paid)} выпл.</small></div>
+      </a>`;
+    })
+    .join("");
+  const body = `<div class="stack">
+    <div class="grid cols-4">
+      ${UI.stat({ label: "Кластеров", value: t.clusters, iconName: "link", tone: "purple", i: 0 })}
+      ${UI.stat({ label: "Людей в них", value: t.people, iconName: "users", tone: "blue", i: 1 })}
+      ${UI.stat({ label: "Обнуляют приз", value: t.strong, note: "общий кошелёк, ID или скрин", iconName: "shield", tone: "red", i: 2 })}
+      ${UI.stat({ label: "Выплат в кластерах", value: t.paidInClusters, note: `${count(t.withWins)} кластеров с победами`, iconName: "wallet", tone: "orange", i: 3 })}
+    </div>
+    ${UI.card({
+      title: "Кластеры",
+      subtitle: "сначала те, что обнуляют приз, и те, кому уже платили",
+      flush: true,
+      i: 4,
+      body: `<div style="padding:14px 20px 4px">${LINK_LEGEND}</div>${rows ? `<div class="rows">${rows}</div>` : UI.blank("Пусто", "Связанных людей не нашлось.", "link")}`,
+    })}
+  </div>`;
+  return shell({
+    title: "Связи",
+    subtitle: `${count(t.people)} ${F.plural(t.people, "человек", "человека", "человек")} в ${count(t.clusters)} ${F.plural(t.clusters, "кластере", "кластерах", "кластерах")}`,
+    active: "links",
+    styles: LINKS.LINK_GRAPH_STYLES,
+    body,
+  });
+}
+
+function renderLinkClusterPage(cluster) {
+  const graph =
+    cluster.members.length + cluster.evidence.length <= 60
+      ? LINKS.renderClusterGraph(cluster, { icon, avatarStyle: UI.avatarStyle })
+      : UI.blank("Слишком большой", "Граф такого размера не читается — ниже список.", "link");
+  const evidenceRows = cluster.evidence
+    .map((entry) => {
+      const text = LINKS.describeEvidence(entry);
+      const names = [...entry.users]
+        .map((id) => cluster.members.find((m) => m.identity.userId === id)?.identity.title || id)
+        .join(", ");
+      return `<div class="row" style="--inset:20px">
+        <div class="row-main">
+          <div class="lg-chips"><span class="lg-chip lg-${entry.kind}">${icon((LINKS.KIND_INFO[entry.kind] || {}).icon || "link")}${escapeHtml(text.title)}</span></div>
+          <div class="row-sub" style="margin-top:4px" title="${escapeHtml(text.full)}">${escapeHtml(text.detail ? `${text.detail} · ` : "")}${escapeHtml(names)}</div>
+        </div>
+      </div>`;
+    })
+    .join("");
+  const memberRows = cluster.members
+    .map(
+      (m) => `<a class="row" href="/admin/users/${encodeURIComponent(m.identity.userId)}" style="--inset:68px">
+        ${UI.avatar(m.identity)}
+        <div class="row-main"><div class="row-title">${escapeHtml(m.identity.title)}</div><div class="row-sub">${escapeHtml(m.identity.handle || `ID ${m.identity.userId}`)}</div></div>
+        <div class="row-value">${count(m.wins)}<small>${count(m.paid)} выпл.</small></div>
+      </a>`,
+    )
+    .join("");
+  const body = `<div class="stack">
+    ${UI.card({ title: "Граф связей", subtitle: "лица — люди, плитки — то, что у них общее; красная обводка — уже получал выплату", i: 0, body: `${LINK_LEGEND}${graph}` })}
+    <div class="grid cols-2" style="align-items:start">
+      ${UI.card({ title: "Люди", flush: true, i: 1, body: `<div class="rows">${memberRows}</div>` })}
+      ${UI.card({ title: "Чем связаны", flush: true, i: 2, body: `<div class="rows">${evidenceRows}</div>` })}
+    </div>
+  </div>`;
+  return shell({
+    title: "Кластер",
+    subtitle: `${count(cluster.members.length)} ${F.plural(cluster.members.length, "человек", "человека", "человек")} · ${cluster.strong ? "приз обнуляется" : "только показ"}`,
+    active: "links",
+    styles: LINKS.LINK_GRAPH_STYLES,
+    body,
+  });
+}
+
 // ── system ─────────────────────────────────────────────────────────────────
 
 function renderSystemPage(state) {
@@ -1244,6 +1346,8 @@ module.exports = {
   renderUserCardPage,
   renderProjectsPage,
   renderReferralsPage,
+  renderLinksPage,
+  renderLinkClusterPage,
   renderSystemPage,
   renderSupportListPage,
   renderSupportChatPage,

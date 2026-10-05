@@ -3,6 +3,7 @@
 // see a burst. Runs on its own timer, never inside the scheduler's tick: a slow
 // explorer must not hold up finishing draws.
 const { judgePayoutOutcome } = require("./wallet-kind");
+const { summarizeCounterparties } = require("./link-graph");
 
 const DEFAULT_STALE_MS = 12 * 3600e3;
 const ERROR_RETRY_MS = 30 * 60e3;
@@ -31,7 +32,7 @@ function createWalletChecker({
       used += 1;
       try {
         const result = await inspector.inspect(row.address, row.network, { deadlineMs: 20000 });
-        store.saveCheck(row.address, result.network, result.verdict);
+        store.saveCheck(row.address, result.network, result.verdict, null, summarizeCounterparties(result.transfers, row.address));
         const { outcome, platform } = judgePayoutOutcome({
           address: row.address,
           transfers: result.transfers,
@@ -63,12 +64,25 @@ function createWalletChecker({
     for (const item of batch) {
       try {
         const result = await inspector.inspect(item.address, item.network, { deadlineMs: 20000 });
-        store.saveCheck(item.address, result.network, result.verdict);
+        store.saveCheck(item.address, result.network, result.verdict, null, summarizeCounterparties(result.transfers, item.address));
       } catch (error) {
         store.saveCheck(item.address, item.network, null, error.message);
       }
     }
     return batch.length;
+  }
+
+  async function fillCounterparties(budget) {
+    if (budget <= 0 || !store.missingCounterparties) return;
+    for (const row of store.missingCounterparties(budget)) {
+      try {
+        const result = await inspector.inspect(row.address, row.network, { deadlineMs: 20000 });
+        store.saveCheck(row.address, result.network, result.verdict, null, summarizeCounterparties(result.transfers, row.address));
+      } catch (error) {
+        // The verdict stays; the newer stamp sends the row to the back of the line.
+        store.saveCheck(row.address, row.network, null, error.message);
+      }
+    }
   }
 
   async function tick() {
@@ -81,7 +95,8 @@ function createWalletChecker({
       // The queue first: its labels are what the owner looks at before paying;
       // the follow-up of old prizes takes what is left of the tick.
       const used = await labelQueue(perTick);
-      await checkPayouts(perTick - used);
+      const usedPayouts = await checkPayouts(perTick - used);
+      await fillCounterparties(perTick - used - usedPayouts);
     } catch (error) {
       logger.error(`[wallet] проверка кошельков: ${error.message}`);
     } finally {
