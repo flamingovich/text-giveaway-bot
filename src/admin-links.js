@@ -4,6 +4,8 @@
 // layout worked out on the server so the page has no script to run.
 const { collectLinkEvidence, buildClusters, STRONG } = require("./link-graph");
 const { identityOf } = require("./admin-format");
+const { scriptJson } = require("./script-json");
+const { linkGraphClient } = require("./admin-link-graph-client");
 
 const KIND_INFO = {
   wallet: { title: "Общий кошелёк", tone: "red", icon: "wallet" },
@@ -308,6 +310,115 @@ function renderClusterGraph(cluster, { icon, avatarStyle, width = 760, height = 
   </svg>`;
 }
 
+const GLYPHS = { wallet: "₮", account: "ID", shot: "▣", device: "▯", fpnet: "≈", ip: "IP", chain: "↔" };
+
+// What a tile means, in a sentence for the side panel.
+function explainEvidence(entry) {
+  const n = entry.users.size;
+  switch (entry.kind) {
+    case "wallet":
+      return `Один кошелёк указали ${n} аккаунта. Адрес пополнения у каждого аккаунта на проекте свой — у них один хозяин. Приз обнуляется.`;
+    case "account":
+      return `Один ID проекта у ${n} аккаунтов. Одного аккаунта на проекте у двух людей быть не может. Приз обнуляется.`;
+    case "shot":
+      return `Один и тот же файл скриншота профиля от ${n} аккаунтов. Приз обнуляется.`;
+    case "device":
+      return "Один телефон: одинаковый ID устройства в Telegram. Приз обнуляется.";
+    case "fpnet":
+      return "Одинаковый отпечаток телефона из одной и той же сети. Приз обнуляется.";
+    case "ip":
+      return `Одна сеть в ${entry.meta?.draws || 2} розыгрышах вместе. Бывает у соседей и семьи — только наблюдение, приз не режет.`;
+    case "chain":
+      return entry.meta?.kind === "transfer"
+        ? "Деньги ходили между адресами этих людей. Только наблюдение."
+        : "Один небольшой кошелёк в блокчейне связан с адресами нескольких наших людей. Только наблюдение.";
+    case "referral":
+      return "Приглашение по реферальной ссылке.";
+    default:
+      return "";
+  }
+}
+
+/** The live graph's data: positions from the server's layout, every text ready. */
+function buildGraphData(cluster, { avatarColor, width = 960, height = 560 }) {
+  const persons = cluster.members.map((m) => ({ id: `u:${m.identity.userId}`, member: m }));
+  const tiles = cluster.evidence.filter((e) => e.kind !== "referral").map((e) => ({ id: `e:${e.key}`, entry: e }));
+  const edges = [];
+  for (const tile of tiles) for (const userId of tile.entry.users) edges.push({ source: `u:${userId}`, target: tile.id, kind: tile.entry.kind });
+  for (const entry of cluster.evidence.filter((e) => e.kind === "referral")) {
+    edges.push({ source: `u:${entry.meta.from}`, target: `u:${entry.meta.to}`, kind: "referral" });
+  }
+  const pos = layoutGraph([...persons.map((p) => p.id), ...tiles.map((t) => t.id)], edges.map((e) => [e.source, e.target]), { width, height });
+  const nodes = [
+    ...persons.map(({ id, member }) => ({
+      id,
+      type: "person",
+      userId: member.identity.userId,
+      title: member.identity.title,
+      handle: member.identity.handle || "",
+      initials: member.identity.initials || "?",
+      avatarUrl: member.identity.avatarUrl || "",
+      color: avatarColor(member.identity.userId || member.identity.title),
+      wins: member.wins,
+      paid: member.paid,
+      href: `/admin/users/${encodeURIComponent(member.identity.userId)}`,
+      x: pos.get(id).x,
+      y: pos.get(id).y,
+    })),
+    ...tiles.map(({ id, entry }) => {
+      const text = describeEvidence(entry);
+      return {
+        id,
+        type: "evidence",
+        kind: entry.kind,
+        kindTitle: (KIND_INFO[entry.kind] || {}).title || entry.kind,
+        title: text.title,
+        detail: text.detail,
+        full: text.full,
+        copy: ["wallet", "chain"].includes(entry.kind) && entry.meta?.kind !== "transfer" ? entry.label : entry.kind === "account" ? String(entry.label).split(" ").slice(1).join(" ") : "",
+        explain: explainEvidence(entry),
+        people: entry.users.size,
+        glyph: GLYPHS[entry.kind] || "•",
+        x: pos.get(id).x,
+        y: pos.get(id).y,
+      };
+    }),
+  ];
+  return { width, height, nodes, edges };
+}
+
+/** The live graph: the static drawing underneath, data, and the script that takes over. */
+function renderLiveGraph(cluster, { icon, avatarStyle }) {
+  const avatarColor = (seed) => (/--ava-b:([^;]+)/.exec(avatarStyle(seed)) || [])[1] || "#8E8E93";
+  const data = buildGraphData(cluster, { avatarColor });
+  const kinds = [...new Set(cluster.evidence.map((e) => e.kind))].sort((a, b) => Number(STRONG.has(b)) - Number(STRONG.has(a)));
+  const filters = kinds
+    .map((kind) => {
+      const info = KIND_INFO[kind] || { title: kind, icon: "link" };
+      return `<button type="button" class="lg-chip lg-${kind} lg-filter" data-lg-kind="${esc(kind)}" aria-pressed="true">${icon(info.icon)}${esc(info.title)}</button>`;
+    })
+    .join("");
+  return `<div class="lg-root" data-lg-root>
+    <div class="lg-toolbar">
+      <div class="lg-chips" data-lg-filters>${filters}</div>
+      <div class="lg-tools">
+        <button type="button" class="lg-tool" data-lg-act="out" aria-label="Отдалить">−</button>
+        <button type="button" class="lg-tool" data-lg-act="in" aria-label="Приблизить">+</button>
+        <button type="button" class="lg-tool lg-tool-text" data-lg-act="fit">Вписать</button>
+        <button type="button" class="lg-tool lg-tool-text" data-lg-act="reset">Сбросить</button>
+      </div>
+    </div>
+    <div class="lg-canvas">
+      <div class="lg-stage" data-lg-stage>${renderClusterGraph(cluster, { icon, avatarStyle, width: data.width, height: data.height })}</div>
+      <div class="lg-tip" data-lg-tip hidden></div>
+      <aside class="lg-side" data-lg-side hidden></aside>
+    </div>
+    <div class="lg-hint">Тащите кружки и фон · Ctrl/⌘ + колесо или щипок — масштаб · наведение — связи · клик — подробности · двойной клик — открепить</div>
+    <script type="application/json" data-lg-json>${scriptJson(data)}</script>
+    <script>(${linkGraphClient.toString()})(document.currentScript.closest("[data-lg-root]"), JSON.parse(document.currentScript.previousElementSibling.textContent));</script>
+  </div>`;
+}
+
 // Styles of the graph, on top of the admin's tokens.
 const LINK_GRAPH_STYLES = `
 .lg { width: 100%; height: auto; display: block; }
@@ -336,7 +447,110 @@ const LINK_GRAPH_STYLES = `
 .lg-faces { display: flex; }
 .lg-faces > * { margin-left: -8px; box-shadow: 0 0 0 2px var(--bg-elevated); border-radius: 50%; }
 .lg-faces > *:first-child { margin-left: 0; }
+
+.lg-root { position: relative; }
+.lg-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.lg-tools { display: flex; gap: 6px; }
+.lg-tool { min-width: 34px; height: 32px; padding: 0 10px; border: 0; border-radius: 10px; background: var(--fill); color: var(--label); font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }
+.lg-tool-text { font-size: 13px; }
+.lg-tool:hover { background: var(--fill-strong); }
+.lg-filter { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; }
+.lg-filter.is-off { opacity: .4; text-decoration: line-through; }
+.lg-canvas { position: relative; border-radius: 16px; background:
+  radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--label) 9%, transparent) 1px, transparent 0) 0 0 / 22px 22px, var(--fill);
+  overflow: hidden; touch-action: none; }
+.lg-stage { height: min(620px, 72vh); min-height: 380px; }
+.lg-stage .lg { width: 100%; height: 100%; }
+.lg-live { cursor: grab; user-select: none; -webkit-user-select: none; }
+.lg-live.is-dragging { cursor: grabbing; }
+.lg-live .lg-person, .lg-live .lg-tile { cursor: pointer; transition: opacity .18s; }
+.lg-live .lg-edge { transition: opacity .18s, stroke-width .18s; }
+.lg-live.has-focus .lg-person:not(.is-lit), .lg-live.has-focus .lg-tile:not(.is-lit) { opacity: .18; }
+.lg-live.has-focus .lg-edge { opacity: .06; }
+.lg-live.has-focus .lg-edge.is-lit { opacity: 1; stroke-width: 2.6; }
+.lg-live .is-selected .lg-ring { stroke: var(--tint); stroke-width: 3; }
+.lg-live .lg-tile.is-selected rect { stroke-width: 2.6; }
+.lg-live .is-pinned .lg-ring { stroke-dasharray: 3 3; }
+.lg-live.is-far .lg-tile-label, .lg-live.is-far .lg-sub { display: none; }
+.lg-tile-glyph { font-size: 11px; font-weight: 800; fill: var(--kind); }
+.lg-tip { position: absolute; left: 0; top: 0; z-index: 3; max-width: 280px; padding: 10px 12px; border-radius: 12px; pointer-events: none;
+  background: var(--bg-elevated); color: var(--label); box-shadow: 0 10px 30px rgba(0,0,0,.25), 0 0 0 .5px var(--separator); font-size: 12.5px; }
+.lg-tip-title { font-weight: 700; font-size: 13.5px; margin-bottom: 2px; }
+.lg-tip-sub { color: var(--label-2); overflow-wrap: anywhere; }
+.lg-tip-list { margin: 6px 0 0; padding-left: 16px; color: var(--label); }
+.lg-tip-list li { margin: 1px 0; }
+.lg-tip-more { color: var(--label-3); list-style: none; margin-left: -16px; }
+.lg-side { position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 2; width: min(300px, calc(100% - 24px)); overflow: auto; padding: 14px;
+  border-radius: 14px; background: var(--bg-elevated); box-shadow: 0 12px 40px rgba(0,0,0,.28), 0 0 0 .5px var(--separator); }
+.lg-side-head { position: relative; padding-right: 28px; }
+.lg-side-kind { color: var(--label-2); font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.lg-side-title { font-size: 17px; font-weight: 700; margin: 2px 0 4px; overflow-wrap: anywhere; }
+.lg-side-close { position: absolute; top: -4px; right: -4px; width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--fill); color: var(--label); font-size: 18px; cursor: pointer; }
+.lg-side-sub { color: var(--label-2); font-size: 13px; margin: 4px 0 10px; overflow-wrap: anywhere; }
+.lg-side-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 6px 0 12px; }
+.lg-side-stat { padding: 8px; border-radius: 10px; background: var(--fill); text-align: center; }
+.lg-side-stat b { display: block; font-size: 17px; }
+.lg-side-stat span { color: var(--label-2); font-size: 11.5px; }
+.lg-side-btn { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 14px; margin: 0 6px 10px 0; border: 0; border-radius: 10px;
+  background: var(--tint); color: #fff; font: inherit; font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer; }
+.lg-side-copy { background: var(--fill); color: var(--label); }
+.lg-side-code { display: block; padding: 8px 10px; margin: 6px 0 8px; border-radius: 10px; background: var(--fill); font-size: 12px; overflow-wrap: anywhere; }
+.lg-side-section { margin: 12px 0 6px; color: var(--label-2); font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.lg-side-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.lg-side-list button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 9px; background: var(--fill); color: var(--label); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.lg-side-list button:hover { background: var(--fill-strong); }
+.lg-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--kind, var(--gray)); }
+.lg-side-list .lg-k-wallet, .lg-side-list .lg-k-account, .lg-side-list .lg-k-shot, .lg-side-list .lg-k-device, .lg-side-list .lg-k-fpnet { --kind: var(--red); }
+.lg-side-list .lg-k-ip { --kind: var(--blue); }
+.lg-side-list .lg-k-chain { --kind: var(--orange); }
+.lg-hint { margin-top: 8px; color: var(--label-3); font-size: 12px; }
+.lg-verdict { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; }
+.lg-verdict-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; font-weight: 700; font-size: 13px; }
+.lg-verdict-badge.is-strong { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+.lg-verdict-badge.is-watch { color: var(--label-2); background: var(--fill); }
+.lg-verdict-text { flex: 1 1 320px; font-size: 14px; color: var(--label); }
+.lg-verdict-stats { display: flex; gap: 18px; }
+.lg-verdict-stats div { text-align: center; }
+.lg-verdict-stats b { display: block; font-size: 20px; }
+.lg-verdict-stats span { color: var(--label-2); font-size: 12px; }
+.lg-search { box-sizing: border-box; width: 100%; height: 38px; padding: 0 12px; border: 0; border-radius: 10px; background: var(--fill); color: var(--label); font: inherit; font-size: 14px; }
+.lg-reason { color: var(--label-2); font-size: 12.5px; margin-top: 3px; }
+[data-lg-filter] .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+@media (max-width: 720px) {
+  .lg-side { top: auto; left: 12px; width: auto; max-height: 55%; }
+  .lg-row .lg-verdict-badge { display: none; }
+  .lg-row .lg-faces > *:nth-child(n+3) { display: none; }
+  .lg-row .row-main { min-width: 0; }
+}
 `;
+
+// The cluster in one line: its strongest pieces of evidence, in words.
+function summarizeCluster(cluster) {
+  const order = ["account", "wallet", "shot", "device", "fpnet", "chain", "ip", "referral"];
+  const parts = [];
+  for (const kind of order) {
+    const items = cluster.evidence.filter((e) => e.kind === kind);
+    if (!items.length) continue;
+    const biggest = Math.max(...items.map((e) => e.users.size));
+    const full = (KIND_INFO[kind] || { title: kind }).title;
+    // Only the first letter goes small: "ID" stays "ID".
+    const title = full.charAt(0).toLowerCase() + full.slice(1);
+    parts.push(kind === "referral" ? `${title} ×${items.length}` : `${title}${biggest > 2 ? ` у ${biggest}` : ""}${items.length > 1 ? ` (×${items.length})` : ""}`);
+  }
+  const text = parts.join(" · ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// What the search box on the list looks through.
+function searchTextOf(cluster) {
+  return [
+    ...cluster.members.flatMap((m) => [m.identity.title, m.identity.handle, m.identity.userId]),
+    ...cluster.evidence.map((e) => e.label),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
 
 function renderKindChips(kinds, icon) {
   return Object.entries(kinds)
@@ -354,6 +568,11 @@ module.exports = {
   buildLinksView,
   layoutGraph,
   renderClusterGraph,
+  renderLiveGraph,
+  buildGraphData,
+  explainEvidence,
+  summarizeCluster,
+  searchTextOf,
   renderKindChips,
   LINK_GRAPH_STYLES,
 };

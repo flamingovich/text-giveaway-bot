@@ -59,3 +59,14 @@ test("names in the graph are escaped", () => {
   const svg = renderClusterGraph(view.clusters[0], { icon: UI.icon, avatarStyle: UI.avatarStyle });
   assert.doesNotMatch(svg, /<script>x/);
 });
+
+// The live graph is a function put into the page as text: it must parse on
+// its own, and the page must carry it with its data.
+test("the live graph's script and data are on the cluster page", () => {
+  const { linkGraphClient } = require("./admin-link-graph-client");
+  assert.doesNotThrow(() => new Function(`return (${linkGraphClient.toString()})`));
+  const page = renderLinkClusterPage(sampleView().clusters[0]);
+  assert.match(page, /data-lg-json/);
+  assert.match(page, /function linkGraphClient/);
+  assert.match(page, /data-lg-kind="wallet"/);
+});

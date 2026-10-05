@@ -999,16 +999,23 @@ function renderLinksPage(view) {
         .map((m) => m.identity.title)
         .join(", ");
       const more = cluster.members.length > 3 ? ` и ещё ${cluster.members.length - 3}` : "";
-      return `<a class="row" href="/admin/links/${encodeURIComponent(cluster.id)}" style="--inset:20px">
+      return `<a class="row lg-row" href="/admin/links/${encodeURIComponent(cluster.id)}" style="--inset:20px" data-search="${escapeHtml(LINKS.searchTextOf(cluster))}" data-strong="${cluster.strong ? 1 : 0}" data-paid="${cluster.paid}">
         ${faces(cluster.members)}
         <div class="row-main">
           <div class="row-title">${escapeHtml(names + more)}</div>
-          <div class="lg-chips" style="margin-top:5px">${LINKS.renderKindChips(cluster.kinds, icon)}</div>
+          <div class="lg-reason">${escapeHtml(LINKS.summarizeCluster(cluster))}</div>
         </div>
+        <span class="lg-verdict-badge ${cluster.strong ? "is-strong" : "is-watch"}" style="font-size:11.5px;padding:4px 9px">${cluster.strong ? "обнуляет приз" : "наблюдение"}</span>
         <div class="row-value">${count(cluster.members.length)}<small>${count(cluster.wins)} поб. · ${count(cluster.paid)} выпл.</small></div>
       </a>`;
     })
     .join("");
+  const filters = UI.segmented([
+    { label: "Все", count: count(t.clusters), href: "#all", active: true },
+    { label: "Обнуляют приз", count: count(t.strong), href: "#strong" },
+    { label: "Наблюдение", count: count(t.clusters - t.strong), href: "#watch" },
+    { label: "С выплатами", count: count(view.clusters.filter((c) => c.paid > 0).length), href: "#paid" },
+  ]);
   const body = `<div class="stack">
     <div class="grid cols-4">
       ${UI.stat({ label: "Кластеров", value: t.clusters, iconName: "link", tone: "purple", i: 0 })}
@@ -1021,22 +1028,34 @@ function renderLinksPage(view) {
       subtitle: "сначала те, что обнуляют приз, и те, кому уже платили",
       flush: true,
       i: 4,
-      body: `<div style="padding:14px 20px 4px">${LINK_LEGEND}</div>${rows ? `<div class="rows">${rows}</div>` : UI.blank("Пусто", "Связанных людей не нашлось.", "link")}`,
+      body: `<div style="padding:14px 20px 10px;display:grid;gap:10px">
+          <input class="lg-search" type="search" placeholder="Имя, @ник, ID, кошелёк или ID проекта" data-lg-search />
+          <div data-lg-filter>${filters}</div>
+          ${LINK_LEGEND}
+        </div>${rows ? `<div class="rows" data-lg-rows>${rows}</div><div class="lg-empty" data-lg-empty hidden>${UI.blank("Ничего не нашлось", "Попробуйте другое имя или адрес.", "search")}</div>` : UI.blank("Пусто", "Связанных людей не нашлось.", "link")}`,
     })}
   </div>`;
+  // Search and the filter work on the page: the list is all there already.
+  const script = `<script>(function(){
+    var rows=[].slice.call(document.querySelectorAll(".lg-row"));var box=document.querySelector("[data-lg-search]");var empty=document.querySelector("[data-lg-empty]");var mode="all";
+    function apply(){var q=(box&&box.value||"").trim().toLowerCase();var shown=0;rows.forEach(function(r){var ok=(!q||r.getAttribute("data-search").indexOf(q)!==-1)&&(mode==="all"||(mode==="strong"&&r.getAttribute("data-strong")==="1")||(mode==="watch"&&r.getAttribute("data-strong")==="0")||(mode==="paid"&&Number(r.getAttribute("data-paid"))>0));r.hidden=!ok;if(ok)shown++;});if(empty)empty.hidden=shown>0;}
+    if(box)box.addEventListener("input",apply);
+    document.querySelectorAll("[data-lg-filter] a").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();mode=a.getAttribute("href").slice(1);document.querySelectorAll("[data-lg-filter] a").forEach(function(b){b.classList.toggle("is-active",b===a);b.setAttribute("aria-current",b===a?"page":"false");});apply();});});
+  })();</script>`;
   return shell({
     title: "Связи",
     subtitle: `${count(t.people)} ${F.plural(t.people, "человек", "человека", "человек")} в ${count(t.clusters)} ${F.plural(t.clusters, "кластере", "кластерах", "кластерах")}`,
     active: "links",
     styles: LINKS.LINK_GRAPH_STYLES,
+    scripts: script,
     body,
   });
 }
 
 function renderLinkClusterPage(cluster) {
   const graph =
-    cluster.members.length + cluster.evidence.length <= 60
-      ? LINKS.renderClusterGraph(cluster, { icon, avatarStyle: UI.avatarStyle })
+    cluster.members.length + cluster.evidence.length <= 80
+      ? LINKS.renderLiveGraph(cluster, { icon, avatarStyle: UI.avatarStyle })
       : UI.blank("Слишком большой", "Граф такого размера не читается — ниже список.", "link");
   const evidenceRows = cluster.evidence
     .map((entry) => {
@@ -1061,16 +1080,30 @@ function renderLinkClusterPage(cluster) {
       </a>`,
     )
     .join("");
+  const verdict = `<div class="lg-verdict">
+      <span class="lg-verdict-badge ${cluster.strong ? "is-strong" : "is-watch"}">${icon(cluster.strong ? "shield" : "pulse")}${cluster.strong ? "Обнуляет приз" : "Наблюдение"}</span>
+      <div class="lg-verdict-text">${escapeHtml(LINKS.summarizeCluster(cluster))}.<div class="note" style="margin-top:4px">${
+        cluster.strong
+          ? "Есть общая сильная улика — антифрод считает их одним человеком: приз ноль, выплата отменяется."
+          : "Сильной улики нет — только сеть или блокчейн. Приз не режется, кластер для наблюдения."
+      }</div></div>
+      <div class="lg-verdict-stats">
+        <div><b>${count(cluster.members.length)}</b><span>аккаунтов</span></div>
+        <div><b>${count(cluster.wins)}</b><span>побед</span></div>
+        <div><b>${count(cluster.paid)}</b><span>выплат</span></div>
+      </div>
+    </div>`;
   const body = `<div class="stack">
-    ${UI.card({ title: "Граф связей", subtitle: "лица — люди, плитки — то, что у них общее; красная обводка — уже получал выплату", i: 0, body: `${LINK_LEGEND}${graph}` })}
+    ${UI.card({ i: 0, body: verdict })}
+    ${UI.card({ title: "Граф связей", subtitle: "лица — аккаунты, ромбы — общие улики; красная обводка — уже получал выплату", i: 1, body: graph })}
     <div class="grid cols-2" style="align-items:start">
-      ${UI.card({ title: "Люди", flush: true, i: 1, body: `<div class="rows">${memberRows}</div>` })}
-      ${UI.card({ title: "Чем связаны", flush: true, i: 2, body: `<div class="rows">${evidenceRows}</div>` })}
+      ${UI.card({ title: "Аккаунты", flush: true, i: 2, body: `<div class="rows">${memberRows}</div>` })}
+      ${UI.card({ title: "Чем связаны", flush: true, i: 3, body: `<div class="rows">${evidenceRows}</div>` })}
     </div>
   </div>`;
   return shell({
     title: "Кластер",
-    subtitle: `${count(cluster.members.length)} ${F.plural(cluster.members.length, "человек", "человека", "человек")} · ${cluster.strong ? "приз обнуляется" : "только показ"}`,
+    subtitle: `${count(cluster.members.length)} ${F.plural(cluster.members.length, "аккаунт", "аккаунта", "аккаунтов")} · ${cluster.strong ? "приз обнуляется" : "наблюдение"}`,
     active: "links",
     styles: LINKS.LINK_GRAPH_STYLES,
     body,

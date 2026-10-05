@@ -59,6 +59,6 @@ test("a network is asked about once, in the background", async () => {
   types.note("203.0.113.5");
   types.note("203.0.113.9");
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(asked, ["https://rdap.org/ip/203.0.113.0"]);
+  assert.deepEqual(asked, ["https://rdap.db.ripe.net/ip/203.0.113.0"]);
   assert.equal(types.typeOf(types.keyOf("203.0.113.77")), "mobile");
 });

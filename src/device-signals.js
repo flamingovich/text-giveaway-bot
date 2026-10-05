@@ -122,8 +122,10 @@ function createNetworkTypes(db, { hash, fetchImpl = fetch, now = () => Date.now(
         queue.delete(key);
         if (select.get(key)) continue;
         try {
-          const res = await fetchImpl(`https://rdap.org/ip/${network}`, {
-            headers: { accept: "application/rdap+json, application/json" },
+          // RIPE answers for the other registries' networks too; rdap.org turned
+          // away requests with no browser-like User-Agent (403).
+          const res = await fetchImpl(`https://rdap.db.ripe.net/ip/${network}`, {
+            headers: { accept: "application/rdap+json, application/json", "user-agent": "RollerBot/1.0 (+https://rollerbot.pro)" },
             signal: AbortSignal.timeout(15000),
           });
           if (!res.ok) throw new Error(`rdap ${res.status}`);
