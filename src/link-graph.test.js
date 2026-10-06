@@ -62,10 +62,37 @@ test("money between ours, or one small wallet behind several of ours, links them
     { address: "TA3", links: [{ address: "TFunder", in: 1, out: 0 }] },
     { address: "TA4", links: [] },
   ];
-  const clusters = buildClusters(collectLinkEvidence({ userProfiles, counterparties }));
+  const small = new Map([["TFunder", { kind: "small" }]]);
+  const clusters = buildClusters(collectLinkEvidence({ userProfiles, counterparties, partyKinds: small }));
   assert.equal(clusters.length, 1);
   assert.deepEqual(clusters[0].users, ["1", "2", "3"]);
   assert.ok(clusters[0].evidence.every((e) => e.kind === "chain"));
+  assert.equal(clusters[0].strong, true);
+  // Not looked at yet: shown, zeroes nothing.
+  const pending = buildClusters(collectLinkEvidence({ userProfiles, counterparties }));
+  assert.ok(pending[0].evidence.some((e) => e.kind === "chainpending"));
+});
+
+// Pokerdom's payout wallet paid 50 people in 36 minutes: every player who
+// withdrew is tied to it, and that ties nobody to anybody.
+test("cashiers, exchanges and busy wallets link nobody", () => {
+  const userProfiles = { users: { 1: profile({ p: { trc20Address: "TA1" } }), 2: profile({ p: { trc20Address: "TA2" } }) } };
+  const via = (address) => [
+    { address: "TA1", links: [{ address, in: 1, out: 0 }] },
+    { address: "TA2", links: [{ address, in: 1, out: 0 }] },
+  ];
+  const pokerdomPayouts = "TQguVRm3tDmZG7AeZ47Mk6qi6GTF1ZDqkZ";
+  assert.equal(buildClusters(collectLinkEvidence({ userProfiles, counterparties: via(pokerdomPayouts) })).length, 0);
+  const kinds = new Map([["THub", { kind: "hub" }], ["TTag", { kind: "tagged", name: "Exchanger" }]]);
+  assert.equal(buildClusters(collectLinkEvidence({ userProfiles, counterparties: via("THub"), partyKinds: kinds })).length, 0);
+  assert.equal(buildClusters(collectLinkEvidence({ userProfiles, counterparties: via("TTag"), partyKinds: kinds })).length, 0);
+});
+
+test("a shared wallet is told by the explorer's answer", () => {
+  const { classifyParty } = require("./link-graph");
+  assert.equal(classifyParty({ tag: "Binance-Hot 7", distinctCount: 3 }).kind, "tagged");
+  assert.equal(classifyParty({ tag: null, distinctCount: 50 }).kind, "hub");
+  assert.equal(classifyParty({ tag: null, distinctCount: 3 }).kind, "small");
 });
 
 // The owner's payout wallet or a cashier's collector touches dozens of ours.

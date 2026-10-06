@@ -23,45 +23,9 @@
 // Only the first hop counts. Casino treasuries cash out to exchanges a hop or
 // two later, so following the money further would call a casino an exchange.
 
-// Collectors and cashiers learned from the real base (October 2026). None has
-// a public tag; the brand is an inference, so it is only shown as a guess.
-const KNOWN_WALLETS = {
-  // Pokerdom-only deposit addresses sweep here (the brand is a guess).
-  TXvftBh4h2NoxBiVKuAdpaP6K2MeHsazMQ: { kind: "cashier", name: "Pokerdom?" },
-  TBr9A9JRVh1bXYeCi5SNC87TBHnsiQTdin: { kind: "cashier", name: "Pokerdom?" },
-  TV3txq6WdbGaf3e6DAUWXcBGwdCEK3oLuS: { kind: "cashier", name: "Pokerdom?" },
-  TX5AGp9n84MDQCmogacMMYebkm4TafwwJi: { kind: "cashier", name: "Pokerdom?" },
-  TRKZWuxZ5pPBoK3ei1nQDnjAo4YyUFUMKB: { kind: "cashier", name: "Pokerdom?" },
-  TFoarQdvuN8mnaz5HyLWsyzt7EfSJmaDQf: { kind: "cashier", name: "Pokerdom?" },
-  TDNPkg4YAxdWy46Zmtjd8RPQZNJht4FWn1: { kind: "cashier", name: "Pokerdom?" },
-  TYsQqVyppXjpB9HxFLp9PY3GwLkAHDgH7R: { kind: "cashier", name: "Pokerdom?" },
-  TD7Sbh2jbf4NuJEaeyMfXKAo1GdEEfSfS2: { kind: "cashier", name: "Pokerdom?" },
-  TSU4TTBrQhmJaWNHz2jzvHx3CyJecoQGd4: { kind: "cashier", name: null },
-  // Labelled @CryptoBot by a third party; agents also tied it to Pokerdom.
-  TUeapnPqxRyQB2hePL2mSsm5HEZc7aSiwE: { kind: "cryptobot", name: "CryptoBot" },
-  // The cashier BEEF and IRIS share (Galaktika N.V.).
-  TQJM5JE9JpfZcZRMCgzF9Vqpa7Gs4M4FUS: { kind: "cashier", name: "BEEF/IRIS?" },
-  TGCqYvfzeBe38DitusTenFeb7M9kvwR4xL: { kind: "cashier", name: "BEEF/IRIS?" },
-  "0x033ac5e1279cd953925224640d7856bab89c852c": { kind: "cashier", name: "BEEF/IRIS?" },
-  "0xadcd5ae004fde617b37a1380731050a1a25b3f36": { kind: "cashier", name: "BEEF/IRIS?" },
-  // LuckyBear's cashier and processor.
-  "0xf379a3d1ab6625eef34347d054cfaeafdf8f24a7": { kind: "cashier", name: "LuckyBear?" },
-  "0xc467f68a1fd7093d3f240fa194924b74b2622760": { kind: "cashier", name: "LuckyBear?" },
-  TGU9wpXWBg17r3VznWmHLpNJH4bzopQtDp: { kind: "cashier", name: "LuckyBear?" },
-  TA3JXKJPcGF32QwWTr6s5fgQT1brefK9iT: { kind: "cashier", name: "LuckyBear?" },
-  TYUFzQu7sdWhnY4J3oW5ZaqyWi6swmxiAC: { kind: "cashier", name: "LuckyBear?" },
-  TDE9gC8KHCFQPJDvLC9tiYR3ehadrRGaWu: { kind: "cashier", name: "LuckyBear?" },
-  // EVM explorers give no tags: exchange hot wallets checked on BscScan/Etherscan.
-  "0xeb2d2f1b8c558a40207669291fda468e50c8a0bb": { kind: "exchange", name: "Binance" },
-  "0x161ba15a5f335c9f06bb5bbb0a9ce14076fbb645": { kind: "exchange", name: "Binance" },
-  "0x515b72ed8a97f42c568d6a143232775018f133c8": { kind: "exchange", name: "Binance" },
-  "0xbd612a3f30dca67bf60a39fd0d35e39b7ab80774": { kind: "exchange", name: "Binance" },
-  "0x8894e0a0c962cb723c1976a4421c95949be2d4e3": { kind: "exchange", name: "Binance" },
-  "0xf89d7b9c864f589bbf53a82105107622b35eaa40": { kind: "exchange", name: "Bybit" },
-  "0xef3aeff9a5f61c6dda33069c58c1434006e13b20": { kind: "exchange", name: "Bybit" },
-  "0x18e296053cbdf986196903e889b7dca7a73882f6": { kind: "exchange", name: "Bybit" },
-  "0x0d0707963952f2fba59dd06f2b425ace40b492fe": { kind: "exchange", name: "Gate" },
-};
+// The casinos' cashiers, exchanges' hot wallets and exchangers we know by name
+// live in known-wallets.js; the brand of a cashier is an inference.
+const { KNOWN_WALLETS, knownWallet } = require("./known-wallets");
 
 const EXCHANGE_WORDS = [
   "binance", "bybit", "okx", "okex", "htx", "huobi", "kucoin", "gate", "mexc", "mxc", "bitget", "kraken", "coinbase",
@@ -93,9 +57,10 @@ function normalizeAddress(address) {
 
 // Who a counterparty is: the learned list first, then its public tag.
 function identify(address, tag) {
-  const known = KNOWN_WALLETS[normalizeAddress(address)];
+  const known = knownWallet(address);
   if (known) {
-    return known;
+    // The owner's short word is what the payout queue shows ("Pokerdom", "Роялы").
+    return { kind: known.kind, name: known.badge, title: known.title };
   }
   const exchange = exchangeOfTag(tag);
   if (exchange) {
@@ -222,7 +187,7 @@ function judgePayoutOutcome({ address, transfers = [], complete = false, selfTag
   return { outcome: "unclear", platform: verdict.platform };
 }
 
-// The owner's names for the cashiers in KNOWN_WALLETS.
+// Verdicts saved before known-wallets.js named the cashiers carry the old guesses.
 const CASHIER_LABELS = { "Pokerdom?": "Pokerdom", "BEEF/IRIS?": "Роялы", "LuckyBear?": "LuckyBear" };
 
 /** The owner's label in the payout queue (his wording). → { text, tone: ok | warn | danger | muted, title } */

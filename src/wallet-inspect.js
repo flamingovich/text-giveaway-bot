@@ -160,7 +160,45 @@ function createWalletInspector({
     return { ...main, complete, selfTag: null, verdict: judgeWallet({ address: me, transfers: main.transfers, complete }) };
   }
 
-  return { inspect };
+  /**
+   * A wallet our addresses shared money with: its public tag, and how many
+   * different addresses it dealt with lately. One request - a cashier or an
+   * exchange shows itself in a single page of transfers.
+   * → { tag, distinctCount }
+   */
+  async function inspectParty(address, { deadlineMs = DEFAULT_DEADLINE_MS } = {}) {
+    const deadline = now() + deadlineMs;
+    const me = normalizeAddress(address);
+    const others = new Set();
+    let tag = null;
+    if (/^T/.test(me)) {
+      const r = await getJson(
+        `https://apilist.tronscanapi.com/api/token_trc20/transfers?limit=${TRON_PAGE}&start=0&relatedAddress=${me}&contract_address=${TRON_USDT}`,
+        deadline,
+      );
+      for (const t of r?.token_transfers || []) {
+        if (t.from_address === me) {
+          others.add(t.to_address);
+          tag = tag || t.from_address_tag?.from_address_tag || null;
+        } else if (t.to_address === me) {
+          others.add(t.from_address);
+          tag = tag || t.to_address_tag?.to_address_tag || null;
+        }
+      }
+      return { tag, distinctCount: others.size };
+    }
+    for (const network of ["bep20", "erc20"]) {
+      try {
+        const history = await evmHistory(network, me, deadline);
+        for (const t of history.transfers) others.add(t.from === me ? t.to : t.from);
+      } catch {
+        // The other network may answer.
+      }
+    }
+    return { tag: null, distinctCount: others.size };
+  }
+
+  return { inspect, inspectParty };
 }
 
 module.exports = { createWalletInspector, TRON_USDT, HOST_GAP_MS };

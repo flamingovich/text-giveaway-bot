@@ -979,9 +979,9 @@ function renderReferralsPage(stats) {
 // ── links ──────────────────────────────────────────────────────────────────
 
 const LINK_LEGEND = `<div class="lg-chips" style="margin-bottom:6px">
-  <span class="lg-chip lg-wallet">${icon("wallet")}кошелёк, ID проекта, скрин, устройство — обнуляют приз</span>
+  <span class="lg-chip lg-wallet">${icon("wallet")}кошелёк, ID, скрин, устройство, общий кошелёк в блокчейне — обнуляют приз</span>
   <span class="lg-chip lg-ip">${icon("pulse")}одна сеть — только показ</span>
-  <span class="lg-chip lg-chain">${icon("link")}блокчейн — только показ</span>
+  <span class="lg-chip lg-chainpending">${icon("link")}блокчейн, не проверен — только показ</span>
   <span class="lg-chip lg-referral">${icon("gift")}приглашение</span>
 </div>`;
 
@@ -1085,7 +1085,7 @@ function renderLinkClusterPage(cluster) {
       <div class="lg-verdict-text">${escapeHtml(LINKS.summarizeCluster(cluster))}.<div class="note" style="margin-top:4px">${
         cluster.strong
           ? "Есть общая сильная улика — антифрод считает их одним человеком: приз ноль, выплата отменяется."
-          : "Сильной улики нет — только сеть или блокчейн. Приз не режется, кластер для наблюдения."
+          : "Сильной улики нет — только сеть или непроверенный кошелёк. Приз не режется, кластер для наблюдения."
       }</div></div>
       <div class="lg-verdict-stats">
         <div><b>${count(cluster.members.length)}</b><span>аккаунтов</span></div>

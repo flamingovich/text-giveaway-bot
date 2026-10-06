@@ -787,6 +787,7 @@ function registerAdminDashboard(app, deps) {
       projects: deps.readProjects().projects || [],
       counterparties: deps.listWalletCounterparties ? deps.listWalletCounterparties() : [],
       networkTypes: deps.listNetworkTypes ? deps.listNetworkTypes() : new Map(),
+      partyKinds: deps.listChainParties ? deps.listChainParties() : new Map(),
       normalizeAccountId: (value) => normalizeProjectAccountId(value) || "",
     });
     linksCache = { at: Date.now(), view };

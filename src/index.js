@@ -111,7 +111,7 @@ const { createWalletInspector } = require("./wallet-inspect");
 const { createWalletCheckStore } = require("./wallet-check-store");
 const { createWalletChecker } = require("./wallet-checker");
 const { describeWalletVerdict, describePastPayoutFlag } = require("./wallet-kind");
-const { summarizeCounterparties } = require("./link-graph");
+const { summarizeCounterparties, collectLinkEvidence } = require("./link-graph");
 const { createSignalHasher, createNetworkTypes } = require("./device-signals");
 const {
   BRAND_PROJECT_TEMPLATES,
@@ -1310,6 +1310,31 @@ function getAccountIdIndex(userProfiles) {
   return accountIdIndexMemo.get(userProfiles);
 }
 
+// People tied by a small wallet on the blockchain. Built from every profile,
+// draw and wallet check, so kept five minutes: the wallet checks behind it
+// change over minutes anyway.
+let chainLinkedMemo = { at: 0, users: new Set() };
+function getChainLinkedUsers() {
+  if (Date.now() - chainLinkedMemo.at < 5 * 60 * 1000) {
+    return chainLinkedMemo.users;
+  }
+  const users = new Set();
+  try {
+    const evidence = collectLinkEvidence({
+      draws: [...(readDataSnapshot().draws || []), ...(readArchivedDrawsSnapshot().draws || [])],
+      userProfiles: readUserProjectProfilesSnapshot(),
+      counterparties: walletChecks.allCounterparties(),
+      partyKinds: walletChecks.partyKinds(),
+      only: "chain",
+    });
+    for (const entry of evidence.values()) entry.users.forEach((u) => users.add(String(u)));
+  } catch (error) {
+    console.warn(`[antifraud] связи в блокчейне не собраны: ${error.message}`);
+  }
+  chainLinkedMemo = { at: Date.now(), users };
+  return users;
+}
+
 // The owner's own and test accounts the anti-fraud leaves alone
 // (ANTIFRAUD_EXEMPT_USER_IDS in .env, comma-separated).
 const ANTIFRAUD_EXEMPT_USER_IDS = new Set(
@@ -1362,6 +1387,12 @@ function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = n
 
   // The same project ID as someone else, or on two brands: everywhere.
   if (sharesProjectAccountId(winnerId, getAccountIdIndex(userProfiles))) {
+    labels.push("Мультиаккаунт");
+  }
+
+  // A small wallet - a person's, not a cashier or an exchange - behind the
+  // addresses of several of ours, or money between their addresses (link-graph.js).
+  if (getChainLinkedUsers().has(String(winnerId))) {
     labels.push("Мультиаккаунт");
   }
 
@@ -13325,6 +13356,7 @@ registerAdminDashboard(app, {
   formatUsdAmount,
   listWalletCounterparties: () => walletChecks.allCounterparties(),
   listNetworkTypes: () => networkTypes.allTypes(),
+  listChainParties: () => walletChecks.partyKinds(),
 });
 
 app.use((err, req, res, next) => {

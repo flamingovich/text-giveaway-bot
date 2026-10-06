@@ -3,7 +3,8 @@
 // see a burst. Runs on its own timer, never inside the scheduler's tick: a slow
 // explorer must not hold up finishing draws.
 const { judgePayoutOutcome } = require("./wallet-kind");
-const { summarizeCounterparties } = require("./link-graph");
+const { summarizeCounterparties, classifyParty } = require("./link-graph");
+const { knownWallet } = require("./known-wallets");
 
 const DEFAULT_STALE_MS = 12 * 3600e3;
 const ERROR_RETRY_MS = 30 * 60e3;
@@ -85,6 +86,23 @@ function createWalletChecker({
     }
   }
 
+  // A wallet several of our addresses dealt with: a cashier, an exchange or a
+  // person? Until it is known, a link through it zeroes nobody's prize.
+  async function classifyParties(budget) {
+    if (budget <= 0 || !store.unclassifiedSharedParties || !inspector.inspectParty) return 0;
+    const batch = store.unclassifiedSharedParties(budget, (address) => Boolean(knownWallet(address)));
+    for (const address of batch) {
+      try {
+        const facts = await inspector.inspectParty(address, { deadlineMs: 20000 });
+        const verdict = classifyParty(facts);
+        store.saveParty(address, { ...verdict, distinctCount: facts.distinctCount });
+      } catch (error) {
+        logger.warn(`[wallet] общий кошелёк не проверен: ${error.message}`);
+      }
+    }
+    return batch.length;
+  }
+
   async function tick() {
     if (running) return;
     running = true;
@@ -95,8 +113,11 @@ function createWalletChecker({
       // The queue first: its labels are what the owner looks at before paying;
       // the follow-up of old prizes takes what is left of the tick.
       const used = await labelQueue(perTick);
-      const usedPayouts = await checkPayouts(perTick - used);
-      await fillCounterparties(perTick - used - usedPayouts);
+      // One turn a tick for the shared wallets: the old payouts must not keep
+      // them waiting for hours, a link through them decides a prize.
+      const usedParties = await classifyParties(Math.min(1, perTick - used));
+      const usedPayouts = await checkPayouts(perTick - used - usedParties);
+      await fillCounterparties(perTick - used - usedParties - usedPayouts);
     } catch (error) {
       logger.error(`[wallet] проверка кошельков: ${error.message}`);
     } finally {

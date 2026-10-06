@@ -27,6 +27,9 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
       postponePayout() {},
       flaggedUsers: () => new Map(),
       allCounterparties: () => [],
+      saveParty() {},
+      partyKinds: () => new Map(),
+      unclassifiedSharedParties: () => [],
       missingCounterparties: () => [],
       revision: () => 0,
     };
@@ -59,6 +62,17 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS wallet_payouts_due ON wallet_payouts (next_check_at);
     CREATE INDEX IF NOT EXISTS wallet_payouts_user ON wallet_payouts (user_id);
+  `);
+  // What a wallet our addresses share money with is: an exchange or a cashier
+  // (tagged, or dealing with many) or a small one - a person (link-graph.js).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chain_parties (
+      address TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      name TEXT,
+      distinct_count INTEGER,
+      checked_at INTEGER NOT NULL
+    ) WITHOUT ROWID;
   `);
   // Added after the first release: who the address exchanged money with, for
   // the links between people (link-graph.js).
@@ -94,6 +108,10 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
     "UPDATE wallet_payouts SET outcome = ?, outcome_platform = ?, checks = ?, next_check_at = ?, updated_at = CASE WHEN outcome IS ? THEN updated_at ELSE ? END WHERE draw_id = ? AND user_id = ?",
   );
   const selectCheck = db.prepare("SELECT * FROM wallet_checks WHERE address = ?");
+  const upsertParty = db.prepare(
+    "INSERT INTO chain_parties (address, kind, name, distinct_count, checked_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (address) DO UPDATE SET kind = excluded.kind, name = excluded.name, distinct_count = excluded.distinct_count, checked_at = excluded.checked_at",
+  );
+  const selectParties = db.prepare("SELECT address, kind, name, distinct_count AS distinctCount FROM chain_parties");
   const selectMissingCounterparties = db.prepare(
     "SELECT address, network FROM wallet_checks WHERE counterparties IS NULL AND kind IS NOT NULL ORDER BY checked_at LIMIT ?",
   );
@@ -221,6 +239,35 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
     return selectMissingCounterparties.all(limit);
   }
 
+  function saveParty(address, { kind, name = null, distinctCount = null }) {
+    upsertParty.run(address, kind, name, distinctCount, now());
+  }
+
+  /** address -> { kind: tagged | hub | small, name, distinctCount } */
+  function partyKinds() {
+    return new Map(selectParties.all().map((row) => [row.address, row]));
+  }
+
+  /**
+   * Wallets two or more of our addresses exchanged money with that are not
+   * named yet - the ones a link could rest on. `skip(address)` leaves out the
+   * wallets known by name.
+   */
+  function unclassifiedSharedParties(limit = 1, skip = () => false) {
+    const known = partyKinds();
+    const seen = new Map();
+    for (const row of allCounterparties()) {
+      for (const link of row.links || []) {
+        seen.set(link.address, (seen.get(link.address) || 0) + 1);
+      }
+    }
+    return [...seen.entries()]
+      .filter(([address, n]) => n >= 2 && !known.has(address) && !skip(address))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([address]) => address);
+  }
+
   /** [{ address, links: [{ address, in, out }] }] for every address with any. */
   function allCounterparties() {
     return selectCounterparties.all().map((row) => {
@@ -237,7 +284,7 @@ function createWalletCheckStore(db, { now = () => Date.now() } = {}) {
     return selectRevision.get()?.at || 0;
   }
 
-  return { saveCheck, getChecks, getCheck, userFlag, checkedAt, upsertPayout, duePayouts, savePayoutOutcome, postponePayout, flaggedUsers, allCounterparties, missingCounterparties, revision };
+  return { saveCheck, getChecks, getCheck, userFlag, checkedAt, upsertPayout, duePayouts, savePayoutOutcome, postponePayout, flaggedUsers, allCounterparties, missingCounterparties, saveParty, partyKinds, unclassifiedSharedParties, revision };
 }
 
 module.exports = { createWalletCheckStore, RECHECK_AFTER_PAY_MS };

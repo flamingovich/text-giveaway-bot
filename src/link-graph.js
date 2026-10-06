@@ -18,14 +18,22 @@
 //             enough (a flat, a café), a network shared by more than five
 //             people is a public Wi-Fi, and a mobile carrier's or a VPN's
 //             (device-signals.js) puts strangers behind one address;
-//   chain   - money on the blockchain: one wallet funding the deposit
+//   chain   - money on the blockchain: a small wallet - a person's - behind the
 //             addresses of a few of ours, or one of ours paying into another's.
+//             The owner's rule: one wallet cannot belong to different people,
+//             so it zeroes the prize. Cashiers, exchanges and exchangers
+//             (known-wallets.js, a public tag, or ten and more counterparties
+//             in a page of transfers) are infrastructure and link nobody:
+//             every Pokerdom player is paid from the same wallet. A shared
+//             wallet not looked at yet is "chainpending" - shown, zeroes nothing.
 //
 // Referrals only draw a line inside a cluster: inviting a friend is what the
 // mini app asks for, and on its own it says nothing.
 
-const STRONG = new Set(["wallet", "account", "shot", "device", "fpnet"]);
-const CLUSTERING = new Set(["wallet", "account", "shot", "device", "fpnet", "ip", "chain"]);
+const { knownWallet } = require("./known-wallets");
+
+const STRONG = new Set(["wallet", "account", "shot", "device", "fpnet", "chain"]);
+const CLUSTERING = new Set(["wallet", "account", "shot", "device", "fpnet", "chain", "chainpending", "ip"]);
 const MAX_FPNET_PEOPLE = 5;
 const MAX_IP_PEOPLE = 5;
 const MIN_IP_DRAWS = 2;
@@ -58,6 +66,10 @@ function collectLinkEvidence({
   projects = [],
   counterparties = [],
   networkTypes = new Map(),
+  partyKinds = new Map(),
+  // "chain" when only the blockchain links are wanted (the anti-fraud):
+  // the networks, devices and referrals of every draw are then not read.
+  only = null,
   normalizeAccountId = (v) => String(v || "").trim().toUpperCase(),
 }) {
   const evidence = new Map();
@@ -99,6 +111,7 @@ function collectLinkEvidence({
     for (const [userId, notify] of Object.entries(draw.winnerNotifications || {})) {
       ownAddress(notify?.trc20Address, userId);
     }
+    if (only === "chain") continue;
     for (const [userId, meta] of Object.entries(draw.participantMeta || {})) {
       if (meta?.deviceHash) add(`device:${meta.deviceHash}`, "device", "одно устройство", userId);
       if (meta?.fpHash && meta?.ipHash) {
@@ -148,8 +161,10 @@ function collectLinkEvidence({
   for (const row of counterparties) {
     const owners = ownersOfAddress.get(normalizeAddress(row.address));
     if (!owners) continue;
+    if (knownWallet(row.address)) continue;
     for (const link of row.links || []) {
       const other = normalizeAddress(link.address);
+      if (knownWallet(other)) continue;
       const otherOwners = ownersOfAddress.get(other);
       if (otherOwners) {
         const pair = [normalizeAddress(row.address), other].sort().join("~");
@@ -163,7 +178,16 @@ function collectLinkEvidence({
   }
   for (const [address, users] of chainUsers) {
     if (users.size < 2 || users.size > MAX_CHAIN_PEOPLE) continue;
-    users.forEach((u) => add(`chain:${address}`, "chain", address, u, { kind: "counterparty" }));
+    const party = partyKinds.get(address);
+    if (party && (party.kind === "tagged" || party.kind === "hub")) continue;
+    const kind = party?.kind === "small" ? "chain" : "chainpending";
+    users.forEach((u) => add(`chain:${address}`, kind, address, u, { kind: "counterparty" }));
+  }
+  if (only === "chain") {
+    for (const [key, entry] of evidence) {
+      if (entry.kind !== "chain" || entry.users.size < 2) evidence.delete(key);
+    }
+    return evidence;
   }
 
   for (const [key, entry] of evidence) {
@@ -216,6 +240,17 @@ function buildClusters(evidence) {
   return clusters.sort((a, b) => Number(b.strong) - Number(a.strong) || b.users.length - a.users.length);
 }
 
+// Many different counterparties in a single page of transfers is a cashier,
+// an exchange or a payout wallet: Pokerdom's paid 50 people in 36 minutes.
+const HUB_MIN_COUNTERPARTIES = 10;
+
+/** A shared wallet's kind from what the explorer said: tagged | hub | small. */
+function classifyParty({ tag = null, distinctCount = 0 }) {
+  if (tag) return { kind: "tagged", name: String(tag) };
+  if (distinctCount >= HUB_MIN_COUNTERPARTIES) return { kind: "hub", name: null };
+  return { kind: "small", name: null };
+}
+
 /**
  * The counterparties worth keeping for an address: the untagged ones it
  * exchanged USDT with (a tagged one is an exchange or a known service).
@@ -245,6 +280,8 @@ module.exports = {
   MIN_IP_DRAWS,
   MAX_CHAIN_PEOPLE,
   MAX_FPNET_PEOPLE,
+  HUB_MIN_COUNTERPARTIES,
+  classifyParty,
   collectLinkEvidence,
   buildClusters,
   summarizeCounterparties,

@@ -26,7 +26,7 @@ test("money that came and sits is accepted, whoever sent it", () => {
 test("a sweep into a known casino cashier is the address we want", () => {
   const v = judgeWallet({ address: ME, transfers: [tin(10, 1), tout(10, 2, POKERDOM_CASHIER)], complete: true });
   assert.equal(v.kind, "cashier");
-  assert.equal(v.platform, "Pokerdom?");
+  assert.equal(v.platform, "Pokerdom");
   assert.equal(v.reject, false);
 });
 

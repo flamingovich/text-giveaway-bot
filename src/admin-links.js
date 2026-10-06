@@ -14,7 +14,8 @@ const KIND_INFO = {
   device: { title: "Одно устройство", tone: "red", icon: "cpu" },
   fpnet: { title: "Отпечаток + сеть", tone: "red", icon: "cpu" },
   ip: { title: "Одна сеть", tone: "blue", icon: "pulse" },
-  chain: { title: "Связь в блокчейне", tone: "orange", icon: "link" },
+  chain: { title: "Общий кошелёк в блокчейне", tone: "red", icon: "link" },
+  chainpending: { title: "Блокчейн: проверяется", tone: "orange", icon: "link" },
   referral: { title: "Пригласил", tone: "gray", icon: "gift" },
 };
 
@@ -45,7 +46,9 @@ function describeEvidence(entry) {
     case "chain":
       return entry.meta?.kind === "transfer"
         ? { title: "Перевод между их адресами", detail: "в блокчейне", full: entry.label }
-        : { title: info.title, detail: shortAddress(entry.label), full: `общий кошелёк в блокчейне: ${entry.label}` };
+        : { title: info.title, detail: shortAddress(entry.label), full: `небольшой кошелёк, связанный с их адресами: ${entry.label}` };
+    case "chainpending":
+      return { title: info.title, detail: shortAddress(entry.label), full: `общий кошелёк, ещё не проверено — касса это или человек: ${entry.label}` };
     case "referral":
       return { title: info.title, detail: "", full: "приглашение по ссылке" };
     default:
@@ -68,8 +71,8 @@ function countPrizes(draws) {
 }
 
 /** Everything the two pages show. */
-function buildLinksView({ draws = [], userProfiles = {}, projects = [], counterparties = [], networkTypes, normalizeAccountId }) {
-  const evidence = collectLinkEvidence({ draws, userProfiles, projects, counterparties, networkTypes, normalizeAccountId });
+function buildLinksView({ draws = [], userProfiles = {}, projects = [], counterparties = [], networkTypes, partyKinds, normalizeAccountId }) {
+  const evidence = collectLinkEvidence({ draws, userProfiles, projects, counterparties, networkTypes, partyKinds, normalizeAccountId });
   const clusters = buildClusters(evidence);
   const { wins, paid } = countPrizes(draws);
   const users = userProfiles.users || {};
@@ -310,7 +313,7 @@ function renderClusterGraph(cluster, { icon, avatarStyle, width = 760, height = 
   </svg>`;
 }
 
-const GLYPHS = { wallet: "₮", account: "ID", shot: "▣", device: "▯", fpnet: "≈", ip: "IP", chain: "↔" };
+const GLYPHS = { wallet: "₮", account: "ID", shot: "▣", device: "▯", fpnet: "≈", ip: "IP", chain: "↔", chainpending: "?" };
 
 // What a tile means, in a sentence for the side panel.
 function explainEvidence(entry) {
@@ -330,8 +333,10 @@ function explainEvidence(entry) {
       return `Одна сеть в ${entry.meta?.draws || 2} розыгрышах вместе. Бывает у соседей и семьи — только наблюдение, приз не режет.`;
     case "chain":
       return entry.meta?.kind === "transfer"
-        ? "Деньги ходили между адресами этих людей. Только наблюдение."
-        : "Один небольшой кошелёк в блокчейне связан с адресами нескольких наших людей. Только наблюдение.";
+        ? "Деньги ходили напрямую между адресами этих людей. Один кошелёк не может быть у разных людей. Приз обнуляется."
+        : `Небольшой кошелёк (не касса и не биржа) связан с адресами ${n} наших людей — у них один хозяин. Приз обнуляется.`;
+    case "chainpending":
+      return "Общий кошелёк ещё не проверен: касса или биржа это или человек. Пока только наблюдение — проверка идёт в фоне.";
     case "referral":
       return "Приглашение по реферальной ссылке.";
     default:
@@ -423,9 +428,9 @@ function renderLiveGraph(cluster, { icon, avatarStyle }) {
 const LINK_GRAPH_STYLES = `
 .lg { width: 100%; height: auto; display: block; }
 .lg-edge { stroke-width: 1.6; stroke-linecap: round; opacity: .55; }
-.lg-wallet, .lg-account, .lg-shot, .lg-device, .lg-fpnet { --kind: var(--red); }
+.lg-wallet, .lg-account, .lg-shot, .lg-device, .lg-fpnet, .lg-chain { --kind: var(--red); }
 .lg-ip { --kind: var(--blue); }
-.lg-chain { --kind: var(--orange); }
+.lg-chainpending { --kind: var(--orange); }
 .lg-referral { --kind: var(--gray); }
 .lg-edge { stroke: var(--kind); }
 .lg-edge.lg-referral { stroke-dasharray: 4 4; opacity: .7; }
@@ -500,9 +505,9 @@ const LINK_GRAPH_STYLES = `
 .lg-side-list button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 9px; background: var(--fill); color: var(--label); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .lg-side-list button:hover { background: var(--fill-strong); }
 .lg-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--kind, var(--gray)); }
-.lg-side-list .lg-k-wallet, .lg-side-list .lg-k-account, .lg-side-list .lg-k-shot, .lg-side-list .lg-k-device, .lg-side-list .lg-k-fpnet { --kind: var(--red); }
+.lg-side-list .lg-k-wallet, .lg-side-list .lg-k-account, .lg-side-list .lg-k-shot, .lg-side-list .lg-k-device, .lg-side-list .lg-k-fpnet, .lg-side-list .lg-k-chain { --kind: var(--red); }
 .lg-side-list .lg-k-ip { --kind: var(--blue); }
-.lg-side-list .lg-k-chain { --kind: var(--orange); }
+.lg-side-list .lg-k-chainpending { --kind: var(--orange); }
 .lg-hint { margin-top: 8px; color: var(--label-3); font-size: 12px; }
 .lg-verdict { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; }
 .lg-verdict-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; font-weight: 700; font-size: 13px; }
@@ -526,7 +531,7 @@ const LINK_GRAPH_STYLES = `
 
 // The cluster in one line: its strongest pieces of evidence, in words.
 function summarizeCluster(cluster) {
-  const order = ["account", "wallet", "shot", "device", "fpnet", "chain", "ip", "referral"];
+  const order = ["account", "wallet", "shot", "device", "fpnet", "chain", "chainpending", "ip", "referral"];
   const parts = [];
   for (const kind of order) {
     const items = cluster.evidence.filter((e) => e.kind === kind);
