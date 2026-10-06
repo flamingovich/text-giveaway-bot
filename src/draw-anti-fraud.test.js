@@ -102,3 +102,21 @@ test("a project ID shared by people, or by brands, flags its holders", () => {
   assert.equal(sharesProjectAccountId(4, index), false);
   assert.equal(sharesProjectAccountId(5, index), false);
 });
+
+// The hole the dry runs on the real base found: an address kept on the IRIS
+// profile, or given as a winner's address, was not looked at in a Pokerdom draw.
+test("a shared payout address marks its people everywhere", () => {
+  const { buildWalletIndex, sharesWallet } = require("./draw-anti-fraud");
+  const profiles = {
+    users: {
+      1: { projects: { brand_iris_7: { antifraudTrc20Address: "taaa" } } },
+      2: { projects: { brand_pokerdom_9: { trc20Address: "TBBB" } } },
+      3: { projects: { brand_pokerdom_9: { trc20Address: "TCCC" } } },
+    },
+  };
+  const draws = [{ winnerNotifications: { 2: { trc20Address: "TAAA" } } }];
+  const index = buildWalletIndex(profiles, draws);
+  assert.equal(sharesWallet(1, index), true);
+  assert.equal(sharesWallet(2, index), true);
+  assert.equal(sharesWallet(3, index), false);
+});

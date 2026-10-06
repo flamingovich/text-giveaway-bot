@@ -143,6 +143,44 @@ function sharesProjectAccountId(userId, index) {
   return false;
 }
 
+// One payout address: an account's deposit address belongs to that account
+// alone, so two people giving the same one are one person (the owner's rule).
+// Every address a person ever gave counts - any project, any organiser, any
+// draw's winner address - and marks them everywhere: before, an address kept
+// on the IRIS profile was not looked at when the same person won on Pokerdom.
+function buildWalletIndex(userProfiles, draws = [], normalize = defaultNormalizeWalletAddress) {
+  const byAddress = new Map();
+  const addressesOf = new Map();
+  const own = (address, userId) => {
+    const a = normalize(address);
+    if (!a || a === "НЕ УКАЗАН") return;
+    const u = String(userId);
+    if (!byAddress.has(a)) byAddress.set(a, new Set());
+    byAddress.get(a).add(u);
+    if (!addressesOf.has(u)) addressesOf.set(u, new Set());
+    addressesOf.get(u).add(a);
+  };
+  for (const [userId, node] of Object.entries(userProfiles?.users || {})) {
+    for (const projectData of Object.values(node?.projects || {})) {
+      own(projectData?.trc20Address, userId);
+      own(projectData?.antifraudTrc20Address, userId);
+    }
+  }
+  for (const draw of draws || []) {
+    for (const [userId, notify] of Object.entries(draw?.winnerNotifications || {})) {
+      own(notify?.trc20Address, userId);
+    }
+  }
+  return { byAddress, addressesOf };
+}
+
+function sharesWallet(userId, index) {
+  for (const address of index?.addressesOf?.get(String(userId)) || []) {
+    if ((index.byAddress.get(address)?.size || 0) > 1) return true;
+  }
+  return false;
+}
+
 function hasNormalParticipantProfile(projectData, draw) {
   if (!draw?.projectId) {
     return true;
@@ -252,6 +290,8 @@ module.exports = {
   sharesDevice,
   buildAccountIdIndex,
   sharesProjectAccountId,
+  buildWalletIndex,
+  sharesWallet,
   hasNormalParticipantProfile,
   evaluateIpFraud,
 };

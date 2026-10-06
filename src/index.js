@@ -89,18 +89,20 @@ const {
   listProjectWalletAddresses,
   buildGlobalWalletOwners,
   buildGlobalShotOwners,
-  sharesProfileShot,
   buildDeviceOwners,
-  sharesDevice,
   buildAccountIdIndex,
-  sharesProjectAccountId,
+  buildWalletIndex,
 } = require("./draw-anti-fraud");
 const { decideJoinEntry } = require("./join-entry-decision");
 const {
+  normalizeWalletAddress,
+  getDrawParticipantMeta,
+  getUserProfileBundle,
+  collectDrawParticipantSignals,
+  createWinnerAntiFraud,
+} = require("./winner-anti-fraud");
+const {
   drawAsksProjectIdOnJoin,
-  buildGlobalProjectAccountIdOwners,
-  evaluateProjectAccountIdFraud,
-  evaluateIpManyProjectIdsFraud,
   joinCtxHasCompletedProjectIdStep,
   normalizeProjectAccountId,
   detectStoredProjectAccountIdKind,
@@ -1188,57 +1190,8 @@ function getPrizeSplitCount(draw) {
   return Math.max(1, Number(draw.winnersCount) || 1);
 }
 
-function normalizeWalletAddress(value) {
-  return String(value || "").trim().toUpperCase();
-}
 
-function getDrawParticipantMeta(draw, userId) {
-  if (!draw?.participantMeta) {
-    return null;
-  }
-  return draw.participantMeta[String(userId)] || null;
-}
 
-function collectDrawParticipantSignals(draw, userProfiles, globalWalletOwners = null, globalShotOwners = null) {
-  const byIp = new Map();
-  const byWallet = new Map();
-  const byProjectAccountId = new Map();
-
-  for (const participantId of draw.participantIds || []) {
-    const participantMeta = getDrawParticipantMeta(draw, participantId);
-    if (participantMeta?.ipHash) {
-      byIp.set(participantMeta.ipHash, (byIp.get(participantMeta.ipHash) || 0) + 1);
-    }
-
-    const { projectData } = getUserProfileBundle(userProfiles, participantId, draw.projectId);
-    const wallets = listProjectWalletAddresses(projectData, normalizeWalletAddress);
-    const notifyWallet = normalizeWalletAddress(
-      draw.winnerNotifications?.[String(participantId)]?.trc20Address,
-    );
-    if (notifyWallet && !wallets.includes(notifyWallet)) {
-      wallets.push(notifyWallet);
-    }
-    for (const wallet of wallets) {
-      byWallet.set(wallet, (byWallet.get(wallet) || 0) + 1);
-    }
-
-    const accountId = normalizeProjectAccountId(projectData?.projectAccountId);
-    if (accountId) {
-      byProjectAccountId.set(accountId, (byProjectAccountId.get(accountId) || 0) + 1);
-    }
-  }
-
-  return {
-    byIp,
-    byWallet,
-    byProjectAccountId,
-    globalWalletOwners:
-      globalWalletOwners || buildGlobalWalletOwners(userProfiles, normalizeWalletAddress),
-    globalShotOwners: globalShotOwners || buildGlobalShotOwners(userProfiles),
-    globalProjectAccountIdOwners:
-      draw.projectId && buildGlobalProjectAccountIdOwners(userProfiles, draw.projectId),
-  };
-}
 
 function createPanelAntiFraudContext(userProfiles) {
   const globalWalletOwners = buildGlobalWalletOwners(userProfiles, normalizeWalletAddress);
@@ -1265,14 +1218,6 @@ function getPanelAntiFraudSignals(panelContext, draw, userProfiles) {
   return collectDrawParticipantSignals(draw, userProfiles);
 }
 
-function getWinnerEffectiveWallets(projectData, notifyInfo = null) {
-  const wallets = listProjectWalletAddresses(projectData, normalizeWalletAddress);
-  const notifyWallet = normalizeWalletAddress(notifyInfo?.trc20Address);
-  if (notifyWallet && !wallets.includes(notifyWallet)) {
-    wallets.push(notifyWallet);
-  }
-  return wallets;
-}
 
 // Devices across every draw, worked out again only when a draw document was
 // rewritten: the snapshots stay the same objects until then.
@@ -1335,6 +1280,23 @@ function getChainLinkedUsers() {
   return users;
 }
 
+// Every payout address with its people, from every profile and every draw's
+// winner address. Built again only when one of those documents was rewritten.
+let walletIndexMemo = { profiles: null, active: null, archived: null, index: null };
+function getWalletIndex(userProfiles) {
+  const active = readDataSnapshot();
+  const archived = readArchivedDrawsSnapshot();
+  if (walletIndexMemo.profiles !== userProfiles || walletIndexMemo.active !== active || walletIndexMemo.archived !== archived) {
+    walletIndexMemo = {
+      profiles: userProfiles,
+      active,
+      archived,
+      index: buildWalletIndex(userProfiles, [...(active?.draws || []), ...(archived?.draws || [])], normalizeWalletAddress),
+    };
+  }
+  return walletIndexMemo.index;
+}
+
 // The owner's own and test accounts the anti-fraud leaves alone
 // (ANTIFRAUD_EXEMPT_USER_IDS in .env, comma-separated).
 const ANTIFRAUD_EXEMPT_USER_IDS = new Set(
@@ -1343,83 +1305,18 @@ const ANTIFRAUD_EXEMPT_USER_IDS = new Set(
     .filter(Boolean),
 );
 
+// The verdict itself is winner-anti-fraud.js: the same code the owner's dry
+// runs on the real base use.
+const winnerAntiFraud = createWinnerAntiFraud({
+  getWalletIndex: (userProfiles) => getWalletIndex(userProfiles),
+  getDeviceOwners: () => getGlobalDeviceOwners(),
+  getAccountIdIndex: (userProfiles) => getAccountIdIndex(userProfiles),
+  getChainLinkedUsers: () => getChainLinkedUsers(),
+  exemptUserIds: ANTIFRAUD_EXEMPT_USER_IDS,
+});
+
 function getWinnerAntiFraud(draw, winnerId, userProfiles, precomputedSignals = null, notifyInfo = null) {
-  if (ANTIFRAUD_EXEMPT_USER_IDS.has(String(winnerId))) {
-    return { labels: [], hasFraudFlag: false };
-  }
-  const labels = [];
-  const signals = precomputedSignals || collectDrawParticipantSignals(draw, userProfiles);
-  const globalWalletOwners =
-    signals.globalWalletOwners || buildGlobalWalletOwners(userProfiles, normalizeWalletAddress);
-
-  const ipFraud = evaluateIpFraud(draw, winnerId, userProfiles, signals, {
-    getDrawParticipantMeta,
-    getUserProfileBundle,
-    normalizeWalletAddress,
-  });
-  if (ipFraud.shouldFlag) {
-    labels.push("Бот по IP");
-  }
-
-  const { projectData } = getUserProfileBundle(userProfiles, winnerId, draw.projectId);
-  const wallets = getWinnerEffectiveWallets(projectData, notifyInfo);
-  const multiAccount = wallets.some((wallet) => {
-    if ((signals.byWallet.get(wallet) || 0) > 1) {
-      return true;
-    }
-    return (globalWalletOwners.get(wallet)?.size || 0) > 1;
-  });
-  if (multiAccount) {
-    labels.push("Мультиаккаунт");
-  }
-
-  // The same profile screenshot as someone else's: the whole cluster.
-  const globalShotOwners = signals.globalShotOwners || buildGlobalShotOwners(userProfiles);
-  if (sharesProfileShot(userProfiles, winnerId, globalShotOwners)) {
-    labels.push("Мультиаккаунт");
-  }
-
-  // One phone behind several accounts: the same device, or the same
-  // fingerprint from the same network (device-signals.js).
-  if (sharesDevice(winnerId, getGlobalDeviceOwners())) {
-    labels.push("Мультиаккаунт");
-  }
-
-  // The same project ID as someone else, or on two brands: everywhere.
-  if (sharesProjectAccountId(winnerId, getAccountIdIndex(userProfiles))) {
-    labels.push("Мультиаккаунт");
-  }
-
-  // A small wallet - a person's, not a cashier or an exchange - behind the
-  // addresses of several of ours, or money between their addresses (link-graph.js).
-  if (getChainLinkedUsers().has(String(winnerId))) {
-    labels.push("Мультиаккаунт");
-  }
-
-  const projectIdFraud = evaluateProjectAccountIdFraud(draw, winnerId, userProfiles, signals, {
-    getUserProfileBundle,
-  });
-  if (projectIdFraud.shouldFlag) {
-    labels.push("Мультиаккаунт");
-  }
-
-  const ipProjectIdsFraud = evaluateIpManyProjectIdsFraud(draw, winnerId, userProfiles, signals, {
-    getDrawParticipantMeta,
-    getUserProfileBundle,
-  });
-  if (ipProjectIdsFraud.shouldFlag) {
-    labels.push("Бот по IP");
-  }
-
-  if (notifyInfo?.channelSubscribed === false) {
-    labels.push("Не подписан");
-  }
-
-  const uniqueLabels = [...new Set(labels)];
-  return {
-    labels: uniqueLabels,
-    hasFraudFlag: uniqueLabels.length > 0,
-  };
+  return winnerAntiFraud.evaluate(draw, winnerId, userProfiles, precomputedSignals, notifyInfo);
 }
 
 function sleep(ms) {
@@ -5354,12 +5251,6 @@ function upsertUserMeta(user) {
   writeUserProjectProfiles(data);
 }
 
-function getUserProfileBundle(userProfiles, userId, projectId) {
-  const userNode = userProfiles.users?.[String(userId)] || {};
-  const meta = userNode.meta || {};
-  const projectData = userNode.projects?.[projectId] || {};
-  return { meta, projectData };
-}
 
 function getWinnerDisplayName(meta, userId) {
   const fullName = [meta.first_name, meta.last_name].filter(Boolean).join(" ").trim();
