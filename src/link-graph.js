@@ -171,13 +171,16 @@ function collectLinkEvidence({
         for (const u of [...owners, ...otherOwners]) add(`transfer:${pair}`, "chain", "перевод между адресами", u, { kind: "transfer" });
         continue;
       }
-      const set = chainUsers.get(other) || new Set();
-      owners.forEach((u) => set.add(u));
-      chainUsers.set(other, set);
+      const entry = chainUsers.get(other) || { users: new Set(), addresses: new Set() };
+      owners.forEach((u) => entry.users.add(u));
+      entry.addresses.add(normalizeAddress(row.address));
+      chainUsers.set(other, entry);
     }
   }
-  for (const [address, users] of chainUsers) {
-    if (users.size < 2 || users.size > MAX_CHAIN_PEOPLE) continue;
+  for (const [address, { users, addresses }] of chainUsers) {
+    // Only between different addresses: people sharing one address are linked
+    // by that address already, and its counterparties said it twice over.
+    if (addresses.size < 2 || users.size < 2 || users.size > MAX_CHAIN_PEOPLE) continue;
     const party = partyKinds.get(address);
     if (party && (party.kind === "tagged" || party.kind === "hub")) continue;
     const kind = party?.kind === "small" ? "chain" : "chainpending";

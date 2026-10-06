@@ -109,3 +109,33 @@ test("the revision moves only when what the owner sees changes", () => {
   store.saveCheck("TA", "trc20", { kind: "cashier", platform: "Pokerdom?", reject: false, reason: "r" });
   assert.ok(store.revision() > first);
 });
+
+// A link through a shared wallet decides a prize: it is looked at first, one a
+// tick, whatever the queue's rechecks would take.
+test("a shared wallet is looked at every tick, however busy the queue", async () => {
+  const { store, now } = makeStore();
+  const looked = [];
+  const inspector = {
+    async inspect(address) {
+      return { network: "trc20", transfers: [], complete: true, verdict: { kind: "new", platform: null, reject: false, reason: "" } };
+    },
+    async inspectParty(address) {
+      looked.push(address);
+      return { tag: null, distinctCount: 2 };
+    },
+  };
+  store.saveCheck("TA1", "trc20", { kind: "new" }, null, [{ address: "TFRIEND", in: 1, out: 0 }]);
+  store.saveCheck("TA2", "trc20", { kind: "new" }, null, [{ address: "TFRIEND", in: 1, out: 0 }]);
+  const checker = createWalletChecker({
+    store,
+    inspector,
+    now,
+    perTick: 2,
+    listQueue: () => [{ address: "TQ1" }, { address: "TQ2" }, { address: "TQ3" }],
+    listPayouts: () => [],
+    logger: { warn() {}, error() {} },
+  });
+  await checker.tick();
+  assert.deepEqual(looked, ["TFRIEND"]);
+  assert.equal(store.partyKinds().get("TFRIEND").kind, "small");
+});

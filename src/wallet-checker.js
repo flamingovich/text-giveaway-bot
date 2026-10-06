@@ -110,14 +110,15 @@ function createWalletChecker({
       for (const payout of listPayouts() || []) {
         store.upsertPayout(payout);
       }
-      // The queue first: its labels are what the owner looks at before paying;
+      // One turn a tick for the shared wallets, before anything else: a link
+      // through them decides a prize, and the queue's rechecks can take every
+      // turn left over.
+      const usedParties = await classifyParties(1);
+      // Then the queue: its labels are what the owner looks at before paying;
       // the follow-up of old prizes takes what is left of the tick.
-      const used = await labelQueue(perTick);
-      // One turn a tick for the shared wallets: the old payouts must not keep
-      // them waiting for hours, a link through them decides a prize.
-      const usedParties = await classifyParties(Math.min(1, perTick - used));
-      const usedPayouts = await checkPayouts(perTick - used - usedParties);
-      await fillCounterparties(perTick - used - usedParties - usedPayouts);
+      const used = await labelQueue(perTick - usedParties);
+      const usedPayouts = await checkPayouts(perTick - usedParties - used);
+      await fillCounterparties(perTick - usedParties - used - usedPayouts);
     } catch (error) {
       logger.error(`[wallet] проверка кошельков: ${error.message}`);
     } finally {

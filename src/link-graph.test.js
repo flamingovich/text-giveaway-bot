@@ -131,3 +131,12 @@ test("one phone links for certain; a mobile carrier's address does not", () => {
   assert.deepEqual(sets, ["1,2", "5,6"]);
   assert.ok(clusters.every((c) => c.strong));
 });
+
+// Two accounts behind one address are linked by the address; its
+// counterparties must not add a second, blockchain link for the same pair.
+test("a blockchain link needs different addresses of ours", () => {
+  const userProfiles = { users: { 1: profile({ p: { trc20Address: "TONE" } }), 2: profile({ p: { trc20Address: "TONE" } }) } };
+  const counterparties = [{ address: "TONE", links: [{ address: "TFriend", in: 2, out: 0 }] }];
+  const evidence = collectLinkEvidence({ userProfiles, counterparties, partyKinds: new Map([["TFriend", { kind: "small" }]]) });
+  assert.deepEqual([...evidence.values()].map((e) => e.kind), ["wallet"]);
+});
