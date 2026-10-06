@@ -120,3 +120,18 @@ test("a shared payout address marks its people everywhere", () => {
   assert.equal(sharesWallet(2, index), true);
   assert.equal(sharesWallet(3, index), false);
 });
+
+// Most draws no longer ask for a wallet at the join: a profile proved by the
+// screenshot or the ID is complete without one, or any three people behind one
+// IP were bots.
+test("a profile proved by a screenshot or an ID is complete without a wallet", () => {
+  const { hasNormalParticipantProfile } = require("./draw-anti-fraud");
+  const draw = { projectId: "brand_beef_1" };
+  assert.equal(hasNormalParticipantProfile({ verifiedStatus: "ref", profileShotVerifiedAt: "2026-10-01T00:00:00Z" }, draw), true);
+  assert.equal(hasNormalParticipantProfile({ projectAccountId: "#AB1CD" }, draw), true);
+  assert.equal(hasNormalParticipantProfile({ referralVerified: true, trc20Address: "TA" }, draw), true);
+  // A button pressed and nothing proved: still not a normal profile.
+  assert.equal(hasNormalParticipantProfile({ referralVerified: true }, draw), false);
+  assert.equal(hasNormalParticipantProfile({}, draw), false);
+  assert.equal(hasNormalParticipantProfile({}, { projectId: null }), true);
+});

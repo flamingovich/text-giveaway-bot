@@ -181,6 +181,11 @@ function sharesWallet(userId, index) {
   return false;
 }
 
+// "A normal profile" for the IP rule: the person went through the project's
+// registration and proved it with something - the profile screenshot, the ID
+// on the project, or a wallet. It used to demand a wallet always, but most
+// draws no longer ask for one at the join: 2626 people had none, and any three
+// of them behind one IP were taken for bots - 40 of 871 winners in 90 days.
 function hasNormalParticipantProfile(projectData, draw) {
   if (!draw?.projectId) {
     return true;
@@ -188,11 +193,16 @@ function hasNormalParticipantProfile(projectData, draw) {
   const wallet =
     String(projectData?.trc20Address || "").trim() ||
     String(projectData?.antifraudTrc20Address || "").trim();
-  const needsProjectId = draw?.askProjectIdOnJoin === true;
-  const completedRegistration = needsProjectId
-    ? Boolean(projectData?.projectAccountId)
-    : Boolean(projectData?.referralVerified || projectData?.selfReportedNonReferral);
-  return Boolean(wallet && completedRegistration);
+  const screenshot = Boolean(projectData?.profileShotVerifiedAt || projectData?.profileShot?.sha256);
+  const accountId = Boolean(String(projectData?.projectAccountId || "").trim());
+  const registered = Boolean(
+    projectData?.verifiedStatus ||
+      accountId ||
+      projectData?.referralVerified ||
+      projectData?.selfReportedNonReferral ||
+      projectData?.crossOrganizerNonReferral,
+  );
+  return Boolean(registered && (wallet || screenshot || accountId));
 }
 
 function listParticipantsOnIp(draw, userId, ipHash, getDrawParticipantMeta) {
