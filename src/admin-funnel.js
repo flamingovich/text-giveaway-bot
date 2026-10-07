@@ -112,6 +112,7 @@ function buildFunnelStats({ store, draws = [], projects = [], timezone, period, 
 module.exports = {
   FUNNEL_PERIODS,
   STEP_LABELS,
+  buildSteps,
   normalizeFunnelPeriod,
   buildFunnelStats,
 };

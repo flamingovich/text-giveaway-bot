@@ -199,8 +199,11 @@ function collectLinkEvidence({
   return evidence;
 }
 
-/** Clusters of people linked by clustering evidence. → [{ id, users:[], evidence:[] , strong }] */
-function buildClusters(evidence) {
+/**
+ * Clusters of people linked by clustering evidence. → [{ id, users:[], evidence:[] , strong }]
+ * `clustering` - the kinds that join people (the draw page adds its own).
+ */
+function buildClusters(evidence, clustering = CLUSTERING) {
   const parent = new Map();
   const find = (a) => {
     while (parent.get(a) !== a) {
@@ -216,7 +219,7 @@ function buildClusters(evidence) {
     if (ra !== rb) parent.set(ra, rb);
   };
   for (const entry of evidence.values()) {
-    if (!CLUSTERING.has(entry.kind)) continue;
+    if (!clustering.has(entry.kind)) continue;
     const users = [...entry.users];
     users.slice(1).forEach((u) => union(users[0], u));
   }

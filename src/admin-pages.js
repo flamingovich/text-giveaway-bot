@@ -9,6 +9,7 @@ const SYS = require("./admin-system");
 const FUNNEL = require("./admin-funnel");
 const { getChatTranscript, formatSupportChatName } = require("./support-transcripts");
 const LINKS = require("./admin-links");
+const { DateTime } = require("luxon");
 
 const { escapeHtml, icon } = UI;
 
@@ -1110,6 +1111,299 @@ function renderLinkClusterPage(cluster) {
   });
 }
 
+// ── draws ──────────────────────────────────────────────────────────────────
+
+const DRAW_STATUS_CHIP = {
+  active: () => UI.chip("идёт", "green"),
+  scheduled: () => UI.chip("ждёт публикации", "muted"),
+  finished: () => "",
+};
+
+const DRAW_PAGE_STYLES = `
+.dr-row { align-items: center; }
+.dr-row .brand-logo { align-self: center; }
+.dr-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.dr-num { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.dr-num .delta { font-size: 11.5px; }
+.dr-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.dr-fact { padding: 10px 12px; border-radius: 12px; background: var(--fill); }
+.dr-fact b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+.dr-fact span { color: var(--label-2); font-size: 12.5px; }
+.dr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 22px; }
+.dr-head-main { flex: 1; min-width: 220px; }
+.dr-head-title { font-size: 19px; font-weight: 750; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.dr-head-sub { color: var(--label-2); margin-top: 3px; font-size: 13.5px; }
+.dr-graph-tall .lg-stage { height: min(860px, 84vh); }
+.dr-filter-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.dr-select { appearance: none; border: 0; border-radius: 10px; padding: 8px 30px 8px 12px; font: inherit; font-size: 14px; color: var(--label); background: var(--fill) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238E8E93' fill='none' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 11px center; }
+.dr-owner-spark { width: 96px; flex: none; }
+@media (max-width: 720px) { .dr-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } .dr-owner-spark { display: none; } }
+`;
+
+const msIso = (ms) => (ms ? new Date(ms).toISOString() : null);
+const dayOf = (ms, timezone) => DateTime.fromMillis(ms, { zone: timezone }).toISODate();
+
+function drawRowHtml(row, timezone) {
+  const when = row.startAt ? F.formatDateTime(msIso(row.startAt), timezone) : "без даты";
+  const chips = [
+    DRAW_STATUS_CHIP[row.status](),
+    row.repeated.extra > 0 ? UI.chip(`${count(row.repeated.extra)} лишн. ${F.plural(row.repeated.extra, "заявка", "заявки", "заявок")}`, "red", "shield") : "",
+    row.multi > 0 && !row.repeated.extra ? UI.chip(`${count(row.multi)} мульти`, "orange") : "",
+    row.winnersLinked > 0 ? UI.chip(`${count(row.winnersLinked)} ${F.plural(row.winnersLinked, "победитель", "победителя", "победителей")} в связях`, "red", "trophy") : "",
+    row.flags.refOnly ? UI.chip("только рефы", "indigo") : "",
+  ]
+    .filter(Boolean)
+    .join("");
+  const search = [row.title, row.prize, row.brand, row.owner.title, row.owner.handle, row.id].join(" ").toLowerCase();
+  return `<a class="row dr-row" href="/admin/draws/${encodeURIComponent(row.id)}" style="--inset:20px" data-search="${escapeHtml(search)}" data-status="${row.status}" data-owner="${escapeHtml(row.ownerId)}" data-multi="${row.multi > 0 ? 1 : 0}">
+    ${brandLogo(row.brand)}
+    <div class="row-main">
+      <div class="row-title">${escapeHtml(row.title)}</div>
+      <div class="row-sub">${escapeHtml([row.owner.title, when, row.prize && row.prize !== row.title ? row.prize : ""].filter(Boolean).join(" · "))}</div>
+      ${chips ? `<div class="dr-meta">${chips}</div>` : ""}
+    </div>
+    <div class="row-value"><span class="dr-num">${UI.delta(row.delta)}${count(row.participants)}</span><small>${count(row.newcomers)} новых · ${count(row.paid)}/${count(row.winners)} выпл.</small></div>
+  </a>`;
+}
+
+function renderDrawsPage(view, timezone) {
+  const t = view.totals;
+  const weekly = C.areaChart({
+    labels: view.weekly.map((week) => week.label),
+    series: [
+      { name: "Участий", values: view.weekly.map((week) => week.entries), tone: "blue" },
+      { name: "Новых людей", values: view.weekly.map((week) => week.newcomers), tone: "green" },
+      { name: "Розыгрышей", values: view.weekly.map((week) => week.draws), tone: "orange", axis: "right", dashed: true },
+    ],
+    height: 230,
+  });
+  const ownerRows = view.owners
+    .map(
+      (owner) => `<a class="row" href="#owner-${encodeURIComponent(owner.ownerId)}" data-owner-pick="${escapeHtml(owner.ownerId)}" style="--inset:68px">
+        ${UI.avatar(owner.owner)}
+        <div class="row-main">
+          <div class="row-title">${escapeHtml(owner.owner.title)}</div>
+          <div class="row-sub">${escapeHtml(`${count(owner.draws)} ${F.plural(owner.draws, "розыгрыш", "розыгрыша", "розыгрышей")} · ${owner.brands.join(", ")}${owner.active ? ` · ${owner.active} идёт` : ""}`)}</div>
+        </div>
+        <div class="dr-owner-spark">${owner.series.length > 1 ? C.sparkline(owner.series, { tone: owner.trend?.direction === "down" ? "red" : "green", height: 30 }) : ""}</div>
+        <div class="row-value"><span class="dr-num">${UI.delta(owner.trend)}${count(owner.average)}</span><small>${count(owner.people)} людей · ${owner.multiShare}% мульти</small></div>
+      </a>`,
+    )
+    .join("");
+  const rows = view.rows.map((row) => drawRowHtml(row, timezone)).join("");
+  const ownerOptions = view.owners
+    .map((owner) => `<option value="${escapeHtml(owner.ownerId)}">${escapeHtml(owner.owner.title)}</option>`)
+    .join("");
+  const filters = UI.segmented([
+    { label: "Все", count: count(t.draws), href: "#all", active: true },
+    { label: "Идут", count: count(t.active), href: "#active" },
+    { label: "Завершены", count: count(view.rows.filter((row) => row.status === "finished").length), href: "#finished" },
+    { label: "С мульти", count: count(view.rows.filter((row) => row.multi > 0).length), href: "#multi" },
+  ]);
+  const body = `<div class="stack">
+    <div class="grid cols-4">
+      ${UI.stat({ label: "Розыгрышей за 30 дней", value: t.recentDraws, deltaValue: t.recentDrawsDelta, note: `всего ${count(t.draws)}${t.active ? ` · ${count(t.active)} идёт` : ""}`, iconName: "trophy", tone: "orange", i: 0 })}
+      ${UI.stat({ label: "Участников в среднем", value: t.recentAverage, deltaValue: t.recentAverageDelta, note: `за 30 дней · за всё время ${count(t.average)}`, iconName: "users", tone: "blue", i: 1 })}
+      ${UI.stat({ label: "Новых людей за 30 дней", value: t.recentNewcomers, deltaValue: t.recentNewcomersDelta, note: `всего уникальных ${count(t.people)}`, iconName: "sparkles", tone: "green", i: 2 })}
+      ${UI.stat({ label: "Лишних заявок", value: t.extraEntries, note: `один человек под разными аккаунтами в одном розыгрыше · ${count(t.multiEntries)} заявок от мультиаккаунтов`, iconName: "shield", tone: "red", i: 3 })}
+    </div>
+    ${UI.card({ title: "По неделям", subtitle: "участия и новые люди — по неделе старта розыгрыша; пунктир — число розыгрышей", i: 4, body: weekly })}
+    ${UI.card({ title: "Организаторы", subtitle: "средний розыгрыш и его тренд: последние три против трёх до них", flush: true, i: 5, body: ownerRows ? `<div class="rows">${ownerRows}</div>` : UI.blank("Пусто", "", "users") })}
+    ${UI.card({
+      title: "Все розыгрыши",
+      subtitle: "стрелка — рост или падение против прошлого розыгрыша того же организатора",
+      flush: true,
+      i: 6,
+      id: "draws",
+      body: `<div style="padding:14px 20px 10px;display:grid;gap:10px">
+          <input class="lg-search" type="search" placeholder="Название, приз, бренд, организатор" data-dr-search />
+          <div class="dr-filter-row"><div data-dr-filter>${filters}</div><select class="dr-select" data-dr-owner aria-label="Организатор"><option value="">Все организаторы</option>${ownerOptions}</select></div>
+        </div>${rows ? `<div class="rows" data-dr-rows>${rows}</div><div data-dr-empty hidden>${UI.blank("Ничего не нашлось", "Попробуйте другое название.", "search")}</div>` : UI.blank("Розыгрышей нет", "", "trophy")}`,
+    })}
+  </div>`;
+  const script = `<script>(function(){
+    var rows=[].slice.call(document.querySelectorAll(".dr-row"));var box=document.querySelector("[data-dr-search]");var owner=document.querySelector("[data-dr-owner]");var empty=document.querySelector("[data-dr-empty]");var mode="all";
+    function apply(){var q=(box&&box.value||"").trim().toLowerCase();var o=owner?owner.value:"";var shown=0;rows.forEach(function(r){var s=r.getAttribute("data-status");var ok=(!q||r.getAttribute("data-search").indexOf(q)!==-1)&&(!o||r.getAttribute("data-owner")===o)&&(mode==="all"||(mode==="multi"?r.getAttribute("data-multi")==="1":s===mode));r.hidden=!ok;if(ok)shown++;});if(empty)empty.hidden=shown>0;}
+    if(box)box.addEventListener("input",apply);if(owner)owner.addEventListener("change",apply);
+    document.querySelectorAll("[data-dr-filter] a").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();mode=a.getAttribute("href").slice(1);document.querySelectorAll("[data-dr-filter] a").forEach(function(b){b.classList.toggle("is-active",b===a);});apply();});});
+    document.querySelectorAll("[data-owner-pick]").forEach(function(a){a.addEventListener("click",function(e){e.preventDefault();if(owner){owner.value=a.getAttribute("data-owner-pick");apply();}var list=document.getElementById("draws");if(list)list.scrollIntoView({behavior:"smooth",block:"start"});});});
+  })();</script>`;
+  return shell({
+    title: "Розыгрыши",
+    subtitle: `${count(t.draws)} ${F.plural(t.draws, "розыгрыш", "розыгрыша", "розыгрышей")} · ${count(t.entries)} участий · ${count(t.people)} уникальных людей`,
+    active: "draws",
+    styles: DRAW_PAGE_STYLES,
+    scripts: script,
+    body,
+  });
+}
+
+const DRAW_LINK_LEGEND = `<div class="lg-chips" style="margin-bottom:12px">
+  <span class="lg-chip lg-wallet">${icon("wallet")}кошелёк, ID, скрин, устройство, блокчейн — обнуляют приз</span>
+  <span class="lg-chip lg-ipdraw">${icon("pulse")}одна сеть в этом розыгрыше — только показ</span>
+  <span class="lg-chip lg-ip">${icon("pulse")}одна сеть в 2+ розыгрышах — только показ</span>
+  <span class="lg-chip lg-referral">${icon("gift")}приглашение</span>
+</div>`;
+
+const MAX_DRAW_GRAPH_NODES = 160;
+
+function renderDrawPage(detail, timezone) {
+  const { row, links } = detail;
+  const when = (ms) => (ms ? F.formatDateTime(msIso(ms), timezone) : "—");
+  const facts = [
+    ["Старт", when(row.startAt)],
+    [row.status === "finished" ? "Итоги" : "Итоги в", when(row.endAt)],
+    ["Призовых мест", count(row.winnersCount)],
+  ]
+    .map(([label, value]) => `<div class="dr-fact"><b>${escapeHtml(value)}</b><span>${escapeHtml(label)}</span></div>`)
+    .join("");
+  const flags = [
+    DRAW_STATUS_CHIP[row.status](),
+    row.flags.refOnly ? UI.chip("только для рефов", "indigo") : "",
+    row.flags.askWallet ? UI.chip("кошелёк при участии", "teal") : "",
+    row.flags.askId ? UI.chip("ID при участии", "teal") : "",
+  ]
+    .filter(Boolean)
+    .join("");
+  const head = `<div class="dr-head">
+      ${brandLogo(row.brand)}
+      <div class="dr-head-main">
+        <div class="dr-head-title">${escapeHtml(row.brand)}</div>
+        <div class="dr-head-sub">${escapeHtml([row.prize && row.prize !== row.title ? `приз ${row.prize}` : "", `ID ${row.id}`].filter(Boolean).join(" · "))}</div>
+        ${flags ? `<div class="dr-meta">${flags}</div>` : ""}
+      </div>
+      ${UI.person(row.owner, { href: `/admin/users/${encodeURIComponent(row.ownerId)}`, sub: "организатор" })}
+    </div>
+    <div class="dr-cols" style="margin-top:14px">${facts}</div>`;
+
+  const newShare = percentOf(row.newcomers, row.participants);
+  const tiles = `<div class="grid cols-4">
+    ${UI.stat({ label: "Участников", value: row.participants, deltaValue: row.delta, note: row.previousParticipants !== null ? `<a href="/admin/draws/${encodeURIComponent(row.previousId)}">прошлый у организатора: ${count(row.previousParticipants)}</a>` : "первый розыгрыш организатора", iconName: "users", tone: "blue", i: 1 })}
+    ${UI.stat({ label: "Впервые у нас", value: row.newcomers, note: `${newShare}% участников · ещё ${count(row.newToOwner)} новых у организатора`, iconName: "sparkles", tone: "green", i: 2 })}
+    ${UI.stat({ label: "Выплачено", value: `${count(row.paid)} из ${count(row.winners)}`, note: row.fraud ? `${count(row.fraud)} срезал антифрод` : `победителей ${count(row.winners)}`, iconName: "wallet", tone: "orange", i: 3 })}
+    ${UI.stat({ label: "Мультиаккаунтов", value: links.strongPeople, note: links.extra ? `${count(links.extra)} лишних заявок в этом розыгрыше` : row.multi ? `${count(row.multi)} связаны с людьми вне розыгрыша` : "чисто", iconName: "shield", tone: links.extra ? "red" : "gray", i: 4 })}
+  </div>`;
+
+  const timeline = detail.timeline
+    ? C.areaChart({
+        labels: detail.timeline.labels,
+        series: [
+          { name: "Всего", values: detail.timeline.total, tone: "blue" },
+          { name: detail.timeline.unit === "day" ? "За день" : "За час", values: detail.timeline.perStep, tone: "green", axis: "right", dashed: true },
+        ],
+        height: 210,
+      })
+    : UI.blank("Нет данных", "Время вступления хранится 90 дней.", "clock");
+  const history = C.columns(
+    detail.history.map((item) => ({
+      label: item.current ? "этот" : item.startAt ? dayLabel(dayOf(item.startAt, timezone)) : item.title,
+      value: item.participants,
+      display: `${count(item.participants)} · ${item.title}`,
+      highlight: item.current,
+    })),
+    { tone: "indigo", height: 170 },
+  );
+
+  const composition = C.shareBar([
+    { label: "Впервые у нас", value: row.newcomers, tone: "green" },
+    { label: "Новые у организатора", value: row.newToOwner, tone: "teal" },
+    { label: "Уже участвовали у него", value: row.returning, tone: "blue" },
+  ]);
+  const extras = `<div class="dr-cols" style="margin-top:14px">
+      <div class="dr-fact"><b>${count(row.invited)}</b><span>пришли по приглашению</span></div>
+      <div class="dr-fact"><b>${count(row.unregistered)}</b><span>без регистрации на проекте</span></div>
+      <div class="dr-fact"><b>${detail.funnel ? `${percentOf(detail.funnel.joined, detail.funnel.people)}%` : "—"}</b><span>открыли и вступили</span></div>
+    </div>`;
+  const funnel = detail.funnel
+    ? `<p class="note" style="margin:0 0 12px">Открыли мини-апп ${count(detail.funnel.people)}, вступили ${count(detail.funnel.joined)}${detail.funnel.instant ? `, из них сразу, без шагов, ${count(detail.funnel.instant)}` : ""}.</p>${C.funnelSteps(FUNNEL.buildSteps(detail.funnel), { total: detail.funnel.people })}`
+    : UI.blank("Нет данных", "Воронка хранится 90 дней.", "funnel");
+
+  // The links among this draw's people: one graph of every group.
+  const graphCluster = { members: detail.clusters.flatMap((c) => c.members), evidence: detail.clusters.flatMap((c) => c.evidence) };
+  const nodes = graphCluster.members.length + graphCluster.evidence.filter((e) => e.kind !== "referral").length;
+  const graph = !detail.clusters.length
+    ? UI.blank("Связей нет", "Ни у кого из участников нет общих улик между собой.", "check")
+    : nodes <= MAX_DRAW_GRAPH_NODES
+      ? `<div class="${nodes > 40 ? "dr-graph-tall" : ""}">${LINKS.renderLiveGraph(graphCluster, { icon, avatarStyle: UI.avatarStyle, width: nodes > 40 ? 1100 : 960, height: nodes > 40 ? 760 : 560 })}</div>`
+      : UI.blank("Слишком много связей для графа", "Ниже — список групп.", "link");
+  const groupRows = detail.clusters
+    .map((cluster) => {
+      const names = cluster.members.slice(0, 3).map((m) => m.identity.title).join(", ");
+      const more = cluster.members.length > 3 ? ` и ещё ${cluster.members.length - 3}` : "";
+      const global = cluster.evidence.some((e) => e.kind !== "ipdraw");
+      const tag = global ? "a" : "div";
+      return `<${tag} class="row" ${global ? `href="/admin/links/${encodeURIComponent(cluster.id)}"` : ""} style="--inset:20px">
+        <div class="lg-faces">${cluster.members.slice(0, 5).map((m) => UI.avatar(m.identity, "sm")).join("")}</div>
+        <div class="row-main">
+          <div class="row-title">${escapeHtml(names + more)}</div>
+          <div class="lg-reason">${escapeHtml(LINKS.summarizeCluster(cluster))}${cluster.winners ? ` · ${cluster.winners} ${F.plural(cluster.winners, "победитель", "победителя", "победителей")}` : ""}</div>
+        </div>
+        <span class="lg-verdict-badge ${cluster.strong ? "is-strong" : "is-watch"}" style="font-size:11.5px;padding:4px 9px">${cluster.strong ? "один человек" : "наблюдение"}</span>
+        <div class="row-value">${count(cluster.members.length)}<small>заявок</small></div>
+      </${tag}>`;
+    })
+    .join("");
+  const linksSummary = `<div class="dr-cols" style="margin-bottom:14px">
+      <div class="dr-fact"><b>${count(links.strongGroups)}</b><span>${F.plural(links.strongGroups, "человек", "человека", "человек")} под несколькими аккаунтами</span></div>
+      <div class="dr-fact"><b>${count(links.extra)}</b><span>лишних заявок от них</span></div>
+      <div class="dr-fact"><b>${count(links.winnersInGroups)}</b><span>победителей среди них</span></div>
+    </div>`;
+
+  const outsideRows = detail.outside
+    .map(
+      (item) => `<a class="row" href="/admin/links/${encodeURIComponent(item.identity.userId)}" style="--inset:68px">
+        ${UI.avatar(item.identity)}
+        <div class="row-main"><div class="row-title">${escapeHtml(item.identity.title)}</div><div class="row-sub">${escapeHtml(item.kinds.map((kind) => (LINKS.KIND_INFO[kind] || { title: kind }).title.toLowerCase()).join(", "))}</div></div>
+        <div class="row-value">${count(item.others)}<small>${F.plural(item.others, "связь", "связи", "связей")} вне розыгрыша</small></div>
+      </a>`,
+    )
+    .join("");
+
+  const winnerRows = detail.winners
+    .map(
+      (winner) => `<a class="row" href="/admin/users/${encodeURIComponent(winner.identity.userId)}" style="--inset:68px">
+        ${UI.avatar(winner.identity)}
+        <div class="row-main">
+          <div class="row-title">${escapeHtml(winner.identity.title)}</div>
+          <div class="dr-meta">${UI.chip(winner.state.label, winner.state.tone === "gray" ? "muted" : winner.state.tone)}${winner.inDrawLinked ? UI.chip("несколько аккаунтов здесь", "red", "shield") : winner.linked ? UI.chip("мультиаккаунт", "orange", "link") : ""}</div>
+        </div>
+        <div class="row-value mono" style="font-size:12px">${escapeHtml(winner.address ? `${winner.address.slice(0, 6)}…${winner.address.slice(-4)}` : "")}</div>
+      </a>`,
+    )
+    .join("");
+
+  const body = `<div class="stack">
+    ${UI.card({ i: 0, body: head })}
+    ${tiles}
+    ${UI.card({
+      title: "Связи участников",
+      subtitle: `${count(links.linkedPeople)} из ${count(row.participants)} участников связаны между собой · жёлтая обводка — победитель, красная — получал выплаты`,
+      i: 5,
+      body: `${linksSummary}${DRAW_LINK_LEGEND}${graph}`,
+    })}
+    <div class="grid cols-2" style="align-items:start">
+      ${UI.card({ title: "Группы", subtitle: "кто вошёл сюда под несколькими аккаунтами", flush: true, i: 6, body: groupRows ? `<div class="rows">${groupRows}</div>` : UI.blank("Групп нет", "", "check") })}
+      ${UI.card({ title: "Связаны вне розыгрыша", subtitle: "мультиаккаунты, чьи вторые аккаунты здесь не участвовали", flush: true, i: 7, body: outsideRows ? `<div class="rows">${outsideRows}</div>` : UI.blank("Таких нет", "", "check") })}
+    </div>
+    <div class="grid cols-2" style="align-items:start">
+      ${UI.card({ title: "Как набирались участники", subtitle: detail.timeline ? `пик — ${detail.timeline.peakLabel}, ${count(detail.timeline.peak)} ${detail.timeline.unit === "day" ? "за день" : "за час"}` : "", i: 8, body: timeline })}
+      ${UI.card({ title: "Против прошлых розыгрышей", subtitle: `участники в розыгрышах ${row.owner.title}`, i: 9, body: history })}
+    </div>
+    <div class="grid cols-2" style="align-items:start">
+      ${UI.card({ title: "Кто пришёл", i: 10, body: `${composition}${extras}` })}
+      ${UI.card({ title: "Воронка вступления", i: 11, body: funnel })}
+    </div>
+    ${UI.card({ title: "Победители", subtitle: `${count(row.winners)} из ${count(row.winnersCount)} мест`, flush: true, i: 12, body: winnerRows ? `<div class="rows">${winnerRows}</div>` : UI.blank(row.status === "finished" ? "Победителей нет" : "Итогов ещё не было", "", "trophy") })}
+  </div>`;
+  return shell({
+    title: row.title,
+    subtitle: `${row.brand} · ${row.owner.title} · ${when(row.startAt)}`,
+    active: "draws",
+    styles: `${LINKS.LINK_GRAPH_STYLES}${DRAW_PAGE_STYLES}`,
+    body,
+  });
+}
+
 // ── system ─────────────────────────────────────────────────────────────────
 
 function renderSystemPage(state) {
@@ -1381,6 +1675,8 @@ module.exports = {
   renderReferralsPage,
   renderLinksPage,
   renderLinkClusterPage,
+  renderDrawsPage,
+  renderDrawPage,
   renderSystemPage,
   renderSupportListPage,
   renderSupportChatPage,

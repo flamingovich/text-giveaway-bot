@@ -67,7 +67,7 @@ function linkGraphClient(root, data) {
   });
 
   nodes.forEach(function (n) {
-    var g = el("g", { class: n.type === "person" ? "lg-person" + (n.paid ? " is-paid" : "") : "lg-tile lg-" + n.kind, tabindex: "0" }, nodeLayer);
+    var g = el("g", { class: n.type === "person" ? "lg-person" + (n.paid ? " is-paid" : "") + (n.winner ? " is-winner" : "") : "lg-tile lg-" + n.kind, tabindex: "0" }, nodeLayer);
     n.g = g;
     if (n.type === "person") {
       var clipId = "lg-live-" + n.userId;
@@ -85,7 +85,7 @@ function linkGraphClient(root, data) {
       var name = el("text", { class: "lg-name", y: "40", "text-anchor": "middle" }, g);
       name.textContent = n.title.length > 16 ? n.title.slice(0, 15) + "…" : n.title;
       var sub = el("text", { class: "lg-sub", y: "54", "text-anchor": "middle" }, g);
-      sub.textContent = n.wins ? n.wins + " поб." + (n.paid ? " · " + n.paid + " выпл." : "") : "без побед";
+      sub.textContent = n.sub || (n.wins ? n.wins + " поб." + (n.paid ? " · " + n.paid + " выпл." : "") : "без побед");
     } else {
       el("rect", { x: "-15", y: "-15", width: "30", height: "30", rx: "9", transform: "rotate(45)" }, g);
       var glyph = el("text", { class: "lg-tile-glyph", dy: "0.35em", "text-anchor": "middle" }, g);
@@ -270,7 +270,8 @@ function linkGraphClient(root, data) {
     html("div", "lg-tip-title", n.title, tip);
     if (n.type === "person") {
       html("div", "lg-tip-sub", [n.handle, "ID " + n.userId].filter(Boolean).join(" · "), tip);
-      html("div", "lg-tip-sub", (n.wins || 0) + " побед · " + (n.paid || 0) + " выплат", tip);
+      if (n.winner) html("div", "lg-tip-sub", "Победитель этого розыгрыша" + (n.sub ? " · " + n.sub.replace(/^победитель · /, "") : ""), tip);
+      html("div", "lg-tip-sub", "Всего: " + (n.wins || 0) + " побед · " + (n.paid || 0) + " выплат", tip);
     } else {
       html("div", "lg-tip-sub", n.full || n.detail || "", tip);
       html("div", "lg-tip-sub", "у " + n.people + " чел.", tip);
@@ -304,6 +305,7 @@ function linkGraphClient(root, data) {
     close.addEventListener("click", function () { side.hidden = true; select(null); });
     if (n.type === "person") {
       html("div", "lg-side-sub", [n.handle, "ID " + n.userId].filter(Boolean).join(" · "), side);
+      if (n.winner) html("div", "lg-side-sub", n.sub || "победитель", side);
       var stats = html("div", "lg-side-stats", null, side);
       [["Побед", n.wins || 0], ["Выплат", n.paid || 0], ["Связей", describeLinks(n).length]].forEach(function (s) {
         var cell = html("div", "lg-side-stat", null, stats);

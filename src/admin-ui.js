@@ -67,6 +67,7 @@ const NAV_GROUPS = [
     label: "Аналитика",
     items: [
       { id: "stats", href: "/admin/dashboard", label: "Статистика", icon: "stats", tone: "blue" },
+      { id: "draws", href: "/admin/draws", label: "Розыгрыши", icon: "trophy", tone: "red" },
       { id: "funnel", href: "/admin/funnel", label: "Воронка", icon: "funnel", tone: "indigo" },
       { id: "projects", href: "/admin/projects", label: "Проекты", icon: "projects", tone: "orange" },
       { id: "referrals", href: "/admin/referrals", label: "Приглашения", icon: "gift", tone: "pink" },

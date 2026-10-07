@@ -163,6 +163,9 @@ function createJoinFunnelStore(db, { now = () => Date.now(), retentionDays = RET
       trackedSince() {
         return null;
       },
+      forDraw() {
+        return [];
+      },
     };
   }
 
@@ -190,6 +193,7 @@ function createJoinFunnelStore(db, { now = () => Date.now(), retentionDays = RET
     "SELECT draw_id AS drawId, stages, first_at AS firstAt FROM join_funnel WHERE first_at >= ?",
   );
   const selectFirst = db.prepare("SELECT MIN(first_at) AS at FROM join_funnel");
+  const selectDraw = db.prepare("SELECT stages, first_at AS firstAt FROM join_funnel WHERE draw_id = ?");
   const pruneBefore = db.prepare("DELETE FROM join_funnel WHERE last_at < ?");
   let prunedAt = 0;
 
@@ -214,7 +218,12 @@ function createJoinFunnelStore(db, { now = () => Date.now(), retentionDays = RET
     return selectFirst.get()?.at || null;
   }
 
-  return { record, list, trackedSince };
+  // One draw's rows, for its page in «Розыгрыши».
+  function forDraw(drawId) {
+    return selectDraw.all(String(drawId));
+  }
+
+  return { record, list, trackedSince, forDraw };
 }
 
 module.exports = {
@@ -224,6 +233,7 @@ module.exports = {
   stagesFromJoinAnswer,
   stagesToMask,
   furthestStage,
+  maskHas,
   summarizeJoinFunnel,
   createJoinFunnelMiddleware,
   createJoinFunnelStore,

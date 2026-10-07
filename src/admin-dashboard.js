@@ -19,6 +19,7 @@ const REFERRALS = require("./admin-referrals");
 const PROJECT_STATS = require("./admin-projects");
 const FUNNEL = require("./admin-funnel");
 const LINKS = require("./admin-links");
+const DRAWS = require("./admin-draws");
 const { normalizeProjectAccountId } = require("./project-account-id");
 const {
   renderLoginPage,
@@ -31,6 +32,8 @@ const {
   renderReferralsPage,
   renderLinksPage,
   renderLinkClusterPage,
+  renderDrawsPage,
+  renderDrawPage,
   renderSystemPage,
   renderSupportListPage,
   renderSupportChatPage,
@@ -816,6 +819,57 @@ function registerAdminDashboard(app, deps) {
     } catch (error) {
       console.error("[admin] GET /admin/links/:userId:", error);
       res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать кластер."));
+    }
+  });
+
+  // «Розыгрыши» reads the evidence of «Связи» inside each draw, so it rides
+  // on the same five-minute picture; the list itself is kept as long.
+  let drawsCache = null;
+  function getDrawsView() {
+    const links = getLinksView();
+    if (drawsCache && drawsCache.links === links && Date.now() - drawsCache.at < 5 * 60 * 1000) {
+      return drawsCache.view;
+    }
+    const view = DRAWS.buildDrawsView({
+      draws: collectAllDraws(deps),
+      projects: deps.readProjects().projects || [],
+      userProfiles: (deps.readUserProjectProfilesSnapshot || deps.readUserProjectProfiles)(),
+      evidence: links.evidence,
+      timezone: deps.timezone,
+    });
+    drawsCache = { at: Date.now(), links, view };
+    return view;
+  }
+
+  app.get("/admin/draws", requireAuth, (_req, res) => {
+    try {
+      res.type("html").send(renderDrawsPage(getDrawsView(), deps.timezone));
+    } catch (error) {
+      console.error("[admin] GET /admin/draws:", error);
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать розыгрыши."));
+    }
+  });
+
+  app.get("/admin/draws/:drawId", requireAuth, (req, res) => {
+    try {
+      const drawId = String(req.params.drawId || "");
+      const detail = DRAWS.buildDrawDetail(drawId, {
+        draws: collectAllDraws(deps),
+        projects: deps.readProjects().projects || [],
+        userProfiles: (deps.readUserProjectProfilesSnapshot || deps.readUserProjectProfiles)(),
+        evidence: getLinksView().evidence,
+        networkTypes: deps.listNetworkTypes ? deps.listNetworkTypes() : new Map(),
+        funnelRows: deps.joinFunnel?.forDraw ? deps.joinFunnel.forDraw(drawId) : [],
+        timezone: deps.timezone,
+      });
+      if (!detail) {
+        res.status(404).type("html").send(renderAdminNotFound("Такого розыгрыша нет."));
+        return;
+      }
+      res.type("html").send(renderDrawPage(detail, deps.timezone));
+    } catch (error) {
+      console.error("[admin] GET /admin/draws/:drawId:", error);
+      res.status(500).type("html").send(renderAdminNotFound("Не удалось собрать розыгрыш."));
     }
   });
 
