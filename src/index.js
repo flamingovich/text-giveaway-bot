@@ -56,6 +56,7 @@ const {
   isWrongTelegramMessageKindError,
   pickReportableEditError,
 } = require("./telegram-edit-errors");
+const { editEachReminder } = require("./reminder-edits");
 const { applyTelegramApiTimeout } = require("./telegram-timeout");
 const { tryRecordDrawReferral, computeJoinWinChance } = require("./join-referrals");
 const {
@@ -3019,11 +3020,22 @@ async function editDrawReminderMessage(draw) {
     parse_mode: "HTML",
     link_preview_options: { is_disabled: true },
   };
-  for (const messageId of draw.reminderMessageIds || []) {
-    await runDrawPostEdit(`${draw.channelId}:${messageId}`, () =>
-      bot.telegram.editMessageText(draw.channelId, messageId, undefined, text, opts),
-    );
+  const { kept, dropped, failure } = await editEachReminder(
+    draw.reminderMessageIds,
+    (messageId) =>
+      runDrawPostEdit(`${draw.channelId}:${messageId}`, () =>
+        bot.telegram.editMessageText(draw.channelId, messageId, undefined, text, opts),
+      ),
+    isPermanentTelegramEditError,
+  );
+  if (dropped.length) {
+    draw.reminderMessageIds = kept;
+    console.warn(`[countdown] напоминание ${draw.id}: сообщение удалено из канала (${dropped.join(", ")}) — больше не правится`);
   }
+  if (failure) {
+    throw failure;
+  }
+  return dropped.length;
 }
 
 async function sendDrawReminderReply(draw) {
@@ -4954,12 +4966,17 @@ async function syncDrawReminderCountdowns(data) {
     if (!shouldUpdateDrawReminderCountdown(draw, newLabel)) {
       continue;
     }
+    // A dead reminder is dropped before an error is thrown: the drop is a change to save.
+    const before = (draw.reminderMessageIds || []).length;
     try {
       await editDrawReminderMessage(draw);
       markDrawReminderCountdownCache(draw, newLabel);
       updated += 1;
       await sleep(350);
     } catch (error) {
+      if ((draw.reminderMessageIds || []).length !== before) {
+        updated += 1;
+      }
       if (isIgnorableTelegramEditError(error)) {
         markDrawReminderCountdownCache(draw, newLabel);
         continue;
